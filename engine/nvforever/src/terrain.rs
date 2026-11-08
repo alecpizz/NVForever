@@ -190,13 +190,26 @@ fn quadrant_mesh(land: &Land, q: u8, alpha: Option<&[f32]>, cell_origin: Vec2, t
         }
     }
     let mut idx = Vec::with_capacity((QUAD_SIDE - 1) * (QUAD_SIDE - 1) * 6);
+    // A layer keeps only the triangles it paints: one whose three corners have opacity 0
+    // blends to exactly what lies under it (its alpha is 0 across the triangle), so it
+    // is left out [engineering choice: the same picture; most layers paint patches, and
+    // drawing them over whole quadrants cost about a millisecond of blended terrain a
+    // frame outdoors at 1440p, docs/design/frame-rate-audit.md §6].
+    let paints = |t: [u32; 3]| alpha.is_none_or(|a| t.iter().any(|&v| a[v as usize] > 0.0));
     for r in 0..QUAD_SIDE - 1 {
         for c in 0..QUAD_SIDE - 1 {
             let i = (r * QUAD_SIDE + c) as u32;
             let (e, nn, ne) = (i + 1, i + QUAD_SIDE as u32, i + QUAD_SIDE as u32 + 1);
             // Counter-clockwise seen from above (+z).
-            idx.extend_from_slice(&[i, e, ne, i, ne, nn]);
+            for t in [[i, e, ne], [i, ne, nn]] {
+                if paints(t) {
+                    idx.extend_from_slice(&t);
+                }
+            }
         }
+    }
+    if idx.is_empty() {
+        return None;
     }
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
@@ -314,5 +327,28 @@ mod tests {
             assert_eq!(a[3], b[3]);
             assert!(ta.dot(Vec3::from_array(*n)).abs() < 1e-3 && (ta.length() - 1.0).abs() < 1e-4);
         }
+    }
+
+    fn triangles(mesh: &Mesh) -> Vec<[u32; 3]> {
+        let Some(Indices::U32(idx)) = mesh.indices() else { panic!() };
+        idx.chunks(3).map(|t| [t[0], t[1], t[2]]).collect()
+    }
+
+    #[test]
+    fn a_layer_keeps_only_the_triangles_it_paints() {
+        let land = sloped_land();
+        // The base keeps every triangle.
+        let base = quadrant_mesh(&land, 0, None, Vec2::ZERO, 256.0).unwrap();
+        assert_eq!(triangles(&base).len(), (QUAD_SIDE - 1) * (QUAD_SIDE - 1) * 2);
+        // Opacity at one inner vertex: the six triangles around it.
+        let mut alpha = vec![0.0; QUAD_SIDE * QUAD_SIDE];
+        let v = 5 * QUAD_SIDE + 7;
+        alpha[v] = 0.4;
+        let layer = quadrant_mesh(&land, 0, Some(&alpha), Vec2::ZERO, 256.0).unwrap();
+        let tris = triangles(&layer);
+        assert_eq!(tris.len(), 6);
+        assert!(tris.iter().all(|t| t.contains(&(v as u32))));
+        // No opacity anywhere: no mesh at all.
+        assert!(quadrant_mesh(&land, 0, Some(&vec![0.0; QUAD_SIDE * QUAD_SIDE]), Vec2::ZERO, 256.0).is_none());
     }
 }
