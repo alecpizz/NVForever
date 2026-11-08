@@ -681,3 +681,48 @@ affinity already set, left alone`, `cpu placement: off by setting (...)`; smoke 
 same rules). Putting the background threads (generated-terrain bake, read pool) on the
 other domain with `SetThreadSelectedCpuSets`, leaving the cache domain to the main,
 render and compute threads [hypothesis]. A row on the settings page.
+
+## 7. Exterior GPU time at 1440p (2026-11-08)
+
+The owner's outdoor frame rate: Goodsprings at noon runs at about 90 fps where interiors
+reach the 180 fps vsync cap. Measured on a Ryzen 7 7700X with an RTX 3070 (Vulkan) at
+2560 × 1440, the owner's settings (4x MSAA, ambient occlusion, longer shadows, bloom, light
+glow, sun shafts, sun shadows), vsync off, `--no-actors` unless said.
+
+[observed] Where the frame goes before these changes:
+
+- **The frame waits on the GPU.** The swap chain's acquire waits about 4.5 ms on the frame
+  three back, so the GPU is the limit. Frame latency 1–3 and mailbox or immediate
+  presentation change nothing.
+- **About 3 ms of GPU time falls outside the pass timers** (`--log-frame-times`: 10.2 ms a
+  frame, 6.8 ms timed). It grows with MSAA.
+- **The CPU floor** at 640 × 360 is about 5 ms a frame with no actors. The campaign's
+  main thread is about 7 ms with Goodsprings' residents.
+
+**Terrain layers draw only where they paint** (`terrain.rs`, `quadrant_mesh`). Each
+texture layer of a quadrant was a blended copy of the whole 17 × 17 grid, drawn at full
+size even where its opacity is 0. A layer mesh now keeps only the triangles with a corner
+the layer paints, and a layer that paints nothing has no mesh. The picture is the same:
+screenshots differ from main by less than two runs of main differ from each other.
+[observed] The blended pass took 1.2 → 0.74 ms looking at the town and 1.7 → 0.48 ms
+looking at the ground; the frame took 10.2 → 9.7 ms and 7.6 → 6.4 ms.
+
+**Bevy's indirect-parameter build jobs are merged** (engine/vendor/README.md,
+bevy_render). An Nsight Graphics GPU Trace (5 frames) showed what the timers missed. The
+graphics engine was busy 93 % of the frame, but the shader units were only 28 % busy. The
+front end waited for the GPU to go idle 37 % of the time, and the frame had 2,518 compute
+dispatches. Bevy's GPU culling builds the indirect draw parameters with one dispatch per
+batch range of each view and phase. That pass has no timer, and wgpu puts a barrier
+between dispatches that write the same buffers. Merging each view's ranges that follow one
+another leaves 904 dispatches. Compute is then active 9 % of the frame instead of 16 %.
+[observed] Interleaved runs of one build: 9.0 → 8.5 ms a frame.
+
+Not done, measured on the way [observed]:
+
+- **Light glow and sun shadows.** Light glow costs about 0.9 ms of the frame and sun
+  shadows about 1.1 ms, each about half outside their timers.
+- **Uniform allocation and bin unpacking** (Bevy) still make one dispatch per batch set:
+  about 90 each a frame, 0.3–0.5 ms each pass.
+- **The opaque pass** (2.6–4.2 ms) is the largest timed pass.
+- **DX12 does not run** (the bindless NIF material's bind group layout fails validation),
+  so it could not be compared.
