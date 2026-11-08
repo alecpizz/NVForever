@@ -56,7 +56,12 @@ const INGESTIBLE_BITS: [Option<u32>; 4] = [None, Some(0), Some(1), Some(0)];
 /// quint, sine, expo, circ, back, elastic and bounce at 0.25 in all three modes;
 /// "linear" -1].
 pub(crate) fn ease(t: f64, name: &str, mode: i64) -> f64 {
-    let t = t.clamp(0.0, 1.0);
+    ease_unclamped(t.clamp(0.0, 1.0), name, mode)
+}
+
+/// [`ease`] without holding `t` to 0-1: ApplyEasingAlt eases 1.5 by quad-in to 2.25
+/// [observed: showoff3 so3.ease.outside].
+pub(crate) fn ease_unclamped(t: f64, name: &str, mode: i64) -> f64 {
     let f: fn(f64) -> f64 = match name.to_ascii_lowercase().as_str() {
         "quad" => |t| t * t,
         "cubic" => |t| t * t * t,

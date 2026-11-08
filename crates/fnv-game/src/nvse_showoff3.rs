@@ -24,6 +24,14 @@ fn num(args: &[XVal], k: usize, dflt: f64) -> f64 {
     }
 }
 
+/// An unsigned argument (a seed, RandSeeded's bounds): whole, and at most 2^31 - 1
+/// [observed: showoff3 so3.seed.big, SetRandomizerSeed 4294967295 reads 2147483647 and
+/// draws as seed 2147483647 does; so3.seed.range.uint, a maximum of 4294967294 draws half
+/// the raw numbers].
+fn uint(args: &[XVal], k: usize) -> u32 {
+    num(args, k, 0.0).trunc().clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i64 as u32
+}
+
 fn text(args: &[XVal], k: usize) -> String {
     match args.get(k) {
         Some(XVal::Str(s)) => s.clone(),
@@ -43,9 +51,10 @@ fn list(g: &mut Game, items: impl Iterator<Item = XVal>) -> XVal {
 /// The seed RandSeeded and its siblings start from when none was set: 5489
 /// [documented: GetRandomPercentSeeded, RandSeeded, SetRandomizerSeed, "default seed
 /// (value of 5489)"]. 5489 is the published default seed of the Mersenne Twister
-/// MT19937, so NVForever draws from that generator [hypothesis: the pages name no
-/// generator; how a draw maps to `min..=max` is not documented either, so sequences need
-/// not match the original's].
+/// MT19937, and a draw maps onto `min..=max` as `min + floor(x * (max - min + 1) / 2^32)`,
+/// a draw whose product's low 32 bits fall under 2^32 mod the span taken again
+/// [observed: showoff3 so3.seed.default 82 14 91 84 13, so3.seed.20.twice, so3.seed.advance,
+/// so3.seed.range.wide and .bits: MT19937's outputs for those seeds scaled so].
 pub const DEFAULT_SEED: u32 = 5489;
 
 /// MT19937 (Matsumoto and Nishimura, 1998): the 32-bit Mersenne Twister, the standard
@@ -106,6 +115,13 @@ impl Seeded {
 /// "1 << 5" is the weapon; GetBaseEquippedWeight's, 12 is the upper body and left hand].
 const SLOT_BITS: u32 = 0xF_FFFF;
 
+/// The lowest slot an item takes, the order GetEquippedItems lists them in [observed:
+/// showoff3 so3.items.allslots: the Vault 21 jumpsuit (upper body), the Pip-Boy glove (left
+/// hand), the Pip-Boy].
+fn first_slot(g: &Game, item: FormId) -> u32 {
+    slots_of(g, item).trailing_zeros()
+}
+
 /// The equip slots an item takes: a weapon slot 5, armour its BMDT biped flags; none for
 /// any other item (ammo, aid).
 fn slots_of(g: &Game, item: FormId) -> u32 {
@@ -148,6 +164,7 @@ fn equipped(g: &mut Game, actor: FormId, mask: u32) -> Vec<(FormId, fnv_sim::inv
             out.push((item, extra));
         }
     }
+    out.sort_by_key(|x| first_slot(g, x.0));
     out
 }
 
@@ -197,6 +214,17 @@ impl Game<'_> {
     /// its owner and the time since the last update, 1 for a timer counting frames
     /// (no flag 4) [documented: SetOnAuxTimerUpdateHandler; AuxTimerStart's flags].
     pub(crate) fn aux_timer_updates(&mut self) {
+        // Handlers set or removed last frame take effect now [observed: showoff3
+        // so3.aux.start.reg, a start in the step that set the handler runs nothing, a
+        // restart one frame later runs it; so3.aux.start.remove, a restart in the step that
+        // removed it still runs it].
+        for (start, set, f, timer, owner) in std::mem::take(&mut self.showoff.pending_handlers) {
+            let hs = if start { &mut self.showoff.timer_starts } else { &mut self.showoff.timer_updates };
+            hs.retain(|(h, n, o)| !(*h == f && *n == timer && *o == owner));
+            if set {
+                hs.push((f, timer, owner));
+            }
+        }
         let now = self.time;
         let dt = now - self.showoff.last_update.unwrap_or(now);
         self.showoff.last_update = Some(now);
@@ -324,17 +352,17 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         // `[seed]`: 0 or none the default seed; the sequence starts again [documented:
         // SetRandomizerSeed, alias SetSeed].
         "setrandomizerseed" | "setseed" => {
-            let s = num(args, 0, 0.0) as i64 as u32;
+            let s = uint(args, 0);
             let s = if s == 0 { DEFAULT_SEED } else { s };
             let m = g.other.plugin.to_ascii_lowercase();
             g.showoff.seeds.insert(m, Seeded::new(s));
             zero
         }
-        // `[form]`: the form's FormID, else the calling reference's, else the default
-        // [documented: SetSeedUsingForm, alias SetFormSeed; its example calls it on a
-        // reference].
+        // `[form]`: the form's FormID, else the default [documented: SetSeedUsingForm,
+        // alias SetFormSeed]; the calling reference is not used [observed: showoff3
+        // so3.seed.form.ref, player.SetSeedUsingForm reads 5489].
         "setseedusingform" | "setformseed" => {
-            let s = form(args, 0).or(subject).map_or(DEFAULT_SEED, |f| f.0);
+            let s = form(args, 0).map_or(DEFAULT_SEED, |f| f.0);
             let m = g.other.plugin.to_ascii_lowercase();
             g.showoff.seeds.insert(m, Seeded::new(s));
             zero
@@ -346,16 +374,27 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
             XVal::Num(g.showoff.seeds.get(&m).map_or(-1.0, |s| f64::from(s.seed)))
         }
         // `min max`, both included; -1 when min is above max [documented: RandSeeded,
-        // alias GenerateSeededRandomNumber]. The draw modulo the range's size
-        // [hypothesis].
+        // alias GenerateSeededRandomNumber]; the draw scaled onto the range
+        // ([`DEFAULT_SEED`]).
         "randseeded" | "generateseededrandomnumber" | "getrandompercentseeded" => {
-            let (lo, hi) = if name == "getrandompercentseeded" { (1.0, 100.0) } else { (num(args, 0, 0.0).trunc(), num(args, 1, 0.0).trunc()) };
+            let (lo, hi) = if name == "getrandompercentseeded" { (1, 100) } else { (uint(args, 0), uint(args, 1)) };
             if lo > hi {
                 return Some(Ok(XVal::Num(-1.0)));
             }
-            let span = (hi - lo + 1.0).min(f64::from(u32::MAX)) as u64;
-            let x = u64::from(g.mod_seed().rng.next_u32());
-            XVal::Num(lo + (x % span.max(1)) as f64)
+            let span = u64::from(hi - lo) + 1;
+            // A draw whose product's low 32 bits fall under 2^32 mod span is thrown away and
+            // the next one taken, so every value is as likely [observed: showoff3
+            // so3.seed.range.wide, 0..=1000000000 skips MT19937's third output for 5489 and
+            // gives the fourth's scaled value].
+            let reject = (1u64 << 32) % span;
+            let rng = &mut g.mod_seed().rng;
+            let m = loop {
+                let m = u64::from(rng.next_u32()) * span;
+                if m & 0xFFFF_FFFF >= reject {
+                    break m;
+                }
+            };
+            XVal::Num(f64::from(lo) + (m >> 32) as f64)
         }
         // `n`: n draws thrown away; 0 when the mod has no seed [documented: AdvanceSeed].
         "advanceseed" => {
@@ -375,11 +414,13 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         }
         // ---- small getters ----
         // `input code mode` [documented: ApplyEasingAlt, alias EaseAlt; -1 for an unknown
-        // curve].
+        // curve]; -1 for a mode other than 0-2, and an input outside 0-1 eased as it is
+        // [observed: showoff3 so3.ease.badmode, so3.ease.outside].
         "applyeasingalt" | "easealt" => {
             let code = num(args, 1, -1.0);
+            let mode = num(args, 2, 0.0);
             match usize::try_from(code as i64).ok().and_then(|c| EASINGS.get(c)) {
-                Some(e) if code.fract() == 0.0 => XVal::Num(crate::nvse_plugins::ease(num(args, 0, 0.0), e, num(args, 2, 0.0) as i64)),
+                Some(e) if code.fract() == 0.0 && (0.0..=2.0).contains(&mode) => XVal::Num(crate::nvse_plugins::ease_unclamped(num(args, 0, 0.0), e, mode as i64)),
                 _ => XVal::Num(-1.0),
             }
         }
@@ -492,9 +533,11 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         }
         // ---- aux timers ----
         // `timerName [owner]`: the time it was started with, -1 when it is not running
-        // [documented: AuxTimerTimeToCountdown].
+        // [documented: AuxTimerTimeToCountdown]. The owner argument is a base form: a
+        // reference given there stands for its base [observed: showoff3 so3.aux.countdown,
+        // the runway piece's running timer named by argument reads -1, called on it 30].
         "auxtimertimetocountdown" => {
-            let owner = form(args, 1).or(subject).unwrap_or(FormId::PLAYER_REF);
+            let owner = form(args, 1).map(|f| crate::functions::base_of(g, f).unwrap_or(f)).or(subject).unwrap_or(FormId::PLAYER_REF);
             let key = (owner, text(args, 0).to_ascii_lowercase());
             XVal::Num(if g.jip2.timers.contains_key(&key) { g.showoff.countdowns.get(&key).map_or(-1.0, |c| c.0) } else { -1.0 })
         }
@@ -506,11 +549,8 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
             let Some(f) = args.get(1).cloned() else { return Some(Ok(zero)) };
             let timer = text(args, 2).to_ascii_lowercase();
             let owner = form(args, 3).or_else(|| subject.filter(|_| args.len() < 4)).unwrap_or(FormId::PLAYER_REF);
-            let hs = if name.contains("start") { &mut g.showoff.timer_starts } else { &mut g.showoff.timer_updates };
-            hs.retain(|(h, n, o)| !(*h == f && *n == timer && *o == owner));
-            if set {
-                hs.push((f, timer, owner));
-            }
+            // Applied at the next frame (`Game::aux_timer_updates`).
+            g.showoff.pending_handlers.push((name.contains("start"), set, f, timer, owner));
             XVal::Num(1.0)
         }
         // ---- a reference's radiation ----
@@ -540,9 +580,13 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
                 _ => zero,
             }
         }
-        // `info`: the response texts in order [documented: TopicInfoGetResponseStrings].
+        // `info`: the response texts in order [documented: TopicInfoGetResponseStrings]; no
+        // array for a form that is not a line [observed: showoff3 so3.responses.stimpak,
+        // ar_Size -1].
         "topicinfogetresponsestrings" => {
-            let texts: Vec<XVal> = form(args, 0).and_then(|i| g.dialogue_view().info(&i).map(|d| d.responses.iter().map(|r| XVal::Str(r.text.clone())).collect())).unwrap_or_default();
+            let Some(texts) = form(args, 0).and_then(|i| g.dialogue_view().info(&i).map(|d| d.responses.iter().map(|r| XVal::Str(r.text.clone())).collect::<Vec<XVal>>())) else {
+                return Some(Ok(XVal::Array(0)));
+            };
             list(g, texts.into_iter())
         }
         _ => return None,

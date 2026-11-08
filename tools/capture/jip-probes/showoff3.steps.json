@@ -1,0 +1,622 @@
+{
+ "format": "fnv.capture.steps/1",
+ "name": "showoff3",
+ "title": "showoff3, runtime-compiled",
+ "start": "any save (read-only)",
+ "steps": [
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (GetRandomizerSeed)\nEnd\n",
+   "label": "so3.seed.get.none",
+   "field": "value"
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (AdvanceSeed 3)\nEnd\n",
+   "label": "so3.seed.advance.none",
+   "field": "value"
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet fA := RandSeeded 1 100\nlet fB := RandSeeded 1 100\nlet fC := RandSeeded 1 100\nlet fD := RandSeeded 1 100\nlet fE := RandSeeded 1 100\nSetFunctionValue (sv_Construct \"%g %g %g %g %g | %g\" fA fB fC fD fE (GetRandomizerSeed))\nEnd\n",
+   "label": "so3.seed.default",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (GetRandomizerSeed)\nEnd\n",
+   "label": "so3.seed.get.afterdefault",
+   "field": "value"
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (AdvanceSeed 0)\nEnd\n",
+   "label": "so3.seed.advance.afterdefault",
+   "field": "value"
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetRandomizerSeed 20\nlet fA := RandSeeded 1 100\nlet fB := RandSeeded 1 100\nlet fC := RandSeeded 1 100\nlet fD := RandSeeded 1 100\nlet fE := RandSeeded 1 100\nSetRandomizerSeed 20\nlet fF := RandSeeded 1 100\nlet fG := RandSeeded 1 100\nlet fH := RandSeeded 1 100\nlet fI := RandSeeded 1 100\nlet fJ := RandSeeded 1 100\nSetFunctionValue (sv_Construct \"%g %g %g %g %g | %g %g %g %g %g | %g\" fA fB fC fD fE fF fG fH fI fJ (GetRandomizerSeed))\nEnd\n",
+   "label": "so3.seed.20.twice",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetRandomizerSeed 20\nlet fA := RandSeeded 1 100\nlet fB := RandSeeded 1 100\nlet fC := RandSeeded 1 100\nlet fD := RandSeeded 1 100\nlet fE := RandSeeded 1 100\nSetFunctionValue (sv_Construct \"%g %g %g %g %g | %g\" fA fB fC fD fE (GetRandomizerSeed))\nEnd\n",
+   "label": "so3.seed.20.nextframe",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetRandomizerSeed 0\nlet fA := RandSeeded 1 100\nlet fB := RandSeeded 1 100\nlet fC := RandSeeded 1 100\nlet fD := RandSeeded 1 100\nlet fE := RandSeeded 1 100\nSetFunctionValue (sv_Construct \"%g %g %g %g %g | %g\" fA fB fC fD fE (GetRandomizerSeed))\nEnd\n",
+   "label": "so3.seed.0",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetRandomizerSeed\nlet fA := RandSeeded 1 100\nlet fB := RandSeeded 1 100\nlet fC := RandSeeded 1 100\nlet fD := RandSeeded 1 100\nlet fE := RandSeeded 1 100\nSetFunctionValue (sv_Construct \"%g %g %g %g %g | %g\" fA fB fC fD fE (GetRandomizerSeed))\nEnd\n",
+   "label": "so3.seed.noarg",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetRandomizerSeed 5489\nlet fA := RandSeeded 1 100\nlet fB := RandSeeded 1 100\nlet fC := RandSeeded 1 100\nlet fD := RandSeeded 1 100\nlet fE := RandSeeded 1 100\nSetFunctionValue (sv_Construct \"%g %g %g %g %g | %g\" fA fB fC fD fE (GetRandomizerSeed))\nEnd\n",
+   "label": "so3.seed.5489",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetSeed 20\nlet fA := GenerateSeededRandomNumber 1 100\nlet fB := GenerateSeededRandomNumber 1 100\nSetFunctionValue (sv_Construct \"%g %g | %g\" fA fB (GetRandomizerSeed))\nEnd\n",
+   "label": "so3.seed.alias",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetRandomizerSeed 20\nlet fA := GetRandomPercentSeeded\nlet fB := GetRandomPercentSeeded\nlet fC := GetRandomPercentSeeded\nlet fD := GetRandomPercentSeeded\nlet fE := GetRandomPercentSeeded\nSetFunctionValue (sv_Construct \"%g %g %g %g %g | %g\" fA fB fC fD fE (GetRandomizerSeed))\nEnd\n",
+   "label": "so3.seed.percent",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetRandomizerSeed 101\nlet fRes := AdvanceSeed 5\nlet fA := RandSeeded 1 100\nSetRandomizerSeed 101\nlet fB := RandSeeded 1 100\nlet fC := RandSeeded 1 100\nlet fD := RandSeeded 1 100\nlet fE := RandSeeded 1 100\nlet fF := RandSeeded 1 100\nlet fG := RandSeeded 1 100\nSetFunctionValue (sv_Construct \"%g %g | %g %g %g %g %g %g\" fRes fA fB fC fD fE fF fG)\nEnd\n",
+   "label": "so3.seed.advance",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetRandomizerSeed 101\nlet fRes := AdvanceSeed 0\nlet fA := RandSeeded 1 100\nSetFunctionValue (sv_Construct \"%g %g\" fRes fA)\nEnd\n",
+   "label": "so3.seed.advance.zero",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetRandomizerSeed 5489\nlet fA := RandSeeded 0 1000000000\nlet fB := RandSeeded 0 1000000000\nlet fC := RandSeeded 0 1000000000\nSetFunctionValue (sv_Construct \"%g %g %g | %g\" fA fB fC (GetRandomizerSeed))\nEnd\n",
+   "label": "so3.seed.range.wide",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetRandomizerSeed 5489\nlet fA := RandSeeded 0 4294967294\nlet fB := RandSeeded 0 4294967294\nlet fC := RandSeeded 0 4294967294\nSetFunctionValue (sv_Construct \"%g %g %g | %g\" fA fB fC (GetRandomizerSeed))\nEnd\n",
+   "label": "so3.seed.range.uint",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetRandomizerSeed 5489\nlet fA := RandSeeded 0 1\nlet fB := RandSeeded 0 1\nlet fC := RandSeeded 0 1\nlet fD := RandSeeded 0 1\nlet fE := RandSeeded 0 1\nlet fF := RandSeeded 0 1\nlet fG := RandSeeded 0 1\nlet fH := RandSeeded 0 1\nSetFunctionValue (sv_Construct \"%g %g %g %g %g %g %g %g | %g\" fA fB fC fD fE fF fG fH (GetRandomizerSeed))\nEnd\n",
+   "label": "so3.seed.range.bits",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetRandomizerSeed 5489\nlet fA := RandSeeded 7 7\nlet fB := RandSeeded 7 7\nlet fC := RandSeeded 7 7\nSetFunctionValue (sv_Construct \"%g %g %g | %g\" fA fB fC (GetRandomizerSeed))\nEnd\n",
+   "label": "so3.seed.range.same",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetRandomizerSeed 5489\nlet fA := RandSeeded 1.7 3.2\nlet fB := RandSeeded 1.7 3.2\nlet fC := RandSeeded 1.7 3.2\nlet fD := RandSeeded 1.7 3.2\nlet fE := RandSeeded 1.7 3.2\nSetFunctionValue (sv_Construct \"%g %g %g %g %g | %g\" fA fB fC fD fE (GetRandomizerSeed))\nEnd\n",
+   "label": "so3.seed.range.fraction",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rObj := GetFormFromMod \"FalloutNV.esm\" \"F\"\nSetSeedUsingForm rObj\nlet fA := GetRandomizerSeed\nlet fB := RandSeeded 1 100\nSetRandomizerSeed 15\nlet fC := RandSeeded 1 100\nSetFunctionValue (sv_Construct \"%g %g %g\" fA fB fC)\nEnd\n",
+   "label": "so3.seed.form.caps",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetSeedUsingForm rP\nSetFunctionValue (GetRandomizerSeed)\nEnd\n",
+   "label": "so3.seed.form.player",
+   "field": "value"
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nrP.SetSeedUsingForm\nSetFunctionValue (GetRandomizerSeed)\nEnd\n",
+   "label": "so3.seed.form.ref",
+   "field": "value"
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetRandomizerSeed 20\nSetSeedUsingForm\nSetFunctionValue (GetRandomizerSeed)\nEnd\n",
+   "label": "so3.seed.form.none",
+   "field": "value"
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rObj := GetFormFromMod \"FalloutNV.esm\" \"15169\"\nSetFormSeed rObj\nSetFunctionValue (GetSeed)\nEnd\n",
+   "label": "so3.seed.form.alias",
+   "field": "value"
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetRandomizerSeed 33\nSetFunctionValue (rP.GetRandomizerSeed)\nEnd\n",
+   "label": "so3.seed.get.ref",
+   "field": "value"
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetRandomizerSeed 4294967295\nlet fA := GetRandomizerSeed\nlet fB := RandSeeded 1 100\nSetRandomizerSeed 3000000000\nSetFunctionValue (sv_Construct \"%.0f %g %.0f\" fA fB (GetRandomizerSeed))\nEnd\n",
+   "label": "so3.seed.big",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet aList := rP.GetEquippedItems\nlet aKeys := ar_Keys aList\nlet fA := ar_Size aKeys\nlet sText := sv_Construct \"%g:\" fA\nlet fB := 0\nwhile fB < fA\nlet fC := aKeys[fB]\nlet rItem := aList[fC]\nlet rOther := rItem\nlet sText := sv_Construct \"%z %z\" sText (GetFormIDString rOther)\nlet fB += 1\nloop\nSetFunctionValue sText\nEnd\n",
+   "label": "so3.items.nomask",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet aList := rP.GetEquippedItems 0\nlet aKeys := ar_Keys aList\nlet fA := ar_Size aKeys\nlet sText := sv_Construct \"%g:\" fA\nlet fB := 0\nwhile fB < fA\nlet fC := aKeys[fB]\nlet rItem := aList[fC]\nlet rOther := rItem\nlet sText := sv_Construct \"%z %z\" sText (GetFormIDString rOther)\nlet fB += 1\nloop\nSetFunctionValue sText\nEnd\n",
+   "label": "so3.items.0",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet aList := rP.GetEquippedItems 32\nlet aKeys := ar_Keys aList\nlet fA := ar_Size aKeys\nlet sText := sv_Construct \"%g:\" fA\nlet fB := 0\nwhile fB < fA\nlet fC := aKeys[fB]\nlet rItem := aList[fC]\nlet rOther := rItem\nlet sText := sv_Construct \"%z %z\" sText (GetFormIDString rOther)\nlet fB += 1\nloop\nSetFunctionValue sText\nEnd\n",
+   "label": "so3.items.weapon",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet aList := rP.GetEquippedItems 64\nlet aKeys := ar_Keys aList\nlet fA := ar_Size aKeys\nlet sText := sv_Construct \"%g:\" fA\nlet fB := 0\nwhile fB < fA\nlet fC := aKeys[fB]\nlet rItem := aList[fC]\nlet rOther := rItem\nlet sText := sv_Construct \"%z %z\" sText (GetFormIDString rOther)\nlet fB += 1\nloop\nSetFunctionValue sText\nEnd\n",
+   "label": "so3.items.pipboy",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet aList := rP.GetEquippedItems 1048575\nlet aKeys := ar_Keys aList\nlet fA := ar_Size aKeys\nlet sText := sv_Construct \"%g:\" fA\nlet fB := 0\nwhile fB < fA\nlet fC := aKeys[fB]\nlet rItem := aList[fC]\nlet rOther := rItem\nlet sText := sv_Construct \"%z %z\" sText (GetFormIDString rOther)\nlet fB += 1\nloop\nSetFunctionValue sText\nEnd\n",
+   "label": "so3.items.allslots",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet aList := rP.GetEquippedItems 1048576\nlet aKeys := ar_Keys aList\nlet fA := ar_Size aKeys\nlet sText := sv_Construct \"%g:\" fA\nlet fB := 0\nwhile fB < fA\nlet fC := aKeys[fB]\nlet rItem := aList[fC]\nlet rOther := rItem\nlet sText := sv_Construct \"%z %z\" sText (GetFormIDString rOther)\nlet fB += 1\nloop\nSetFunctionValue sText\nEnd\n",
+   "label": "so3.items.bit20",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet aList := rP.GetEquippedItems 1048608\nlet aKeys := ar_Keys aList\nlet fA := ar_Size aKeys\nlet sText := sv_Construct \"%g:\" fA\nlet fB := 0\nwhile fB < fA\nlet fC := aKeys[fB]\nlet rItem := aList[fC]\nlet rOther := rItem\nlet sText := sv_Construct \"%z %z\" sText (GetFormIDString rOther)\nlet fB += 1\nloop\nSetFunctionValue sText\nEnd\n",
+   "label": "so3.items.bit20.weapon",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet aList := rP.GetEquippedItemRefs\nlet aKeys := ar_Keys aList\nlet fA := ar_Size aKeys\nlet sText := sv_Construct \"%g:\" fA\nlet fB := 0\nwhile fB < fA\nlet fC := aKeys[fB]\nlet rItem := aList[fC]\nlet rOther := rItem.GetBaseObject\nlet sText := sv_Construct \"%z %z\" sText (GetFormIDString rOther)\nlet fB += 1\nloop\nSetFunctionValue sText\nEnd\n",
+   "label": "so3.refs.nomask",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet aList := rP.GetEquippedItemRefs 1048575\nlet aKeys := ar_Keys aList\nlet fA := ar_Size aKeys\nlet sText := sv_Construct \"%g:\" fA\nlet fB := 0\nwhile fB < fA\nlet fC := aKeys[fB]\nlet rItem := aList[fC]\nlet rOther := rItem.GetBaseObject\nlet sText := sv_Construct \"%z %z\" sText (GetFormIDString rOther)\nlet fB += 1\nloop\nSetFunctionValue sText\nEnd\n",
+   "label": "so3.refs.allslots",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (rP.GetEquippedItemsAsBitMask)\nEnd\n",
+   "label": "so3.bitmask",
+   "field": "value"
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (rP.GetOccupiedEquipSlots)\nEnd\n",
+   "label": "so3.bitmask.alias",
+   "field": "value"
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (sv_Construct \"%g %g %g %g %g %g\" (rP.GetNumBrokenEquippedItems) (rP.GetNumBrokenEquippedItems 100) (rP.GetNumBrokenEquippedItems 100 32) (rP.GetNumBrokenEquippedItems 0 32) (rP.GetNumBrokenEquippedItems -1) (rP.GetNumBrokenEq 100 1048575))\nEnd\n",
+   "label": "so3.broken",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (sv_Construct \"%.3f %.3f %.3f %.3f %.3f\" (rP.GetBaseEquippedWeight) (rP.GetBaseEquippedWeight 0 32) (rP.GetBaseEquippedWeight 0 1048575) (rP.GetBaseEquippedWeight 1000) (rP.GetBaseEquippedWeight 2))\nEnd\n",
+   "label": "so3.weight.base",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (sv_Construct \"%.3f %.3f %.3f %.3f %.3f\" (rP.GetCalculatedEquippedWeight) (rP.GetCalculatedEquippedWeight 0 32) (rP.GetCalculatedEquippedWeight 0 1048575) (rP.GetCalculatedEquippedWeight 1000) (rP.GetCalculatedEquippedWeight 2))\nEnd\n",
+   "label": "so3.weight.calc",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (sv_Construct \"%.3f %.3f\" (rP.GetCalculatedMaxCarryWeight) (rP.GetAV CarryWeight))\nEnd\n",
+   "label": "so3.carry",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rOther := rP.GetEquippedObject 5\nlet rItem := rP.GetEquippedWeaponRef\nif rItem\nlet rObj := rItem.GetBaseObject\nSetFunctionValue (sv_Construct \"%z %g\" (GetFormIDString rObj) (rObj == rOther))\nelse\nSetFunctionValue (sv_Construct \"0 %g\" (rOther == 0))\nendif\nEnd\n",
+   "label": "so3.weaponref",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rOther := rP.GetEquippedObject 5\nif rOther == 0\nSetFunctionValue (sv_Construct \"no weapon\")\nreturn\nendif\nlet rItem := rP.GetEquippedItemRefForItem rOther\nif rItem\nlet rObj := rItem.GetBaseObject\nSetFunctionValue (sv_Construct \"%z %g %g\" (GetFormIDString rObj) (rObj == rOther) (rItem.IsEquipped))\nelse\nSetFunctionValue (sv_Construct \"0\")\nendif\nEnd\n",
+   "label": "so3.refforitem.weapon",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rObj := GetFormFromMod \"FalloutNV.esm\" \"15169\"\nlet rItem := rP.GetEquippedItemRefForItem rObj\nSetFunctionValue (rItem == 0)\nEnd\n",
+   "label": "so3.refforitem.notworn",
+   "field": "value"
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rObj := GetFormFromMod \"FalloutNV.esm\" \"1613D5\"\nlet rOther := rP.GetEquippedObject 5\nif rOther == 0\nSetFunctionValue (sv_Construct \"no weapon\")\nreturn\nendif\nlet fA := ListGetCount rObj\nListAddForm rObj rOther\nlet rItem := rP.GetEquippedItemRefForItem rObj\nlet fB := 0\nif rItem\nlet fB := (rItem.GetBaseObject) == rOther\nendif\nListRemoveForm rObj rOther\nSetFunctionValue (sv_Construct \"%g %g %g\" fA fB (ListGetCount rObj))\nEnd\n",
+   "label": "so3.refforitem.list",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rObj := GetFormFromMod \"FalloutNV.esm\" \"1613D5\"\nlet rItem := rP.GetEquippedItemRefForItem rObj\nSetFunctionValue (rItem == 0)\nEnd\n",
+   "label": "so3.refforitem.list.none",
+   "field": "value"
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rOther := rP.GetEquippedObject 5\nif rOther == 0\nSetFunctionValue (sv_Construct \"no weapon\")\nreturn\nendif\nrP.AuxVarSetRef \"*nvfSO3W\" rOther\nlet fA := rP.GetEquippedItemsAsBitMask\nrP.UnequipItems 32 0 1\nlet fB := rP.GetEquippedItemsAsBitMask\nlet fC := rP.GetEquipped rOther\nSetFunctionValue (sv_Construct \"%g %g %g\" fA fB fC)\nEnd\n",
+   "label": "so3.unequip.weapon",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rOther := rP.AuxVarGetRef \"*nvfSO3W\"\nSetFunctionValue (sv_Construct \"%g %g\" (rP.GetEquippedItemsAsBitMask) (rOther != 0))\nEnd\n",
+   "label": "so3.unequip.weapon.next",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rOther := rP.AuxVarGetRef \"*nvfSO3W\"\nif rOther\nrP.EquipItem rOther 0 1\nendif\nSetFunctionValue 1\nEnd\n",
+   "label": "so3.unequip.reequip",
+   "field": "value"
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rOther := rP.AuxVarGetRef \"*nvfSO3W\"\nrP.AuxVarErase \"*nvfSO3W\"\nSetFunctionValue (sv_Construct \"%g %z\" (rP.GetEquippedItemsAsBitMask) (GetFormIDString (rP.GetEquippedObject 5)))\nEnd\n",
+   "label": "so3.unequip.reequip.next",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (sv_Construct \"%.6f %.6f %.6f\" (ApplyEasingAlt 0.25 0 0) (ApplyEasingAlt 0.25 0 1) (ApplyEasingAlt 0.25 0 2))\nEnd\n",
+   "label": "so3.ease.0",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (sv_Construct \"%.6f %.6f %.6f\" (ApplyEasingAlt 0.25 1 0) (ApplyEasingAlt 0.25 1 1) (ApplyEasingAlt 0.25 1 2))\nEnd\n",
+   "label": "so3.ease.1",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (sv_Construct \"%.6f %.6f %.6f\" (ApplyEasingAlt 0.25 2 0) (ApplyEasingAlt 0.25 2 1) (ApplyEasingAlt 0.25 2 2))\nEnd\n",
+   "label": "so3.ease.2",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (sv_Construct \"%.6f %.6f %.6f\" (ApplyEasingAlt 0.25 3 0) (ApplyEasingAlt 0.25 3 1) (ApplyEasingAlt 0.25 3 2))\nEnd\n",
+   "label": "so3.ease.3",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (sv_Construct \"%.6f %.6f %.6f\" (ApplyEasingAlt 0.25 4 0) (ApplyEasingAlt 0.25 4 1) (ApplyEasingAlt 0.25 4 2))\nEnd\n",
+   "label": "so3.ease.4",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (sv_Construct \"%.6f %.6f %.6f\" (ApplyEasingAlt 0.25 5 0) (ApplyEasingAlt 0.25 5 1) (ApplyEasingAlt 0.25 5 2))\nEnd\n",
+   "label": "so3.ease.5",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (sv_Construct \"%.6f %.6f %.6f\" (ApplyEasingAlt 0.25 6 0) (ApplyEasingAlt 0.25 6 1) (ApplyEasingAlt 0.25 6 2))\nEnd\n",
+   "label": "so3.ease.6",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (sv_Construct \"%.6f %.6f %.6f\" (ApplyEasingAlt 0.25 7 0) (ApplyEasingAlt 0.25 7 1) (ApplyEasingAlt 0.25 7 2))\nEnd\n",
+   "label": "so3.ease.7",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (sv_Construct \"%.6f %.6f %.6f\" (ApplyEasingAlt 0.25 8 0) (ApplyEasingAlt 0.25 8 1) (ApplyEasingAlt 0.25 8 2))\nEnd\n",
+   "label": "so3.ease.8",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (sv_Construct \"%.6f %.6f %.6f\" (ApplyEasingAlt 0.25 9 0) (ApplyEasingAlt 0.25 9 1) (ApplyEasingAlt 0.25 9 2))\nEnd\n",
+   "label": "so3.ease.9",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (sv_Construct \"%g %g %g\" (ApplyEasingAlt 0.5 10 0) (ApplyEasingAlt 0.5 -1 0) (ApplyEasingAlt 0.5 1.5 0))\nEnd\n",
+   "label": "so3.ease.badcode",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (sv_Construct \"%.6f %.6f\" (ApplyEasingAlt 0.25 1 3) (ApplyEasingAlt 0.25 1 -1))\nEnd\n",
+   "label": "so3.ease.badmode",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (sv_Construct \"%.6f %.6f %.6f\" (ApplyEasingAlt 1.5 1 0) (ApplyEasingAlt -0.5 1 0) (ApplyEasingAlt 1 9 2))\nEnd\n",
+   "label": "so3.ease.outside",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (sv_Construct \"%.6f\" (EaseAlt 0.25 2 1))\nEnd\n",
+   "label": "so3.ease.alias",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet aList := rP.GetPosArray\nSetFunctionValue (sv_Construct \"%g %.3f %.3f %.3f\" (ar_Size aList) ((aList[0]) - (rP.GetPos X)) ((aList[1]) - (rP.GetPos Y)) ((aList[2]) - (rP.GetPos Z)))\nEnd\n",
+   "label": "so3.posarray",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (IsOutsideMainThread)\nEnd\n",
+   "label": "so3.mainthread",
+   "field": "value"
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (rP.ConditionPrint)\nEnd\n",
+   "label": "so3.conditionprint",
+   "field": "value"
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (sv_Construct \"%g %g %g %g %g\" (rP.IsAnimPlayingExCond 1) (rP.IsAnimPlayingExCond 1 1) (rP.IsAnimPlayingExCond 2) (rP.IsAnimPlayingExCond 3) (rP.IsAnimPlayingEx 1))\nEnd\n",
+   "label": "so3.animcond",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (sv_Construct \"%g %g\" (rP.IsJumping) (rP.IsInAir))\nEnd\n",
+   "label": "so3.jumping",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (sv_Construct \"%g %g %g %g\" (rP.GetNumActorsInRangeFromRef 0) (rP.GetNumActorsInRangeFromRef 500) (rP.GetNumActorsInRangeFromRef 5000) (rP.GetNumActorsInRangeFromRef 100000))\nEnd\n",
+   "label": "so3.inrange.player",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (sv_Construct \"%g %g %g %g %g\" (rP.GetNumActorsInRangeFromRef 100000 0) (rP.GetNumActorsInRangeFromRef 100000 1) (rP.GetNumActorsInRangeFromRef 100000 2) (rP.GetNumActorsInRangeFromRef 100000 4) (rP.GetNumActorsInRangeFromRef 100000 7))\nEnd\n",
+   "label": "so3.inrange.flags",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rObj := GetFormFromMod \"FalloutNV.esm\" \"13DA0F\"\nSetFunctionValue (sv_Construct \"%g %g %.0f\" (rObj.GetNumActorsInRangeFromRef 0) (rObj.GetNumActorsInRangeFromRef 100000) (rObj.GetDistance rP))\nEnd\n",
+   "label": "so3.inrange.static",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet fSave := IsPCAMurderer\nSetIsPCAMurderer 1\nlet fA := IsPCAMurderer\nSetIsPCAMurderer 0\nlet fB := IsPCAMurderer\nSetIsPCAMurderer fSave\nSetFunctionValue (sv_Construct \"%g %g %g %g\" fSave fA fB (IsPCAMurderer))\nEnd\n",
+   "label": "so3.murderer",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet fSave := GetPCHasSleepWaitOverride\nSetPCHasSleepWaitOverride 1\nlet fA := GetPCHasSleepWaitOverride\nSetPCHasSleepWaitOverride 0\nlet fB := GetPCHasSleepWaitOverride\nSetPCHasSleepWaitOverride fSave\nSetFunctionValue (sv_Construct \"%g %g %g %g\" fSave fA fB (GetPCHasSleepWaitOverride))\nEnd\n",
+   "label": "so3.sleepwait",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rObj := GetFormFromMod \"FalloutNV.esm\" \"15EB33\"\nSetFunctionValue (GetChallengeProgress rObj)\nEnd\n",
+   "label": "so3.challenge.explore",
+   "field": "value"
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rObj := GetFormFromMod \"FalloutNV.esm\" \"15EB3E\"\nSetFunctionValue (GetChallengeProgress rObj)\nEnd\n",
+   "label": "so3.challenge.simpak",
+   "field": "value"
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rObj := GetFormFromMod \"FalloutNV.esm\" \"15EB36\"\nSetFunctionValue (GetChallengeProgress rObj)\nEnd\n",
+   "label": "so3.challenge.challenge",
+   "field": "value"
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rObj := GetFormFromMod \"FalloutNV.esm\" \"15EB3C\"\nSetFunctionValue (GetChallengeProgress rObj)\nEnd\n",
+   "label": "so3.challenge.vault3",
+   "field": "value"
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rObj := GetFormFromMod \"FalloutNV.esm\" \"1690E8\"\nSetFunctionValue (GetChallengeProgress rObj)\nEnd\n",
+   "label": "so3.challenge.oldtyme",
+   "field": "value"
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rObj := GetFormFromMod \"FalloutNV.esm\" \"15169\"\nSetFunctionValue (GetChallengeProgress rObj)\nEnd\n",
+   "label": "so3.challenge.stimpak",
+   "field": "value"
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (sv_Construct \"%g %g %g %g %g %g\" (GetCalculatedSkillPoints) (GetCalculatedSkillPoints 1) (GetCalculatedSkillPoints 2) (GetCalculatedSkillPoints 10) (GetCalculatedSkillPoints 49) (GetCalculatedSkillPointsEarnedPerLevel))\nEnd\n",
+   "label": "so3.points.skill",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (sv_Construct \"%g %g %g %g %g %g\" (GetCalculatedPerkPoints) (GetCalculatedPerkPoints 1) (GetCalculatedPerkPoints 2) (GetCalculatedPerkPoints 3) (GetCalculatedPerkPoints 49) (GetCalculatedPerkPointsEarnedPerLevel))\nEnd\n",
+   "label": "so3.points.perk",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (rP.GetLevel)\nEnd\n",
+   "label": "so3.points.level",
+   "field": "value"
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rObj := GetFormFromMod \"FalloutNV.esm\" \"B160C\"\nlet rOther := GetFormFromMod \"FalloutNV.esm\" \"173EEF\"\nlet fA := GetFactionCombatReaction rObj rOther\nlet fB := GetFactionCombatReaction rOther rObj\nSetAllyTemp rObj rOther\nlet fC := GetFactionCombatReaction rObj rOther\nlet fD := GetFactionCombatReaction rOther rObj\nSetAllyTemp rObj rOther 0 1\nlet fE := GetFactionCombatReaction rObj rOther\nlet fF := GetFactionCombatReaction rOther rObj\nSetEnemyTemp rObj rOther\nlet fG := GetFactionCombatReaction rObj rOther\nlet fH := GetFactionCombatReaction rOther rObj\nSetEnemyTemp rObj rOther 1 0\nlet fI := GetFactionCombatReaction rObj rOther\nlet fJ := GetFactionCombatReaction rOther rObj\nSetEnemyTemp rObj rOther 1 1\nSetFunctionValue (sv_Construct \"%g %g | %g %g | %g %g | %g %g | %g %g | %g %g\" fA fB fC fD fE fF fG fH fI fJ (GetFactionCombatReaction rObj rOther) (GetFactionCombatReaction rOther rObj))\nEnd\n",
+   "label": "so3.factions.temp",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rObj := GetFormFromMod \"FalloutNV.esm\" \"B160C\"\nlet rOther := GetFormFromMod \"FalloutNV.esm\" \"173EEF\"\nSetAllyShowOff rObj rOther\nlet fA := GetFactionCombatReaction rObj rOther\nSetEnemyShowOff rObj rOther\nlet fB := GetFactionCombatReaction rObj rOther\nSetEnemyTemp rObj rOther 1 1\nSetFunctionValue (sv_Construct \"%g %g %g\" fA fB (GetFactionCombatReaction rObj rOther))\nEnd\n",
+   "label": "so3.factions.alias",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rObj := GetFormFromMod \"FalloutNV.esm\" \"B160C\"\nlet rOther := GetFormFromMod \"FalloutNV.esm\" \"173EEF\"\nSetAllyTemp rObj rOther\nSetEnemy rObj rOther 1 1\nlet fA := GetFactionCombatReaction rObj rOther\nSetEnemyTemp rObj rOther 1 1\nSetFunctionValue fA\nEnd\n",
+   "label": "so3.factions.saved.after.temp",
+   "field": "value"
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet fSave := rP.GetRadiationExtraData\nlet fRes := rP.SetRadiationExtraData 20\nlet fA := rP.GetRadiationExtraData\nrP.SetRadiationExtraData fSave\nSetFunctionValue (sv_Construct \"%g %g %g %g\" fSave fRes fA (rP.GetRadiationExtraData))\nEnd\n",
+   "label": "so3.radiation.player",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rObj := GetFormFromMod \"FalloutNV.esm\" \"13DA0F\"\nSetFunctionValue (rObj.GetRadiationExtraData)\nEnd\n",
+   "label": "so3.radiation.static",
+   "field": "value"
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet fSave := GetNumericINISetting \"fDefaultFOV:Display\"\nlet fA := ModNumericINISetting \"fDefaultFOV:Display\" 5\nlet fB := GetNumericINISetting \"fDefaultFOV:Display\"\nlet fC := ModNumericINISetting \"fDefaultFOV:Display\" -5\nSetFunctionValue (sv_Construct \"%g %g %g %g %g\" fSave fA fB fC (GetNumericINISetting \"fDefaultFOV:Display\"))\nEnd\n",
+   "label": "so3.ini.mod",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (ModNumericINISetting \"nvfNoSuchSetting:General\" 1)\nEnd\n",
+   "label": "so3.ini.mod.missing",
+   "field": "value"
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rObj := GetFormFromMod \"FalloutNV.esm\" \"E8911\"\nlet aList := TopicInfoGetResponseStrings rObj\nlet fA := ar_Size aList\nlet sText := sv_Construct \"%g:\" fA\nlet fB := 0\nwhile fB < fA\nlet sSave := aList[fB]\nlet sText := sv_Construct \"%z %g\" sText (sv_Length sSave)\nlet fB += 1\nloop\nSetFunctionValue sText\nEnd\n",
+   "label": "so3.responses.caravan",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rObj := GetFormFromMod \"FalloutNV.esm\" \"15CB5B\"\nlet aList := TopicInfoGetResponseStrings rObj\nlet fA := ar_Size aList\nlet sText := sv_Construct \"%g:\" fA\nlet fB := 0\nwhile fB < fA\nlet sSave := aList[fB]\nlet sText := sv_Construct \"%z %g\" sText (sv_Length sSave)\nlet fB += 1\nloop\nSetFunctionValue sText\nEnd\n",
+   "label": "so3.responses.bye",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rObj := GetFormFromMod \"FalloutNV.esm\" \"15169\"\nlet aList := TopicInfoGetResponseStrings rObj\nlet fA := ar_Size aList\nlet sText := sv_Construct \"%g:\" fA\nlet fB := 0\nwhile fB < fA\nlet sSave := aList[fB]\nlet sText := sv_Construct \"%z %g\" sText (sv_Length sSave)\nlet fB += 1\nloop\nSetFunctionValue sText\nEnd\n",
+   "label": "so3.responses.stimpak",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rH := (Begin Function { }\nSetFunctionValue 7\nEnd)\nlet fA := Call rH\nSetFunctionValue fA\nEnd\n",
+   "label": "so3.aux.lambda.call",
+   "field": "value"
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (AuxTimerTimeToCountdown \"*nvfSO3T\")\nEnd\n",
+   "label": "so3.aux.countdown.none",
+   "field": "value"
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rObj := GetFormFromMod \"FalloutNV.esm\" \"13DA0F\"\nlet rH := (Begin Function {string_var sN, ref rOwn}\nrOwn.AuxVarSetFlt \"*nvfSO3S\" ((rOwn.AuxVarGetFlt \"*nvfSO3S\") + 1)\nrOwn.AuxVarSetFlt \"*nvfSO3SL\" (sv_Length sN)\nEnd)\nlet rH2 := (Begin Function {string_var sN, ref rOwn}\nrOwn.AuxVarSetFlt \"*nvfSO3S\" ((rOwn.AuxVarGetFlt \"*nvfSO3S\") + 1)\nrOwn.AuxVarSetFlt \"*nvfSO3SL\" (sv_Length sN)\nEnd)\nrP.AuxVarSetRef \"*nvfSO3H1\" rH\nrP.AuxVarSetRef \"*nvfSO3H2\" rH2\nSetOnAuxTimerStartHandler 1 rH \"*nvfSO3T\"\nSetOnAuxTimerStartHandler 1 rH2 \"*nvfSO3T\" rObj\nAuxTimerStart \"*nvfSO3T\" 50\nSetFunctionValue (sv_Construct \"%g %g %g\" (rP.AuxVarGetFlt \"*nvfSO3S\") (rP.AuxVarGetFlt \"*nvfSO3SL\") (rObj.AuxVarGetFlt \"*nvfSO3S\"))\nEnd\n",
+   "label": "so3.aux.start.reg",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rObj := GetFormFromMod \"FalloutNV.esm\" \"13DA0F\"\nlet sText := sv_Construct \"%g %g |\" (rP.AuxVarGetFlt \"*nvfSO3S\") (rObj.AuxVarGetFlt \"*nvfSO3S\")\nAuxTimerStart \"*nvfSO3T\" 60\nrObj.AuxTimerStart \"*nvfSO3T\" 30\nSetFunctionValue (sv_Construct \"%z %g %g\" sText (rP.AuxVarGetFlt \"*nvfSO3S\") (rObj.AuxVarGetFlt \"*nvfSO3S\"))\nEnd\n",
+   "label": "so3.aux.start.restart",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rObj := GetFormFromMod \"FalloutNV.esm\" \"13DA0F\"\nSetFunctionValue (sv_Construct \"%g %g %g %g\" (AuxTimerTimeToCountdown \"*nvfSO3T\") (rObj.AuxTimerTimeToCountdown \"*nvfSO3T\") (AuxTimerTimeToCountdown \"*nvfSO3T\" rObj) (AuxTimerTimeToCountdown \"*NVFSO3T\"))\nEnd\n",
+   "label": "so3.aux.countdown",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet sText := sv_Construct \"%g |\" (rP.AuxVarGetFlt \"*nvfSO3S\")\nlet rH := rP.AuxVarGetRef \"*nvfSO3H1\"\nSetOnAuxTimerStartHandler 0 rH \"*nvfSO3T\"\nAuxTimerStart \"*nvfSO3T\" 70\nSetFunctionValue (sv_Construct \"%z %g %g\" sText (rH != 0) (rP.AuxVarGetFlt \"*nvfSO3S\"))\nEnd\n",
+   "label": "so3.aux.start.remove",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rObj := GetFormFromMod \"FalloutNV.esm\" \"13DA0F\"\nlet sText := sv_Construct \"%g\" (rP.AuxVarGetFlt \"*nvfSO3S\")\nAuxTimerStop \"*nvfSO3T\"\nrObj.AuxTimerStop \"*nvfSO3T\"\nSetFunctionValue (sv_Construct \"%z %g %g\" sText (AuxTimerTimeToCountdown \"*nvfSO3T\") (rObj.AuxTimerTimeToCountdown \"*nvfSO3T\"))\nEnd\n",
+   "label": "so3.aux.start.after",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rH := (Begin Function {string_var sN, ref rOwn, float fDelta}\nrOwn.AuxVarSetFlt \"*nvfSO3U\" ((rOwn.AuxVarGetFlt \"*nvfSO3U\") + 1)\nrOwn.AuxVarSetFlt \"*nvfSO3UD\" fDelta\nEnd)\nlet rH2 := (Begin Function {string_var sN, ref rOwn, float fDelta}\nrOwn.AuxVarSetFlt \"*nvfSO3V\" ((rOwn.AuxVarGetFlt \"*nvfSO3V\") + 1)\nrOwn.AuxVarSetFlt \"*nvfSO3VD\" fDelta\nEnd)\nrP.AuxVarSetRef \"*nvfSO3H3\" rH\nrP.AuxVarSetRef \"*nvfSO3H4\" rH2\nSetOnAuxTimerUpdateHandler 1 rH \"*nvfSO3U\"\nSetOnAuxTimerUpdateHandler 1 rH \"*nvfSO3F\"\nSetOnAuxTimerUpdateHandler 1 rH2 \"*nvfSO3V\"\nAuxTimerStart \"*nvfSO3U\" 100 263\nAuxTimerStart \"*nvfSO3V\" 100 7\nSetFunctionValue (sv_Construct \"%g %g\" (rP.AuxVarGetFlt \"*nvfSO3U\") (rP.AuxVarGetFlt \"*nvfSO3V\"))\nEnd\n",
+   "label": "so3.aux.update.reg",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet fA := rP.AuxVarGetFlt \"*nvfSO3UD\"\nSetFunctionValue (sv_Construct \"%g %g %g\" (rP.AuxVarGetFlt \"*nvfSO3U\") ((fA > 0) && (fA < 0.1)) (rP.AuxVarGetFlt \"*nvfSO3V\"))\nEnd\n",
+   "label": "so3.aux.update.counts",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nrP.AuxVarSetFlt \"*nvfSO3U\" 0\nAuxTimerStop \"*nvfSO3U\"\nAuxTimerStart \"*nvfSO3F\" 100000 259\nSetFunctionValue (sv_Construct \"%g\" (AuxTimerTimeToCountdown \"*nvfSO3F\"))\nEnd\n",
+   "label": "so3.aux.update.frames.start",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (sv_Construct \"%g %.4f %g\" (rP.AuxVarGetFlt \"*nvfSO3U\") (rP.AuxVarGetFlt \"*nvfSO3UD\") (rP.AuxVarGetFlt \"*nvfSO3V\"))\nEnd\n",
+   "label": "so3.aux.update.frames",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rH := rP.AuxVarGetRef \"*nvfSO3H3\"\nlet rH2 := rP.AuxVarGetRef \"*nvfSO3H4\"\nSetOnAuxTimerUpdateHandler 0 rH \"*nvfSO3U\"\nSetOnAuxTimerUpdateHandler 0 rH \"*nvfSO3F\"\nSetOnAuxTimerUpdateHandler 0 rH2 \"*nvfSO3V\"\nSetFunctionValue (sv_Construct \"%g %g %g\" (rH != 0) (rH2 != 0) (rP.AuxVarGetFlt \"*nvfSO3U\"))\nEnd\n",
+   "label": "so3.aux.update.remove",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nSetFunctionValue (sv_Construct \"%g %g\" (rP.AuxVarGetFlt \"*nvfSO3U\") (rP.AuxVarGetFlt \"*nvfSO3V\"))\nEnd\n",
+   "label": "so3.aux.update.after",
+   "field": "value",
+   "text": true
+  },
+  {
+   "query": "ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\nstring_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\nBegin Function { }\nlet rP := GetFormFromMod \"FalloutNV.esm\" \"14\"\nlet rObj := GetFormFromMod \"FalloutNV.esm\" \"13DA0F\"\nlet rH := rP.AuxVarGetRef \"*nvfSO3H1\"\nlet rH2 := rP.AuxVarGetRef \"*nvfSO3H2\"\nif rH\nSetOnAuxTimerStartHandler 0 rH \"*nvfSO3T\"\nendif\nif rH2\nSetOnAuxTimerStartHandler 0 rH2 \"*nvfSO3T\" rObj\nendif\nlet rH := rP.AuxVarGetRef \"*nvfSO3H3\"\nlet rH2 := rP.AuxVarGetRef \"*nvfSO3H4\"\nif rH\nSetOnAuxTimerUpdateHandler 0 rH \"*nvfSO3U\"\nSetOnAuxTimerUpdateHandler 0 rH \"*nvfSO3F\"\nendif\nif rH2\nSetOnAuxTimerUpdateHandler 0 rH2 \"*nvfSO3V\"\nendif\nAuxTimerStop \"*nvfSO3T\"\nrObj.AuxTimerStop \"*nvfSO3T\"\nAuxTimerStop \"*nvfSO3U\"\nAuxTimerStop \"*nvfSO3F\"\nAuxTimerStop \"*nvfSO3V\"\nrP.AuxVarErase \"*nvfSO3S\"\nrP.AuxVarErase \"*nvfSO3SL\"\nrP.AuxVarErase \"*nvfSO3H1\"\nrP.AuxVarErase \"*nvfSO3H2\"\nrP.AuxVarErase \"*nvfSO3H3\"\nrP.AuxVarErase \"*nvfSO3H4\"\nrP.AuxVarErase \"*nvfSO3U\"\nrP.AuxVarErase \"*nvfSO3UD\"\nrP.AuxVarErase \"*nvfSO3V\"\nrP.AuxVarErase \"*nvfSO3VD\"\nrObj.AuxVarErase \"*nvfSO3S\"\nrObj.AuxVarErase \"*nvfSO3SL\"\nSetFunctionValue (sv_Construct \"%g %g %g\" (AuxTimerTimeToCountdown \"*nvfSO3U\") (AuxTimerTimeToCountdown \"*nvfSO3F\") (AuxTimerTimeToCountdown \"*nvfSO3T\"))\nEnd\n",
+   "label": "so3.aux.cleanup",
+   "field": "value",
+   "text": true
+  }
+ ]
+}

@@ -1086,18 +1086,32 @@
    "tags": ["ext", "pp", "probes"]
   },
   {
-   "id": "L5.ext.sup5",
+   "id": "L5.ext.sup1",
    "layer": 5,
-   "description": "SUP NVSE batch 5 (#1008; docs/spec-notes/ext-sup5.md): Excel workbooks, JSON files, file sizes and times, the load-order dump, screenshots and QR codes; set sup5 of tools/capture/jip_probes.py (writes files under the game folder's NVFProbe, deleted by hand after the run), keyed by probe id, steps in order. Oracle and candidate as L5.ext.jip.getters.",
-   "oracle": {"golden": "jip/sup5.json"},
+   "description": "SUP NVSE batch 1 (#1008; docs/spec-notes/ext-sup1.md): Round and RoundAlt, IsNumberNAN, distances and heading angles between points, NumberToWords, StringContainsCyrillic, GetSUPVersion, the actor finders and the topic getters; set sup1 of tools/capture/jip_probes.py, keyed by probe id, steps in order. The finders read the actors the airport save has loaded. Oracle and candidate as L5.ext.jip.getters.",
+   "oracle": {"golden": "jip/sup1.json"},
    "candidate": {
     "argv": ["{candidate}", "ext", "queries", "{data_dir}", "FalloutNV.esm", "DeadMoney.esm", "HonestHearts.esm", "OldWorldBlues.esm", "LonesomeRoad.esm",
              "TribalPack.esm", "MercenaryPack.esm", "ClassicPack.esm", "CaravanPack.esm", "GunRunnersArsenal.esm",
              "NVFExtProbe.esp", "--schema", "{schema_dir}",
-             "--steps", "{lab_root}/../tools/capture/jip-probes/sup5.steps.json", "--start-cell", "0x000DEB16"]
+             "--steps", "{lab_root}/../tools/capture/jip-probes/sup1.steps.json", "--start-cell", "0x000DEB16"]
    },
    "comparator": {"kind": "keyed", "select": "/rows", "key": "id", "fields": ["value"]},
-   "tags": ["ext", "sup", "probes", "sup5"]
+   "tags": ["ext", "sup", "probes", "sup1"]
+  },
+  {
+   "id": "L5.ext.showoff3",
+   "layer": 5,
+   "description": "ShowOff batch 3 (#1010; docs/spec-notes/ext-showoff.md section 6): the equipped-item family, the seeded randomizer, ApplyEasingAlt, small getters, the player's flags, challenge progress, level-up points, temporary faction reactions, radiation extra data, ModNumericINISetting, response strings, AuxTimerTimeToCountdown and the aux-timer start and update handlers; set showoff3 of tools/capture/jip_probes.py (writes, each change put back), keyed by probe id, steps in order. The equipped rows read what the airport save wears. Oracle and candidate as L5.ext.jip.getters.",
+   "oracle": {"golden": "jip/showoff3.json"},
+   "candidate": {
+    "argv": ["{candidate}", "ext", "queries", "{data_dir}", "FalloutNV.esm", "DeadMoney.esm", "HonestHearts.esm", "OldWorldBlues.esm", "LonesomeRoad.esm",
+             "TribalPack.esm", "MercenaryPack.esm", "ClassicPack.esm", "CaravanPack.esm", "GunRunnersArsenal.esm",
+             "NVFExtProbe.esp", "--schema", "{schema_dir}",
+             "--steps", "{lab_root}/../tools/capture/jip-probes/showoff3.steps.json", "--start-cell", "0x000DEB16"]
+   },
+   "comparator": {"kind": "keyed", "select": "/rows", "key": "id", "fields": ["value"]},
+   "tags": ["ext", "showoff", "probes", "showoff3"]
   },
   {
    "id": "L5.ext.jip6", "layer": 5,
@@ -1150,6 +1164,20 @@
    },
    "comparator": {"kind": "keyed", "select": "/rows", "key": "id", "fields": ["value"]},
    "tags": ["ext", "jip", "probes", "jip7b"]
+  },
+  {
+   "id": "L5.ext.sup5",
+   "layer": 5,
+   "description": "SUP NVSE batch 5 (#1008; docs/spec-notes/ext-sup5.md): Excel workbooks, JSON files, file sizes and times, the load-order dump, screenshots and QR codes; set sup5 of tools/capture/jip_probes.py (writes files under the game folder's NVFProbe, deleted by hand after the run), keyed by probe id, steps in order. Oracle and candidate as L5.ext.jip.getters.",
+   "oracle": {"golden": "jip/sup5.json"},
+   "candidate": {
+    "argv": ["{candidate}", "ext", "queries", "{data_dir}", "FalloutNV.esm", "DeadMoney.esm", "HonestHearts.esm", "OldWorldBlues.esm", "LonesomeRoad.esm",
+             "TribalPack.esm", "MercenaryPack.esm", "ClassicPack.esm", "CaravanPack.esm", "GunRunnersArsenal.esm",
+             "NVFExtProbe.esp", "--schema", "{schema_dir}",
+             "--steps", "{lab_root}/../tools/capture/jip-probes/sup5.steps.json", "--start-cell", "0x000DEB16"]
+   },
+   "comparator": {"kind": "keyed", "select": "/rows", "key": "id", "fields": ["value"]},
+   "tags": ["ext", "sup", "probes", "sup5"]
   }
  ]
 }

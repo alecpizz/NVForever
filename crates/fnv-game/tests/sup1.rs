@@ -48,8 +48,14 @@ fn info(id: u32, edid: &str, quest: u32, choices: &[u32]) -> Vec<u8> {
 fn plugin_bytes() -> Vec<u8> {
     let npcs = [record(b"NPC_", 0, 0x7, &[sub(b"EDID", z("Player"))]), record(b"NPC_", 0, NPC, &[sub(b"EDID", z("TestNpc"))])].concat();
     let qust = [record(b"QUST", 0, QUEST, &[sub(b"EDID", z("TestQuest"))]), record(b"QUST", 0, OTHER_QUEST, &[sub(b"EDID", z("OtherQuest"))])].concat();
-    // A Conversation topic (type 1) with two lines, and the topic one of them offers.
-    let dial = record(b"DIAL", 0, TOPIC, &[sub(b"EDID", z("TestTopic")), sub(b"FULL", z("Hello")), sub(b"PNAM", f32b(50.0)), sub(b"DATA", vec![1, 0])]);
+    // A Conversation topic (type 1) of OtherQuest then TestQuest with two lines, and the
+    // topic one of them offers.
+    let dial = record(
+        b"DIAL",
+        0,
+        TOPIC,
+        &[sub(b"EDID", z("TestTopic")), sub(b"QSTI", le(OTHER_QUEST)), sub(b"QSTI", le(QUEST)), sub(b"FULL", z("Hello")), sub(b"PNAM", f32b(50.0)), sub(b"DATA", vec![1, 0])],
+    );
     let lines = [info(INFO_A, "TestInfoA", QUEST, &[CHOICE]), info(INFO_B, "TestInfoB", OTHER_QUEST, &[])].concat();
     let choice = record(b"DIAL", 0, CHOICE, &[sub(b"EDID", z("ChoiceTopic")), sub(b"FULL", z("Bye")), sub(b"PNAM", f32b(50.0)), sub(b"DATA", vec![0, 0])]);
     let cell = record(b"CELL", 0, CELL, &[sub(b"EDID", z("TestCell"))]);
@@ -139,7 +145,7 @@ fn numbers_points_and_words() {
     // [documented: Round, RoundAlt].
     assert_eq!((n(&mut g, "Round 37.4"), n(&mut g, "Round 37.8")), (37.0, 38.0));
     assert_eq!(n(&mut g, "RoundAlt 37.55 1 0"), 37.5);
-    assert_eq!(n(&mut g, "RoundAlt 37.665654 3 1"), 37.666);
+    assert_eq!(n(&mut g, "RoundAlt 37.665654 3 1"), f64::from(37.666f32));
     assert_eq!(n(&mut g, "IsNumberNAN 2.5"), 0.0);
     assert_eq!(q(&mut g, "float f\nlet f := IsNumberNAN\nSetFunctionValue (IsNumberNAN f)"), XVal::Num(1.0));
     assert_eq!(n(&mut g, "GetDistanceBetweenPoints 0 0 0 3 4 12"), 13.0);
@@ -173,9 +179,14 @@ fn topic_getters() {
     let mut g = game(&f);
     assert_eq!(n(&mut g, "TopicGetType TestTopic"), 1.0);
     assert_eq!(forms(&mut g, "TopicGetAllTopicInfos TestTopic"), vec![INFO_A, INFO_B]);
+    // With a quest: the lines of the topic's first quest, whichever quest is named
+    // [observed: sup1 infos.greeting.quest, infos.creatures.otherquest].
     assert_eq!(forms(&mut g, "TopicGetAllTopicInfos TestTopic OtherQuest"), vec![INFO_B]);
+    assert_eq!(forms(&mut g, "TopicGetAllTopicInfos TestTopic TestQuest"), vec![INFO_B]);
     assert_eq!(n(&mut g, "TopicInfoGetChoiceCount TestInfoA"), 1.0);
-    assert_eq!(n(&mut g, "TopicInfoGetChoiceCount TestInfoB"), 0.0);
+    // No choices: -1 [observed: sup1 count.bye, has.bye].
+    assert_eq!(n(&mut g, "TopicInfoGetChoiceCount TestInfoB"), -1.0);
+    assert_eq!(n(&mut g, "TopicInfoHasChoice TestInfoB ChoiceTopic"), -1.0);
     assert_eq!(n(&mut g, "TopicInfoHasChoice TestInfoA ChoiceTopic"), 1.0);
     assert_eq!(n(&mut g, "TopicInfoHasChoice TestInfoA TestTopic"), 0.0);
     assert_eq!(forms(&mut g, "TopicInfoGetAllChoices TestInfoA"), vec![CHOICE]);

@@ -27,6 +27,10 @@ pub struct ShowOffState {
     /// `timer_stops` (`nvse_showoff3`).
     pub timer_starts: Vec<(XVal, String, FormId)>,
     pub timer_updates: Vec<(XVal, String, FormId)>,
+    /// Start and update handlers set or removed this frame, applied at the next frame's
+    /// aux timer update: (start, set, the function, the name lower case, the owner)
+    /// (`nvse_showoff3`).
+    pub pending_handlers: Vec<(bool, bool, XVal, String, FormId)>,
     /// Each running aux timer's countdown and flags as AuxTimerStart gave them, by owner
     /// and name lower case (AuxTimerTimeToCountdown; the update flag 256).
     pub countdowns: std::collections::HashMap<(FormId, String), (f64, u32)>,

@@ -160,6 +160,18 @@ fn equipped_items_by_slot_mask() {
     assert!(n(&mut g, "player.GetCalculatedMaxCarryWeight") > 0.0);
 }
 
+/// A draw scaled onto `lo..=hi`, a biased one taken again [observed: showoff3
+/// so3.seed.default, so3.seed.range.wide].
+fn draw(m: &mut Mt19937, lo: u64, hi: u64) -> f64 {
+    let span = hi - lo + 1;
+    loop {
+        let p = u64::from(m.next_u32()) * span;
+        if p & 0xFFFF_FFFF >= (1u64 << 32) % span {
+            return (lo + (p >> 32)) as f64;
+        }
+    }
+}
+
 #[test]
 fn seeded_randomizer_follows_the_mersenne_twister() {
     let f = fixture();
@@ -169,15 +181,24 @@ fn seeded_randomizer_follows_the_mersenne_twister() {
     assert_eq!(n(&mut g, "AdvanceSeed 3"), 0.0);
     // A first draw makes the default seed.
     let mut m = Mt19937::new(DEFAULT_SEED);
-    assert_eq!(n(&mut g, "RandSeeded 1 6"), f64::from(1 + m.next_u32() % 6));
+    assert_eq!(n(&mut g, "RandSeeded 1 6"), draw(&mut m, 1, 6));
     assert_eq!(n(&mut g, "GetSeed"), f64::from(DEFAULT_SEED));
+    // The original's first five 1-100 draws of the default seed [observed: showoff3
+    // so3.seed.default].
+    q(&mut g, "SetRandomizerSeed 0");
+    let five: Vec<f64> = (0..5).map(|_| n(&mut g, "RandSeeded 1 100")).collect();
+    assert_eq!(five, vec![82.0, 14.0, 91.0, 84.0, 13.0]);
+    // The third output is thrown away for this span [observed: so3.seed.range.wide].
+    q(&mut g, "SetRandomizerSeed 5489");
+    let three: Vec<f64> = (0..3).map(|_| n(&mut g, "RandSeeded 0 1000000000")).collect();
+    assert_eq!(three, vec![814723692.0, 135477004.0, 835008590.0]);
     // SetRandomizerSeed starts again; AdvanceSeed skips draws.
     q(&mut g, "SetRandomizerSeed 20");
     let mut m = Mt19937::new(20);
     m.next_u32();
     m.next_u32();
     assert_eq!(n(&mut g, "AdvanceSeed 2"), 1.0);
-    assert_eq!(n(&mut g, "GetRandomPercentSeeded"), f64::from(1 + m.next_u32() % 100));
+    assert_eq!(n(&mut g, "GetRandomPercentSeeded"), draw(&mut m, 1, 100));
     assert_eq!(n(&mut g, "RandSeeded 5 2"), -1.0, "min above max");
     q(&mut g, "SetSeedUsingForm TestHat");
     assert_eq!(n(&mut g, "GetRandomizerSeed"), f64::from(HAT));
@@ -199,7 +220,7 @@ fn advance_seed_caps_a_huge_count() {
     for _ in 0..1_000_000 {
         m.next_u32();
     }
-    assert_eq!(n(&mut g, "GetRandomPercentSeeded"), f64::from(1 + m.next_u32() % 100));
+    assert_eq!(n(&mut g, "GetRandomPercentSeeded"), draw(&mut m, 1, 100));
 }
 
 #[test]

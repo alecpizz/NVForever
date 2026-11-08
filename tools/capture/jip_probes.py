@@ -6089,6 +6089,503 @@ SUP3_PROBES = (
 )
 
 
+# sup1 + showoff3 probe sets (drafted 2026-11-08 for the observer session).
+# Exec'd into jip_probes' namespace: uses _form and NF from there.
+#
+# sup1 (read-only; #1008): SUP batch 1 (docs/spec-notes/ext-sup1.md, nvse_sup1.rs):
+# rounding, points and angles, numbers in words, the Cyrillic test, the actor finders and
+# the topic getters. Forms from FalloutNV.esm [observed: fnvtool esm decode / inventory]:
+# DIAL GREETING C8 (Topic), GOODBYE D4 (Conversation), Attack DC (Combat),
+# PersuasionAttempt FA (Persuasion), NormalToAlert F4 (Detection), Repair 111 (Service),
+# ObserveCombat 11A (Miscellaneous), RadioHello 126 (Radio), Sunny's topic 1055D2 (Topic,
+# quest 104C66); INFO 104E7E (ten TCLT choices, first 104E60, eighth 105CBC), INFO 15CB5B
+# (no choices); quests 104C66 VFreeformGoodsprings and 10A214 VCG02; the stimpak 15169 (not
+# a topic); the runway piece 13DA0F (REFR of DLC03RunwayTransition in the start cell
+# 0x000DEB16). The finders read whatever actors the airport save has loaded, so the rows
+# print the found actor, whether it is the player, and its distance.
+SUP1F = {"greeting": "C8", "goodbye": "D4", "attack": "DC", "persuade": "FA", "alert": "F4", "repair": "111",
+         "observe": "11A", "radio": "126", "creatures": "1055D2", "greet": "104E7E", "bye": "15CB5B",
+         "quest": "104C66", "vcg02": "10A214", "stimpak": "15169", "runway": "13DA0F", "choice0": "104E60",
+         "choice7": "105CBC"}
+
+_SUP1_DECL = ("ref rP\nref rObj\nref rOther\nref rA\nref rB\nfloat fA\nfloat fB\nfloat fC\nfloat fD\nfloat fE\n"
+              "float fN\nfloat fM\nfloat fK\nfloat fX\nfloat fY\nfloat fZ\nstring_var sText\nstring_var sSave\n"
+              "array_var aList\n")
+
+
+def _sup1(pid, body, text=False):
+    return (f"sup1.{pid}", _SUP1_DECL + "Begin Function { }\n" + _form("rP", NF["player"]) + body, text, None, "")
+
+
+def _sup1v(pid, expr, text=False):
+    return _sup1(pid, f"SetFunctionValue ({expr})", text)
+
+
+def _sup1f(pid, keys, expr, text=False):
+    """rObj (and rOther) fetched from SUP1F, then the expression."""
+    keys = keys if isinstance(keys, tuple) else (keys,)
+    pre = "".join(_form(v, SUP1F[k]) for v, k in zip(("rObj", "rOther"), keys))
+    return _sup1(pid, pre + f"SetFunctionValue ({expr})", text)
+
+
+def _sup1_list(pid, keys, expr):
+    """A form array as "size first last"."""
+    keys = keys if isinstance(keys, tuple) else (keys,)
+    pre = "".join(_form(v, SUP1F[k]) for v, k in zip(("rObj", "rOther"), keys))
+    return _sup1(pid, pre + f"let aList := {expr}\nlet fN := ar_Size aList\nlet sText := sv_Construct \"%g\" fN\nif fN > 0\n"
+                 "let rA := aList[0]\nlet sText := sv_Construct \"%z %z\" sText (GetFormIDString rA)\n"
+                 "let rA := aList[fN - 1]\nlet sText := sv_Construct \"%z %z\" sText (GetFormIDString rA)\nendif\n"
+                 "SetFunctionValue sText", True)
+
+
+_SUP1_HERE = "let fX := rP.GetPos X\nlet fY := rP.GetPos Y\nlet fZ := rP.GetPos Z\n"
+
+
+def _sup1_found(var="rA"):
+    """The found actor: its FormID, 1 when it is the player, its distance from the player."""
+    return (f"if {var}\nlet sText := sv_Construct \"%z %g %.0f\" (GetFormIDString {var}) ({var} == rP) (rP.GetDistance {var})\n"
+            "else\nlet sText := sv_Construct \"none\"\nendif\nSetFunctionValue sText")
+
+
+def _sup1_random(pid, call, pre=""):
+    """Eight draws: "draws none player maxDistance" (the actors differ run to run)."""
+    return _sup1(pid, pre + "let fN := 0\nlet fA := 0\nlet fB := 0\nlet fM := 0\nwhile fN < 8\n"
+                 f"let rB := {call}\nif rB\nif rB == rP\nlet fB += 1\nendif\nlet fK := rP.GetDistance rB\n"
+                 "if fK > fM\nlet fM := fK\nendif\nelse\nlet fA += 1\nendif\nlet fN += 1\nloop\n"
+                 "SetFunctionValue (sv_Construct \"%g %g %g %.0f\" fN fA fB fM)", True)
+
+
+_SUP1_WORDS = (10, 332323, 10020, 0, -15, 100, 115, 90, 1001, 1000000, 1000000000, 2147483647, 7.9, -7.9)
+
+SUP1_PROBES = (
+    # Round [documented: 37.4 -> 37, 37.8 -> 38; hypothesis: halves away from zero].
+    [_sup1v("round.page", 'sv_Construct "%g %g" (Round 37.4) (Round 37.8)', True),
+     _sup1v("round.halves", 'sv_Construct "%g %g %g %g %g %g" (Round 0.5) (Round 1.5) (Round 2.5) (Round -0.5) (Round -1.5) (Round -2.5)', True),
+     _sup1v("round.other", 'sv_Construct "%.1f %g %g" (Round 123456.7) (Round -0.4) (Round -37.6)', True)]
+    # RoundAlt [documented: the page's six examples; hypothesis: places outside 0-4
+    # clamped, negative numbers cut toward zero, halves away from zero, any nonzero round].
+    + [_sup1v("roundalt.page", 'sv_Construct "%.6f %.6f %.6f %.6f %.6f %.6f" (RoundAlt 37.55 0 0) (RoundAlt 37.55 1 0) '
+              "(RoundAlt 37.6 1 0) (RoundAlt 37.66 1 1) (RoundAlt 37.665454 3 1) (RoundAlt 37.665654 3 1)", True),
+       _sup1v("roundalt.places", 'sv_Construct "%.8f %.8f %.8f %.8f" (RoundAlt 37.123456789 4 1) (RoundAlt 37.123456789 5 1) '
+              "(RoundAlt 37.123456789 9 0) (RoundAlt 37.55 -1 1)", True),
+       _sup1v("roundalt.negative", 'sv_Construct "%.6f %.6f %.6f" (RoundAlt -37.55 1 0) (RoundAlt -37.55 1 1) (RoundAlt -37.66 0 1)', True),
+       _sup1v("roundalt.halves", 'sv_Construct "%.6f %.6f %.6f %.6f" (RoundAlt 0.25 1 1) (RoundAlt 2.5 0 1) (RoundAlt 0.125 2 1) (RoundAlt -2.5 0 1)', True),
+       _sup1v("roundalt.flag2", 'sv_Construct "%.6f %.6f" (RoundAlt 37.66 1 2) (RoundAlt 37.66 2.7 1)', True)]
+    # IsNumberNAN [documented: 1/0 for a number; no argument makes a NaN].
+    + [_sup1v("nan.five", "IsNumberNAN 5"),
+       _sup1("nan.make", "let fA := IsNumberNAN\nSetFunctionValue (sv_Construct \"%g %g %g\" (IsNumberNAN fA) (fA == fA) (IsNumberNAN 0))", True),
+       _sup1("nan.print", "let fA := IsNumberNAN\nSetFunctionValue (sv_Construct \"%g\" fA)", True)]
+    # GetDistanceBetweenPoints [documented].
+    + [_sup1v("distance", 'sv_Construct "%.4f %.4f %.4f" (GetDistanceBetweenPoints 0 0 0 3 4 12) '
+              "(GetDistanceBetweenPoints -1 -2 -3 2 2 9) (GetDistanceBetweenPoints 5 5 5 5 5 5)", True)]
+    # GetHeadingAngleBetweenPoints [documented: as GetHeadingAngle; hypothesis: degrees,
+    # clockwise, due behind is 180 not -180, facings past a turn wrap, same point 0].
+    + [
+       # Against the game's own GetHeadingAngle, from the player to the runway piece, as
+       # differences so the player's place and facing drop out (rewritten 2026-11-08).
+       _sup1("heading.vsgame", _form("rObj", SUP1F["runway"]) + _SUP1_HERE + "let fA := rP.GetAngle Z\n"
+             "let fB := rP.GetHeadingAngle rObj\n"
+             'SetFunctionValue (sv_Construct "%.3f %.3f" ((GetHeadingAngleAlt fX fY fA rObj) - fB) '
+             "((GetHeadingAngleBetweenPoints fX fY fA (rObj.GetPos X) (rObj.GetPos Y)) - fB))", True),
+       _sup1("heading.alt.turned", _form("rObj", SUP1F["runway"]) + _SUP1_HERE + "let fA := rObj.GetPos X\nlet fB := rObj.GetPos Y\n"
+             'SetFunctionValue (sv_Construct "%.3f %.3f" ((GetHeadingAngleAlt fX fY 0 rObj) - (GetHeadingAngleBetweenPoints fX fY 0 fA fB)) '
+             "((GetHeadingAngleAlt fX fY 180 rObj) - (GetHeadingAngleBetweenPoints fX fY 180 fA fB)))", True)]
+    # NumberToWords [documented: 10, 332323, 10020; hypothesis: "zero", "minus", a
+    # fraction cut, words past a billion].
+    + [_sup1v(f"words.{str(n).replace('-', 'm').replace('.', 'p')}", f"NumberToWords {n}", True) for n in _SUP1_WORDS]
+    # StringContainsCyrillic [documented; hypothesis: the Unicode block U+0400-04FF].
+    # How the step's UTF-8 text reaches the game's compiler is not known, so the
+    # literals are paired with characters built by code (%a): 207 and 233 are Cyrillic
+    # letters in Windows-1251 but Latin letters in Unicode; 1055 is U+041F.
+    + [_sup1v("cyr.latin", 'StringContainsCyrillic "abc XYZ"'),
+       _sup1v("cyr.utf8", 'StringContainsCyrillic "Привет"'),
+       _sup1v("cyr.accent", 'StringContainsCyrillic "café"')]
+    + [_sup1(f"cyr.code.{c}", f'let sText := sv_Construct "x%ax" {c}\nSetFunctionValue (StringContainsCyrillic sText)')
+       for c in (207, 233, 192, 1055, 65)]
+    # GetSUPVersion [documented: always -1]; IsPlayerOverencumbered [documented: as
+    # GetIsPlayerOverencumbered].
+    + [_sup1v("version", "GetSUPVersion"),
+       _sup1v("overencumbered", 'sv_Construct "%g %g" (IsPlayerOverencumbered) (GetIsPlayerOverencumbered)', True)]
+    # The actor finders [documented: loaded actors, never the player; hypothesis: a
+    # distance of 0 means none, the calling reference is not its own find].
+    + [_sup1("closest.here", _SUP1_HERE + "let rA := FindClosestActor fX fY fZ\n" + _sup1_found(), True),
+       _sup1("closest.here.zeros", _SUP1_HERE + "let rA := FindClosestActor fX fY fZ\nlet rB := FindClosestActor fX fY fZ 0 0 0\n"
+             "SetFunctionValue (rA == rB)"),
+       _sup1("closest.dist1", _SUP1_HERE + "let rA := FindClosestActor fX fY fZ 0 0 1\n" + _sup1_found(), True),
+       _sup1("closest.far.limited", _SUP1_HERE + "let rA := FindClosestActor fX fY (fZ + 1000000) 0 0 100\n" + _sup1_found(), True),
+       _sup1("closest.far.unlimited", _SUP1_HERE + "let rA := FindClosestActor fX fY (fZ + 1000000)\n" + _sup1_found(), True),
+       _sup1("closest.dead", _SUP1_HERE + "let rA := FindClosestActor fX fY fZ 1\n" + _sup1_found(), True),
+       _sup1("closest.teammates", _SUP1_HERE + "let rA := FindClosestActor fX fY fZ 0 1\n" + _sup1_found(), True),
+       _sup1("fromref.player", _SUP1_HERE + "let rA := rP.FindClosestActorFromRef\nlet rB := FindClosestActor fX fY fZ\n"
+             "if rA\nSetFunctionValue (sv_Construct \"%z %g %g\" (GetFormIDString rA) (rA == rP) (rA == rB))\nelse\n"
+             "SetFunctionValue (sv_Construct \"none %g\" (rB == 0))\nendif", True),
+       _sup1("fromref.self", "let rA := rP.FindClosestActorFromRef\nif rA\nlet rB := rA.FindClosestActorFromRef\n"
+             "SetFunctionValue (sv_Construct \"%z %g %g\" (GetFormIDString rB) (rB == rA) (rB == rP))\nelse\n"
+             "SetFunctionValue (sv_Construct \"none\")\nendif", True),
+       _sup1("fromref.dist1", "let rA := rP.FindClosestActorFromRef 0 0 1\n" + _sup1_found(), True),
+       _sup1("fromref.dead.far", "let rA := rP.FindClosestActorFromRef 1 0 100000\n" + _sup1_found(), True),
+       _sup1("fromref.static", _form("rObj", SUP1F["runway"]) + "let rA := rObj.FindClosestActorFromRef\n" + _sup1_found(), True),
+       _sup1_random("random.here", "FindRandomActor fX fY fZ 1 0 20000", _SUP1_HERE),
+       _sup1_random("random.here.dist1", "FindRandomActor fX fY fZ 1 1 1", _SUP1_HERE),
+       _sup1_random("random.fromref", "rP.FindRandomActorFromRef 1 0 20000"),
+       _sup1("random.fromref.self", "let rA := rP.FindClosestActorFromRef 1 1\nif rA == 0\nSetFunctionValue (sv_Construct \"none\")\nreturn\nendif\n"
+             "let fN := 0\nlet fA := 0\nwhile fN < 8\nlet rB := rA.FindRandomActorFromRef 1 1\nif rB == rA\nlet fA += 1\nendif\n"
+             "let fN += 1\nloop\nSetFunctionValue (sv_Construct \"%g %g\" fN fA)", True)]
+    # TopicGetType [documented: the page's table, 0 Topic ... 7 Radio; hypothesis: 0 for a
+    # form that is not a topic].
+    + [_sup1f(f"type.{k}", k, "TopicGetType rObj")
+       for k in ("greeting", "goodbye", "attack", "persuade", "alert", "repair", "observe", "radio", "creatures", "greet", "stimpak")]
+    # TopicGetAllTopicInfos [documented: all, or the quest's only; hypothesis: topic order,
+    # a form that is not a quest filters everything out].
+    + [_sup1_list("infos.creatures", "creatures", "TopicGetAllTopicInfos rObj"),
+       _sup1_list("infos.creatures.quest", ("creatures", "quest"), "TopicGetAllTopicInfos rObj rOther"),
+       _sup1_list("infos.creatures.otherquest", ("creatures", "vcg02"), "TopicGetAllTopicInfos rObj rOther"),
+       _sup1_list("infos.creatures.notquest", ("creatures", "stimpak"), "TopicGetAllTopicInfos rObj rOther"),
+       _sup1_list("infos.greeting.quest", ("greeting", "quest"), "TopicGetAllTopicInfos rObj rOther"),
+       _sup1_list("infos.goodbye.quest", ("goodbye", "quest"), "TopicGetAllTopicInfos rObj rOther"),
+       _sup1f("infos.greeting.size", "greeting", "ar_Size (TopicGetAllTopicInfos rObj)"),
+       _sup1_list("infos.notopic", "stimpak", "TopicGetAllTopicInfos rObj")]
+    # A line's choices [documented: TCLT, TopicInfoGetAllChoices, …ChoiceCount, …HasChoice].
+    + [_sup1_list("choices.greet", "greet", "TopicInfoGetAllChoices rObj"),
+       _sup1_list("choices.bye", "bye", "TopicInfoGetAllChoices rObj"),
+       _sup1_list("choices.notinfo", "stimpak", "TopicInfoGetAllChoices rObj"),
+       _sup1("choices.greet.order", _form("rObj", SUP1F["greet"]) + "let aList := TopicInfoGetAllChoices rObj\nlet rA := aList[7]\n"
+             "SetFunctionValue (GetFormIDString rA)", True),
+       _sup1f("count.greet", "greet", "TopicInfoGetChoiceCount rObj"),
+       _sup1f("count.bye", "bye", "TopicInfoGetChoiceCount rObj"),
+       _sup1f("count.notinfo", "stimpak", "TopicInfoGetChoiceCount rObj"),
+       _sup1f("has.first", ("greet", "choice0"), "TopicInfoHasChoice rObj rOther"),
+       _sup1f("has.eighth", ("greet", "choice7"), "TopicInfoHasChoice rObj rOther"),
+       _sup1f("has.not", ("greet", "creatures"), "TopicInfoHasChoice rObj rOther"),
+       _sup1f("has.bye", ("bye", "choice0"), "TopicInfoHasChoice rObj rOther")]
+    # GetHeadingAngleBetweenPoints, one call a row and last: the eight in one row crashed the
+    # game [observed 2026-11-08, sup1.heading.points].
+    + [_sup1v(f"heading.points.{n}", f"GetHeadingAngleBetweenPoints {a}")
+       for n, a in (("e", "0 0 0 10 0"), ("s", "0 0 0 0 -10"), ("n.90", "0 0 90 0 10"), ("n.765", "0 0 765 0 10"),
+                    ("n.m270", "0 0 -270 0 10"), ("nw", "0 0 0 -10 10"), ("rad", "0 0 1.5708 10 0"), ("same", "5 5 0 5 5"))]
+)
+
+
+# showoff3 (writes, session only, each change put back; #1010): ShowOff batch 3
+# (docs/spec-notes/ext-showoff.md §6, nvse_showoff3.rs) on the player at the airport save,
+# VBooneFaction B160C and VMojaveMercenary 173EEF (no XNAM relation either way [observed:
+# fnvtool esm decode]), AmmoList127mm 1613D5 (two ammo forms), the stimpak, the runway
+# piece 13DA0F, challenges NVChallengeExplore 15EB33 (threshold 50), NVChallengeSimpak
+# 15EB3E (recurring), NVChallengeChallenge 15EB36 (recurring), NVChallengeVault3 15EB3C
+# (map marker), NVChallengeOldTyme 1690E8 (damage), INFO E8911 (three responses) and
+# 15CB5B (one). The equipped rows read whatever the save wears.
+#
+# Changes, each put back: the player's weapon unequipped and re-equipped (UnequipItems),
+# the murderer flag, the sleep/wait override, the two factions' temporary reactions (left
+# neutral, as the records have them), the player's Radiation ExtraData (back to its old
+# value, the extra data may stay), fDefaultFOV:Display (+5 and back), the 10mm-list (the
+# weapon added and removed), the seeded randomizer of the calling mod (left seeded; it has
+# no reset), temporary (*) aux timers and aux variables (stopped and erased), aux-timer
+# start/update handlers (removed in the last row, and their timers stopped, so a handler
+# whose removal fails never fires again). Steps run one per frame, in order.
+SO3F = {"boonefac": "B160C", "mercfac": "173EEF", "ammolist": "1613D5", "stimpak": "15169", "runway": "13DA0F",
+        "caps": "F", "explore": "15EB33", "simpak": "15EB3E", "challenge": "15EB36", "vault3": "15EB3C",
+        "oldtyme": "1690E8", "caravan": "E8911", "bye": "15CB5B"}
+
+_SO3_DECL = ("ref rP\nref rObj\nref rOther\nref rItem\nref rH\nref rH2\nfloat fRes\nfloat fSave\nfloat fA\nfloat fB\n"
+             "float fC\nfloat fD\nfloat fE\nfloat fF\nfloat fG\nfloat fH\nfloat fI\nfloat fJ\nfloat fN\nfloat fK\n"
+             "string_var sText\nstring_var sSave\narray_var aList\narray_var aKeys\n")
+
+
+def _so3(pid, body, text=False):
+    return (f"so3.{pid}", _SO3_DECL + "Begin Function { }\n" + _form("rP", NF["player"]) + body, text, None, "")
+
+
+def _so3v(pid, expr, text=False):
+    return _so3(pid, f"SetFunctionValue ({expr})", text)
+
+
+def _so3f(pid, key, expr, text=False):
+    return _so3(pid, _form("rObj", SO3F[key]) + f"SetFunctionValue ({expr})", text)
+
+
+def _so3_items(pid, expr, refs=False):
+    """A form array as "size: id id ...", inventory references by their base."""
+    each = "let rItem := aList[fC]\n" + ("let rOther := rItem.GetBaseObject\n" if refs else "let rOther := rItem\n")
+    return _so3(pid, f"let aList := {expr}\nlet aKeys := ar_Keys aList\nlet fA := ar_Size aKeys\n"
+                'let sText := sv_Construct "%g:" fA\nlet fB := 0\nwhile fB < fA\nlet fC := aKeys[fB]\n' + each
+                + 'let sText := sv_Construct "%z %z" sText (GetFormIDString rOther)\nlet fB += 1\nloop\nSetFunctionValue sText', True)
+
+
+def _so3_draws(n, call="RandSeeded 1 100", first="fA"):
+    """`n` draws into fA, fB, ... and their text."""
+    vs = [chr(ord(first[1]) + i) for i in range(n)]
+    return "".join(f"let f{v} := {call}\n" for v in vs), " ".join("%g" for _ in vs), " ".join(f"f{v}" for v in vs)
+
+
+def _so3_seq(pid, setup, n=5, call="RandSeeded 1 100", tail=""):
+    lets, fmt, args = _so3_draws(n, call)
+    return _so3(pid, setup + lets + tail + f'SetFunctionValue (sv_Construct "{fmt} | %g" {args} (GetRandomizerSeed))', True)
+
+
+_SO3_EASE = range(0, 10)
+
+# Aux-timer handler lambdas: each counts its calls and keeps what it was given in its
+# owner's temporary aux variables (the owner is a parameter, so nothing is captured).
+_SO3_START = ("(Begin Function {string_var sN, ref rOwn}\n"
+              'rOwn.AuxVarSetFlt "*nvfSO3S" ((rOwn.AuxVarGetFlt "*nvfSO3S") + 1)\n'
+              'rOwn.AuxVarSetFlt "*nvfSO3SL" (sv_Length sN)\nEnd)')
+_SO3_UPD = ("(Begin Function {string_var sN, ref rOwn, float fDelta}\n"
+            'rOwn.AuxVarSetFlt "*nvfSO3{c}" ((rOwn.AuxVarGetFlt "*nvfSO3{c}") + 1)\n'
+            'rOwn.AuxVarSetFlt "*nvfSO3{c}D" fDelta\nEnd)')
+
+
+def _so3_count(*names, owner="rP"):
+    return " ".join(f'({owner}.AuxVarGetFlt "*nvfSO3{n}")' for n in names)
+
+
+SHOWOFF3_PROBES = (
+    # ---- the seeded randomizer, first: nothing may draw before these rows ----
+    # [documented: -1 with no seed; AdvanceSeed 0 with no seed; the default seed 5489;
+    # hypothesis: MT19937 and a draw mapped by its remainder, so the values need not match].
+    [_so3v("seed.get.none", "GetRandomizerSeed"),
+     _so3v("seed.advance.none", "AdvanceSeed 3"),
+     _so3_seq("seed.default", ""),
+     _so3v("seed.get.afterdefault", "GetRandomizerSeed"),
+     _so3v("seed.advance.afterdefault", "AdvanceSeed 0"),
+     # The same seed repeats its sequence: twice in one frame, again in the next frame.
+     _so3("seed.20.twice", "SetRandomizerSeed 20\n" + _so3_draws(5)[0] + "SetRandomizerSeed 20\n"
+          + _so3_draws(5, first="fF")[0] + 'SetFunctionValue (sv_Construct "%g %g %g %g %g | %g %g %g %g %g | %g" '
+          "fA fB fC fD fE fF fG fH fI fJ (GetRandomizerSeed))", True),
+     _so3_seq("seed.20.nextframe", "SetRandomizerSeed 20\n"),
+     _so3_seq("seed.0", "SetRandomizerSeed 0\n"),
+     _so3_seq("seed.noarg", "SetRandomizerSeed\n"),
+     _so3_seq("seed.5489", "SetRandomizerSeed 5489\n"),
+     _so3_seq("seed.alias", "SetSeed 20\n", 2, "GenerateSeededRandomNumber 1 100"),
+     _so3_seq("seed.percent", "SetRandomizerSeed 20\n", 5, "GetRandomPercentSeeded"),
+     # AdvanceSeed 5 then one draw is the sixth of the sequence [documented: the page].
+     _so3("seed.advance", "SetRandomizerSeed 101\nlet fRes := AdvanceSeed 5\nlet fA := RandSeeded 1 100\n"
+          "SetRandomizerSeed 101\n" + _so3_draws(6, first="fB")[0]
+          + 'SetFunctionValue (sv_Construct "%g %g | %g %g %g %g %g %g" fRes fA fB fC fD fE fF fG)', True),
+     _so3("seed.advance.zero", "SetRandomizerSeed 101\nlet fRes := AdvanceSeed 0\nlet fA := RandSeeded 1 100\n"
+          'SetFunctionValue (sv_Construct "%g %g" fRes fA)', True),
+     # How a draw maps onto the range: a wide range shows the raw numbers (MT19937's
+     # first outputs for 5489 are 3499211612, 581869302, 3890346734).
+     _so3_seq("seed.range.wide", "SetRandomizerSeed 5489\n", 3, "RandSeeded 0 1000000000"),
+     _so3_seq("seed.range.uint", "SetRandomizerSeed 5489\n", 3, "RandSeeded 0 4294967294"),
+     _so3_seq("seed.range.bits", "SetRandomizerSeed 5489\n", 8, "RandSeeded 0 1"),
+     _so3_seq("seed.range.same", "SetRandomizerSeed 5489\n", 3, "RandSeeded 7 7"),
+     _so3_seq("seed.range.fraction", "SetRandomizerSeed 5489\n", 5, "RandSeeded 1.7 3.2"),
+     # Seeds from forms [documented: the form's FormID, the default with none; the page's
+     # example calls it on a reference; hypothesis: the calling reference's FormID].
+     _so3("seed.form.caps", _form("rObj", SO3F["caps"]) + "SetSeedUsingForm rObj\nlet fA := GetRandomizerSeed\n"
+          "let fB := RandSeeded 1 100\nSetRandomizerSeed 15\nlet fC := RandSeeded 1 100\n"
+          'SetFunctionValue (sv_Construct "%g %g %g" fA fB fC)', True),
+     _so3("seed.form.player", "SetSeedUsingForm rP\nSetFunctionValue (GetRandomizerSeed)"),
+     _so3("seed.form.ref", "rP.SetSeedUsingForm\nSetFunctionValue (GetRandomizerSeed)"),
+     _so3("seed.form.none", "SetRandomizerSeed 20\nSetSeedUsingForm\nSetFunctionValue (GetRandomizerSeed)"),
+     _so3("seed.form.alias", _form("rObj", SO3F["stimpak"]) + "SetFormSeed rObj\nSetFunctionValue (GetSeed)"),
+     _so3("seed.get.ref", "SetRandomizerSeed 33\nSetFunctionValue (rP.GetRandomizerSeed)"),
+     # A seed above the int range [documented: an unsigned seed, returned as an int].
+     _so3("seed.big", "SetRandomizerSeed 4294967295\nlet fA := GetRandomizerSeed\nlet fB := RandSeeded 1 100\n"
+          "SetRandomizerSeed 3000000000\n" 'SetFunctionValue (sv_Construct "%.0f %g %.0f" fA fB (GetRandomizerSeed))', True)]
+    # (RandSeeded with min above max is not probed: its page says the check is not in
+    # place and the game crashes.)
+    # ---- equipped items ----
+    # [documented: playable items with no mask; the slots' items with slot bits; no
+    # duplicates; hypothesis: bits 20 and up ignored, ammo not counted].
+    + [_so3_items("items.nomask", "rP.GetEquippedItems"),
+       _so3_items("items.0", "rP.GetEquippedItems 0"),
+       _so3_items("items.weapon", "rP.GetEquippedItems 32"),
+       _so3_items("items.pipboy", "rP.GetEquippedItems 64"),
+       _so3_items("items.allslots", "rP.GetEquippedItems 1048575"),
+       _so3_items("items.bit20", "rP.GetEquippedItems 1048576"),
+       _so3_items("items.bit20.weapon", "rP.GetEquippedItems 1048608"),
+       _so3_items("refs.nomask", "rP.GetEquippedItemRefs", refs=True),
+       _so3_items("refs.allslots", "rP.GetEquippedItemRefs 1048575", refs=True),
+       _so3v("bitmask", "rP.GetEquippedItemsAsBitMask"),
+       _so3v("bitmask.alias", "rP.GetOccupiedEquipSlots"),
+       _so3v("broken", 'sv_Construct "%g %g %g %g %g %g" (rP.GetNumBrokenEquippedItems) (rP.GetNumBrokenEquippedItems 100) '
+             "(rP.GetNumBrokenEquippedItems 100 32) (rP.GetNumBrokenEquippedItems 0 32) (rP.GetNumBrokenEquippedItems -1) "
+             "(rP.GetNumBrokenEq 100 1048575)", True),
+       _so3v("weight.base", 'sv_Construct "%.3f %.3f %.3f %.3f %.3f" (rP.GetBaseEquippedWeight) (rP.GetBaseEquippedWeight 0 32) '
+             "(rP.GetBaseEquippedWeight 0 1048575) (rP.GetBaseEquippedWeight 1000) (rP.GetBaseEquippedWeight 2)", True),
+       _so3v("weight.calc", 'sv_Construct "%.3f %.3f %.3f %.3f %.3f" (rP.GetCalculatedEquippedWeight) (rP.GetCalculatedEquippedWeight 0 32) '
+             "(rP.GetCalculatedEquippedWeight 0 1048575) (rP.GetCalculatedEquippedWeight 1000) (rP.GetCalculatedEquippedWeight 2)", True),
+       _so3v("carry", 'sv_Construct "%.3f %.3f" (rP.GetCalculatedMaxCarryWeight) (rP.GetAV CarryWeight)', True),
+       # The weapon as an inventory reference [documented: 0 with none].
+       _so3("weaponref", "let rOther := rP.GetEquippedObject 5\nlet rItem := rP.GetEquippedWeaponRef\nif rItem\n"
+            "let rObj := rItem.GetBaseObject\nSetFunctionValue (sv_Construct \"%z %g\" (GetFormIDString rObj) (rObj == rOther))\n"
+            "else\nSetFunctionValue (sv_Construct \"0 %g\" (rOther == 0))\nendif", True),
+       _so3("refforitem.weapon", "let rOther := rP.GetEquippedObject 5\nif rOther == 0\nSetFunctionValue (sv_Construct \"no weapon\")\n"
+            "return\nendif\nlet rItem := rP.GetEquippedItemRefForItem rOther\nif rItem\nlet rObj := rItem.GetBaseObject\n"
+            "SetFunctionValue (sv_Construct \"%z %g %g\" (GetFormIDString rObj) (rObj == rOther) (rItem.IsEquipped))\nelse\n"
+            "SetFunctionValue (sv_Construct \"0\")\nendif", True),
+       _so3("refforitem.notworn", _form("rObj", SO3F["stimpak"]) + "let rItem := rP.GetEquippedItemRefForItem rObj\n"
+            "SetFunctionValue (rItem == 0)"),
+       # A form list: the ammo list with the worn weapon added at its end, then taken out.
+       _so3("refforitem.list", _form("rObj", SO3F["ammolist"]) + "let rOther := rP.GetEquippedObject 5\nif rOther == 0\n"
+            "SetFunctionValue (sv_Construct \"no weapon\")\nreturn\nendif\nlet fA := ListGetCount rObj\n"
+            "ListAddForm rObj rOther\nlet rItem := rP.GetEquippedItemRefForItem rObj\nlet fB := 0\nif rItem\n"
+            "let fB := (rItem.GetBaseObject) == rOther\nendif\nListRemoveForm rObj rOther\n"
+            'SetFunctionValue (sv_Construct "%g %g %g" fA fB (ListGetCount rObj))', True),
+       _so3("refforitem.list.none", _form("rObj", SO3F["ammolist"]) + "let rItem := rP.GetEquippedItemRefForItem rObj\n"
+            "SetFunctionValue (rItem == 0)"),
+       # UnequipItems on the weapon slot [documented: as UnequipItem], then re-equipped.
+       _so3("unequip.weapon", "let rOther := rP.GetEquippedObject 5\nif rOther == 0\nSetFunctionValue (sv_Construct \"no weapon\")\n"
+            "return\nendif\nrP.AuxVarSetRef \"*nvfSO3W\" rOther\nlet fA := rP.GetEquippedItemsAsBitMask\n"
+            "rP.UnequipItems 32 0 1\nlet fB := rP.GetEquippedItemsAsBitMask\nlet fC := rP.GetEquipped rOther\n"
+            'SetFunctionValue (sv_Construct "%g %g %g" fA fB fC)', True),
+       _so3("unequip.weapon.next", "let rOther := rP.AuxVarGetRef \"*nvfSO3W\"\n"
+            'SetFunctionValue (sv_Construct "%g %g" (rP.GetEquippedItemsAsBitMask) (rOther != 0))', True),
+       _so3("unequip.reequip", "let rOther := rP.AuxVarGetRef \"*nvfSO3W\"\nif rOther\nrP.EquipItem rOther 0 1\nendif\n"
+            "SetFunctionValue 1"),
+       _so3("unequip.reequip.next", "let rOther := rP.AuxVarGetRef \"*nvfSO3W\"\nrP.AuxVarErase \"*nvfSO3W\"\n"
+            'SetFunctionValue (sv_Construct "%g %z" (rP.GetEquippedItemsAsBitMask) (GetFormIDString (rP.GetEquippedObject 5)))', True)]
+    # ---- small getters ----
+    # ApplyEasingAlt [documented: codes 0 sine … 9 bounce, modes 0/1/2, -1 for a bad code;
+    # hypothesis: a bad mode, an input outside 0-1].
+    + [_so3v(f"ease.{c}", f'sv_Construct "%.6f %.6f %.6f" (ApplyEasingAlt 0.25 {c} 0) (ApplyEasingAlt 0.25 {c} 1) (ApplyEasingAlt 0.25 {c} 2)', True)
+       for c in _SO3_EASE]
+    + [_so3v("ease.badcode", 'sv_Construct "%g %g %g" (ApplyEasingAlt 0.5 10 0) (ApplyEasingAlt 0.5 -1 0) (ApplyEasingAlt 0.5 1.5 0)', True),
+       _so3v("ease.badmode", 'sv_Construct "%.6f %.6f" (ApplyEasingAlt 0.25 1 3) (ApplyEasingAlt 0.25 1 -1)', True),
+       _so3v("ease.outside", 'sv_Construct "%.6f %.6f %.6f" (ApplyEasingAlt 1.5 1 0) (ApplyEasingAlt -0.5 1 0) (ApplyEasingAlt 1 9 2)', True),
+       _so3v("ease.alias", 'sv_Construct "%.6f" (EaseAlt 0.25 2 1)', True),
+       # GetPosArray [documented: X, Y, Z]: printed less GetPos.
+       _so3("posarray", "let aList := rP.GetPosArray\n"
+            'SetFunctionValue (sv_Construct "%g %.3f %.3f %.3f" (ar_Size aList) ((aList[0]) - (rP.GetPos X)) '
+            "((aList[1]) - (rP.GetPos Y)) ((aList[2]) - (rP.GetPos Z)))", True),
+       _so3v("mainthread", "IsOutsideMainThread"),
+       _so3v("conditionprint", "rP.ConditionPrint"),
+       _so3v("animcond", 'sv_Construct "%g %g %g %g %g" (rP.IsAnimPlayingExCond 1) (rP.IsAnimPlayingExCond 1 1) '
+             "(rP.IsAnimPlayingExCond 2) (rP.IsAnimPlayingExCond 3) (rP.IsAnimPlayingEx 1)", True),
+       _so3v("jumping", 'sv_Construct "%g %g" (rP.IsJumping) (rP.IsInAir)', True),
+       # GetNumActorsInRangeFromRef [documented: flags 1, 2, 4; hypothesis: the caller not
+       # counted (distance 0 from itself), the player counted from another reference].
+       _so3v("inrange.player", 'sv_Construct "%g %g %g %g" (rP.GetNumActorsInRangeFromRef 0) (rP.GetNumActorsInRangeFromRef 500) '
+             "(rP.GetNumActorsInRangeFromRef 5000) (rP.GetNumActorsInRangeFromRef 100000)", True),
+       _so3v("inrange.flags", 'sv_Construct "%g %g %g %g %g" (rP.GetNumActorsInRangeFromRef 100000 0) (rP.GetNumActorsInRangeFromRef 100000 1) '
+             "(rP.GetNumActorsInRangeFromRef 100000 2) (rP.GetNumActorsInRangeFromRef 100000 4) (rP.GetNumActorsInRangeFromRef 100000 7)", True),
+       _so3("inrange.static", _form("rObj", SO3F["runway"])
+            + 'SetFunctionValue (sv_Construct "%g %g %.0f" (rObj.GetNumActorsInRangeFromRef 0) (rObj.GetNumActorsInRangeFromRef 100000) (rObj.GetDistance rP))', True)]
+    # ---- the player ----
+    # SetIsPCAMurderer [documented: the flag IsPCAMurderer reads].
+    + [_so3("murderer", "let fSave := IsPCAMurderer\nSetIsPCAMurderer 1\nlet fA := IsPCAMurderer\nSetIsPCAMurderer 0\n"
+            "let fB := IsPCAMurderer\nSetIsPCAMurderer fSave\n"
+            'SetFunctionValue (sv_Construct "%g %g %g %g" fSave fA fB (IsPCAMurderer))', True),
+       # Get/SetPCHasSleepWaitOverride [documented: EnableFastTravel's can-wait flag].
+       _so3("sleepwait", "let fSave := GetPCHasSleepWaitOverride\nSetPCHasSleepWaitOverride 1\nlet fA := GetPCHasSleepWaitOverride\n"
+            "SetPCHasSleepWaitOverride 0\nlet fB := GetPCHasSleepWaitOverride\nSetPCHasSleepWaitOverride fSave\n"
+            'SetFunctionValue (sv_Construct "%g %g %g %g" fSave fA fB (GetPCHasSleepWaitOverride))', True)]
+    # GetChallengeProgress [documented: done non-recurring = threshold, recurring from 0;
+    # hypothesis: 0 for a form that is not a challenge].
+    + [_so3f(f"challenge.{k}", k, "GetChallengeProgress rObj") for k in ("explore", "simpak", "challenge", "vault3", "oldtyme", "stimpak")]
+    # Level-up points [documented: the next level outside the menu, levelOverride before the
+    # +1; perk points 1 or 0 by iLevelsPerPerk].
+    + [_so3v("points.skill", 'sv_Construct "%g %g %g %g %g %g" (GetCalculatedSkillPoints) (GetCalculatedSkillPoints 1) '
+             "(GetCalculatedSkillPoints 2) (GetCalculatedSkillPoints 10) (GetCalculatedSkillPoints 49) (GetCalculatedSkillPointsEarnedPerLevel)", True),
+       _so3v("points.perk", 'sv_Construct "%g %g %g %g %g %g" (GetCalculatedPerkPoints) (GetCalculatedPerkPoints 1) '
+             "(GetCalculatedPerkPoints 2) (GetCalculatedPerkPoints 3) (GetCalculatedPerkPoints 49) (GetCalculatedPerkPointsEarnedPerLevel)", True),
+       _so3v("points.level", "rP.GetLevel")]
+    # ---- factions: temporary reactions, both directions, left neutral as the records have
+    # them [documented: SetAllyTemp 0 ally 1 friend; SetEnemyTemp 0 enemy 1 neutral].
+    + [_so3("factions.temp", _form("rObj", SO3F["boonefac"]) + _form("rOther", SO3F["mercfac"])
+            + "let fA := GetFactionCombatReaction rObj rOther\nlet fB := GetFactionCombatReaction rOther rObj\n"
+            "SetAllyTemp rObj rOther\nlet fC := GetFactionCombatReaction rObj rOther\nlet fD := GetFactionCombatReaction rOther rObj\n"
+            "SetAllyTemp rObj rOther 0 1\nlet fE := GetFactionCombatReaction rObj rOther\nlet fF := GetFactionCombatReaction rOther rObj\n"
+            "SetEnemyTemp rObj rOther\nlet fG := GetFactionCombatReaction rObj rOther\nlet fH := GetFactionCombatReaction rOther rObj\n"
+            "SetEnemyTemp rObj rOther 1 0\nlet fI := GetFactionCombatReaction rObj rOther\nlet fJ := GetFactionCombatReaction rOther rObj\n"
+            "SetEnemyTemp rObj rOther 1 1\n"
+            'SetFunctionValue (sv_Construct "%g %g | %g %g | %g %g | %g %g | %g %g | %g %g" fA fB fC fD fE fF fG fH fI fJ '
+            "(GetFactionCombatReaction rObj rOther) (GetFactionCombatReaction rOther rObj))", True),
+       _so3("factions.alias", _form("rObj", SO3F["boonefac"]) + _form("rOther", SO3F["mercfac"])
+            + "SetAllyShowOff rObj rOther\nlet fA := GetFactionCombatReaction rObj rOther\nSetEnemyShowOff rObj rOther\n"
+            "let fB := GetFactionCombatReaction rObj rOther\nSetEnemyTemp rObj rOther 1 1\n"
+            'SetFunctionValue (sv_Construct "%g %g %g" fA fB (GetFactionCombatReaction rObj rOther))', True),
+       # [hypothesis: a temporary reaction wins until SetAlly/SetEnemy is called on the pair]
+       _so3("factions.saved.after.temp", _form("rObj", SO3F["boonefac"]) + _form("rOther", SO3F["mercfac"])
+            + "SetAllyTemp rObj rOther\nSetEnemy rObj rOther 1 1\nlet fA := GetFactionCombatReaction rObj rOther\n"
+            "SetEnemyTemp rObj rOther 1 1\nSetFunctionValue fA")]
+    # ---- a reference's radiation [documented: 0 without; set adds it] ----
+    + [_so3("radiation.player", "let fSave := rP.GetRadiationExtraData\nlet fRes := rP.SetRadiationExtraData 20\n"
+            "let fA := rP.GetRadiationExtraData\nrP.SetRadiationExtraData fSave\n"
+            'SetFunctionValue (sv_Construct "%g %g %g %g" fSave fRes fA (rP.GetRadiationExtraData))', True),
+       _so3f("radiation.static", "runway", "rObj.GetRadiationExtraData")]
+    # ---- ModNumericINISetting [documented: 1 changed, 0 not found] ----
+    + [_so3("ini.mod", 'let fSave := GetNumericINISetting "fDefaultFOV:Display"\nlet fA := ModNumericINISetting "fDefaultFOV:Display" 5\n'
+            'let fB := GetNumericINISetting "fDefaultFOV:Display"\nlet fC := ModNumericINISetting "fDefaultFOV:Display" -5\n'
+            'SetFunctionValue (sv_Construct "%g %g %g %g %g" fSave fA fB fC (GetNumericINISetting "fDefaultFOV:Display"))', True),
+       _so3v("ini.mod.missing", 'ModNumericINISetting "nvfNoSuchSetting:General" 1')]
+    # ---- TopicInfoGetResponseStrings [documented: the texts in order]: count and lengths ----
+    + [_so3(f"responses.{k}", _form("rObj", SO3F[k]) + "let aList := TopicInfoGetResponseStrings rObj\nlet fA := ar_Size aList\n"
+            'let sText := sv_Construct "%g:" fA\nlet fB := 0\nwhile fB < fA\nlet sSave := aList[fB]\n'
+            'let sText := sv_Construct "%z %g" sText (sv_Length sSave)\nlet fB += 1\nloop\nSetFunctionValue sText', True)
+       for k in ("caravan", "bye", "stimpak")]
+    # ---- aux timers and their handlers; one step per frame, in order ----
+    # A lambda kept in a ref variable and called [diagnostic for the rows below].
+    + [_so3("aux.lambda.call", "let rH := (Begin Function { }\nSetFunctionValue 7\nEnd)\nlet fA := Call rH\nSetFunctionValue fA"),
+       # AuxTimerTimeToCountdown [documented: the time AuxTimerStart gave, -1 when not
+       # running; hypothesis: names are case-insensitive].
+       _so3v("aux.countdown.none", 'AuxTimerTimeToCountdown "*nvfSO3T"'),
+       # S1: the start handler on the player's "*nvfSO3T", a second one on the runway
+       # piece's; the player's timer started [hypothesis: the handler runs inside
+       # AuxTimerStart, so the count is 1 in the same step].
+       _so3("aux.start.reg", _form("rObj", SO3F["runway"]) + f"let rH := {_SO3_START}\nlet rH2 := {_SO3_START}\n"
+            'rP.AuxVarSetRef "*nvfSO3H1" rH\nrP.AuxVarSetRef "*nvfSO3H2" rH2\n'
+            'SetOnAuxTimerStartHandler 1 rH "*nvfSO3T"\nSetOnAuxTimerStartHandler 1 rH2 "*nvfSO3T" rObj\n'
+            'AuxTimerStart "*nvfSO3T" 50\n'
+            f'SetFunctionValue (sv_Construct "%g %g %g" {_so3_count("S", "SL")} {_so3_count("S", owner="rObj")})', True),
+       # S2: the counts a frame later; the timer restarted (a restart counts too), the
+       # runway piece's own timer started.
+       _so3("aux.start.restart", _form("rObj", SO3F["runway"])
+            + f'let sText := sv_Construct "%g %g |" {_so3_count("S")} {_so3_count("S", owner="rObj")}\n'
+            'AuxTimerStart "*nvfSO3T" 60\nrObj.AuxTimerStart "*nvfSO3T" 30\n'
+            f'SetFunctionValue (sv_Construct "%z %g %g" sText {_so3_count("S")} {_so3_count("S", owner="rObj")})', True),
+       _so3("aux.countdown", _form("rObj", SO3F["runway"])
+            + 'SetFunctionValue (sv_Construct "%g %g %g %g" (AuxTimerTimeToCountdown "*nvfSO3T") (rObj.AuxTimerTimeToCountdown "*nvfSO3T") '
+            '(AuxTimerTimeToCountdown "*nvfSO3T" rObj) (AuxTimerTimeToCountdown "*NVFSO3T"))', True),
+       # S3: the counts; the player's handler removed, the timer started again.
+       _so3("aux.start.remove", f'let sText := sv_Construct "%g |" {_so3_count("S")}\nlet rH := rP.AuxVarGetRef "*nvfSO3H1"\n'
+            'SetOnAuxTimerStartHandler 0 rH "*nvfSO3T"\nAuxTimerStart "*nvfSO3T" 70\n'
+            f'SetFunctionValue (sv_Construct "%z %g %g" sText (rH != 0) {_so3_count("S")})', True),
+       # S4: a frame later the count has not moved; the timers stopped.
+       _so3("aux.start.after", _form("rObj", SO3F["runway"]) + f'let sText := sv_Construct "%g" {_so3_count("S")}\n'
+            'AuxTimerStop "*nvfSO3T"\nrObj.AuxTimerStop "*nvfSO3T"\n'
+            'SetFunctionValue (sv_Construct "%z %g %g" sText (AuxTimerTimeToCountdown "*nvfSO3T") (rObj.AuxTimerTimeToCountdown "*nvfSO3T"))', True),
+       # U1: update handlers on a seconds timer with flag 256 (U), a frames timer with flag
+       # 256 (F) and a seconds timer without it (V) [documented: only flag 256; the time
+       # since the last update, 1 for a frames timer].
+       _so3("aux.update.reg", "let rH := " + _SO3_UPD.replace("{c}", "U") + "\nlet rH2 := " + _SO3_UPD.replace("{c}", "V") + "\n"
+            'rP.AuxVarSetRef "*nvfSO3H3" rH\nrP.AuxVarSetRef "*nvfSO3H4" rH2\n'
+            'SetOnAuxTimerUpdateHandler 1 rH "*nvfSO3U"\nSetOnAuxTimerUpdateHandler 1 rH "*nvfSO3F"\n'
+            'SetOnAuxTimerUpdateHandler 1 rH2 "*nvfSO3V"\n'
+            'AuxTimerStart "*nvfSO3U" 100 263\nAuxTimerStart "*nvfSO3V" 100 7\n'
+            f'SetFunctionValue (sv_Construct "%g %g" {_so3_count("U", "V")})', True),
+       # The seconds between updates as "above 0 and below 0.1", not the frame time itself
+       # (rewritten 2026-11-08).
+       _so3("aux.update.counts", 'let fA := rP.AuxVarGetFlt "*nvfSO3UD"\n'
+            f'SetFunctionValue (sv_Construct "%g %g %g" {_so3_count("U")} ((fA > 0) && (fA < 0.1)) {_so3_count("V")})', True),
+       _so3("aux.update.frames.start", 'rP.AuxVarSetFlt "*nvfSO3U" 0\nAuxTimerStop "*nvfSO3U"\nAuxTimerStart "*nvfSO3F" 100000 259\n'
+            f'SetFunctionValue (sv_Construct "%g" (AuxTimerTimeToCountdown "*nvfSO3F"))', True),
+       _so3("aux.update.frames", f'SetFunctionValue (sv_Construct "%g %.4f %g" {_so3_count("U", "UD", "V")})', True),
+       # U4: the handlers removed; a frame later the counts have not moved.
+       _so3("aux.update.remove", 'let rH := rP.AuxVarGetRef "*nvfSO3H3"\nlet rH2 := rP.AuxVarGetRef "*nvfSO3H4"\n'
+            'SetOnAuxTimerUpdateHandler 0 rH "*nvfSO3U"\nSetOnAuxTimerUpdateHandler 0 rH "*nvfSO3F"\n'
+            'SetOnAuxTimerUpdateHandler 0 rH2 "*nvfSO3V"\n'
+            f'SetFunctionValue (sv_Construct "%g %g %g" (rH != 0) (rH2 != 0) {_so3_count("U")})', True),
+       _so3("aux.update.after", f'SetFunctionValue (sv_Construct "%g %g" {_so3_count("U", "V")})', True),
+       # Cleanup: every handler removed again (by the refs kept), every timer stopped,
+       # every aux variable erased.
+       _so3("aux.cleanup", _form("rObj", SO3F["runway"])
+            + 'let rH := rP.AuxVarGetRef "*nvfSO3H1"\nlet rH2 := rP.AuxVarGetRef "*nvfSO3H2"\n'
+            'if rH\nSetOnAuxTimerStartHandler 0 rH "*nvfSO3T"\nendif\nif rH2\nSetOnAuxTimerStartHandler 0 rH2 "*nvfSO3T" rObj\nendif\n'
+            'let rH := rP.AuxVarGetRef "*nvfSO3H3"\nlet rH2 := rP.AuxVarGetRef "*nvfSO3H4"\n'
+            'if rH\nSetOnAuxTimerUpdateHandler 0 rH "*nvfSO3U"\nSetOnAuxTimerUpdateHandler 0 rH "*nvfSO3F"\nendif\n'
+            'if rH2\nSetOnAuxTimerUpdateHandler 0 rH2 "*nvfSO3V"\nendif\n'
+            'AuxTimerStop "*nvfSO3T"\nrObj.AuxTimerStop "*nvfSO3T"\nAuxTimerStop "*nvfSO3U"\nAuxTimerStop "*nvfSO3F"\n'
+            'AuxTimerStop "*nvfSO3V"\n'
+            + "".join(f'rP.AuxVarErase "*nvfSO3{n}"\n' for n in ("S", "SL", "H1", "H2", "H3", "H4", "U", "UD", "V", "VD"))
+            + 'rObj.AuxVarErase "*nvfSO3S"\nrObj.AuxVarErase "*nvfSO3SL"\n'
+            'SetFunctionValue (sv_Construct "%g %g %g" (AuxTimerTimeToCountdown "*nvfSO3U") (AuxTimerTimeToCountdown "*nvfSO3F") '
+            '(AuxTimerTimeToCountdown "*nvfSO3T"))', True)]
+)
+
+
 # showoff4 (writes, session only, each change put back; #1010): ShowOff batch 4
 # (docs/spec-notes/ext-showoff.md §7): the matrix and quaternion functions (the
 # quaternion's convention and normalising are hypotheses), SayTo_GetTopic on Doc Mitchell,
@@ -6650,6 +7147,8 @@ SETS = {"jip-getters": PROBES, "jip-forms": FORM_PROBES, "jip-stores": STORE_PRO
 # and VAR_PROBES).
 WRITING_SETS = {"jip-stores", "jip-events", "jip-hits", "nvse-vars", "nvse-setters", "nvse-data", "nvse-inv",
                 "nvse-second", "nvse-fourth", "jip-fifth", "nvse-fifth", "nvse-sixth", "nvse-seventh", "nvse-eighth", "lu-leveled", "nvse-flags", "ini-files", "jip-n7", "player-state", "mcm", "plugin-odds", "lu-leveled2", "projectile", "sky-sound", "knvse-anim", "nif-blocks", "nvse-events", "jip-events2", "nvse-leftovers", "save-set", "save-read", "rgb-ui", "gaps1", "gaps2", "gaps3", "gaps4", "gaps5", "gaps6", "gaps7", "gaps8", "gaps9", "gaps10", "gaps11", "plugins1", "plugins2", "plugins3", "engine1", "engine2", "engine3", "glta-order", "data1", "data2", "data3", "anim1", "anim2", "reload1", "sound1", "proj1", "controls1", "hud1", "showoff1", "atk1", "jip4", "rules1", "rules2", "showoff2", "showoff4", "jg1", "jg2", "jg5", "jip5", "jip8", "tmpl3", "knvse2", "itr", "one111", "pp", "jipppln", "sup2", "sup3", "sup5"}
+SETS.update({"sup1": SUP1_PROBES, "showoff3": SHOWOFF3_PROBES})
+WRITING_SETS |= {"showoff3"}
 SETS.update({"jip6": JIP6_PROBES, "jip7": JIP7_PROBES, "jip6b": JIP6B_PROBES, "jip7b": JIP7B_PROBES})  # JIP 6/7 probes (#1006)
 WRITING_SETS |= {"jip6", "jip7", "jip6b", "jip7b"}
 
