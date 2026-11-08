@@ -194,7 +194,7 @@ fn quadrant_mesh(land: &Land, q: u8, alpha: Option<&[f32]>, cell_origin: Vec2, t
     // blends to exactly what lies under it (its alpha is 0 across the triangle), so it
     // is left out [engineering choice: the same picture; most layers paint patches, and
     // drawing them over whole quadrants cost about a millisecond of blended terrain a
-    // frame outdoors at 1440p, docs/design/frame-rate-audit.md §6].
+    // frame outdoors at 1440p, docs/design/frame-rate-audit.md §7].
     let paints = |t: [u32; 3]| alpha.is_none_or(|a| t.iter().any(|&v| a[v as usize] > 0.0));
     for r in 0..QUAD_SIDE - 1 {
         for c in 0..QUAD_SIDE - 1 {
