@@ -717,6 +717,25 @@ between dispatches that write the same buffers. Merging each view's ranges that 
 another leaves 904 dispatches. Compute is then active 9 % of the frame instead of 16 %.
 [observed] Interleaved runs of one build: 9.0 → 8.5 ms a frame.
 
+**Placed objects' own sounds look only at the statics near the listener**
+(nvf-play `world_sounds.rs`, `object_sources`). Every frame each of the worldspace's
+placed objects with a sound of its own was measured against the listener: 46,996 in the
+load order, 40,480 of them statics. The statics within their sound's reach plus 2,048
+units of a point are now picked once, again when the listener has moved 2,048 units from
+it, and only those are measured each frame. The others can be moved by scripts, so their
+places are still read each frame. The same sources are sent. [observed, profile build,
+Goodsprings 12:00 with its residents] 0.47 → 0.26 ms a frame.
+
+**The main thread.** At 640 × 360 the frame waits on the CPU: 6.1–6.2 ms in Goodsprings at
+noon and 6.9 ms in Novac, with their residents (release build). The main thread is the
+limit (6.8 ms in the profile build, the render thread 5.0). `Update` has 515 systems
+and 18 sync points, and `PostUpdate` has 199 systems. Most systems take 10–50 µs, so no single
+one dominates. Running `Update` on Bevy's single-threaded executor was 0.4 ms faster in the
+towns (Goodsprings 6.1 → 5.7 ms, Novac 6.9 → 6.6 ms) and no different in Freeside, a
+25-a-side battle or a run through Goodsprings [observed, two runs each]. So handing each
+system to a worker thread costs about what the parallelism gains [hypothesis]. Not
+changed: systems of menus and views that are shut could skip with run conditions instead.
+
 Not done, measured on the way [observed]:
 
 - **Light glow and sun shadows.** Light glow costs about 0.9 ms of the frame and sun

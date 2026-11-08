@@ -323,7 +323,27 @@ pub struct WorldSoundStats {
     pub script_held: u32,
 }
 
-type ObjectSource = (u32, FormId, usize, Option<[f32; 3]>);
+/// A space's placed objects with a sound of their own, found the first frame, with each
+/// sound's reach.
+#[derive(Default)]
+struct SpaceSources {
+    /// Statics, which never move: (reference, sound, kind, place, reach).
+    fixed: Vec<(u32, FormId, usize, [f32; 3], f32)>,
+    /// The others, whose place is read each frame: (reference, sound, kind, reach).
+    moving: Vec<(u32, FormId, usize, f32)>,
+    /// The statics (indices into `fixed`) within their reach plus [`NEAR_SLACK`] of
+    /// `near_at`: while the listener stays within [`NEAR_SLACK`] of that point, no other
+    /// static can be in reach, so only these are measured.
+    near: Vec<u32>,
+    near_at: Option<[f32; 3]>,
+}
+
+/// How far the listener moves before the statics near it are picked again (game units).
+const NEAR_SLACK: f32 = 2048.0;
+
+fn dist2(a: [f32; 3], b: [f32; 3]) -> f32 {
+    (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)
+}
 
 /// A loose body being followed for knocks.
 struct Tracked {
@@ -348,9 +368,8 @@ pub struct WorldSounds {
     dropped: HashSet<u32>,
     container: Option<u32>,
     held: Vec<SoundRequest>,
-    /// Placed objects with a sound of their own, by the space they are in: (reference,
-    /// sound, kind, the place of one that never moves); found the first frame.
-    sources: Option<HashMap<crate::music::Space, Vec<ObjectSource>>>,
+    /// Placed objects with a sound of their own, by the space they are in.
+    sources: Option<HashMap<crate::music::Space, SpaceSources>>,
     pub stats: WorldSoundStats,
 }
 
@@ -726,30 +745,46 @@ fn objects(
 /// the module notes).
 fn object_sources(mut ws: ResMut<WorldSounds>, sim: Res<SimState>, loc: Res<crate::Location>, player: Option<Res<Player>>, sfx: Option<Res<Sfx>>, mut out: MessageWriter<SoundSource>) {
     let (Some(player), Some(sfx)) = (player, sfx) else { return };
-    let ws = &mut *ws;
-    if ws.sources.is_none() {
-        let mut by: HashMap<crate::music::Space, Vec<ObjectSource>> = HashMap::new();
+    let WorldSounds { forms, sources, stats, .. } = &mut *ws;
+    let sources = sources.get_or_insert_with(|| {
+        let mut by: HashMap<crate::music::Space, SpaceSources> = HashMap::new();
+        let mut n = 0;
         for p in sim.refs.refs.values() {
-            let (Some(&(sound, kind)), Some(cell)) = (ws.forms.object_sounds.get(&p.base), p.cell) else { continue };
+            let (Some(&(sound, kind)), Some(cell)) = (forms.object_sounds.get(&p.base), p.cell) else { continue };
+            n += 1;
+            // A sound with no record is never heard.
+            let Some(reach) = sfx.forms.sounds.get(&sound).map(|s| s.max_distance * 1.1) else { continue };
             let space = sim.refs.cell_world.get(&cell).map_or(crate::music::Space::Interior(cell.0), |w| crate::music::Space::World(w.0));
-            by.entry(space).or_default().push((p.id.0, sound, kind, (kind == STATIC_KIND).then_some(p.pos)));
+            let e = by.entry(space).or_default();
+            if kind == STATIC_KIND {
+                e.fixed.push((p.id.0, sound, kind, p.pos, reach));
+            } else {
+                e.moving.push((p.id.0, sound, kind, reach));
+            }
         }
-        ws.stats.object_sources = by.values().map(Vec::len).sum();
-        info!("world sounds: {} placed objects with a sound of their own", ws.stats.object_sources);
-        ws.sources = Some(by);
-    }
+        stats.object_sources = n;
+        let fixed: usize = by.values().map(|s| s.fixed.len()).sum();
+        info!("world sounds: {n} placed objects with a sound of their own ({fixed} statics)");
+        by
+    });
     let eye = player.eye();
     let space = crate::music::Space::of(&loc);
-    let Some(list) = ws.sources.as_ref().and_then(|s| s.get(&space)) else { return };
-    for &(id, sound, kind, fixed) in list {
-        let Some(reach) = sfx.forms.sounds.get(&sound).map(|s| s.max_distance * 1.1) else { continue };
-        let Some(at) = fixed.or_else(|| ref_pos(&sim, id)) else { continue };
-        let d2 = (at[0] - eye[0]).powi(2) + (at[1] - eye[1]).powi(2) + (at[2] - eye[2]).powi(2);
-        if d2 > reach * reach || !sim.world.is_enabled(FormId(id)).unwrap_or(false) {
+    let Some(list) = sources.get_mut(&space) else { return };
+    if list.near_at.is_none_or(|a| dist2(a, eye) > NEAR_SLACK * NEAR_SLACK) {
+        list.near = (0..list.fixed.len() as u32).filter(|&i| {
+            let (.., at, reach) = list.fixed[i as usize];
+            dist2(at, eye) <= (reach + NEAR_SLACK).powi(2)
+        }).collect();
+        list.near_at = Some(eye);
+    }
+    let fixed = list.near.iter().map(|&i| list.fixed[i as usize]);
+    let moving = list.moving.iter().filter_map(|&(id, sound, kind, reach)| Some((id, sound, kind, ref_pos(&sim, id)?, reach)));
+    for (id, sound, kind, at, reach) in fixed.chain(moving) {
+        if dist2(at, eye) > reach * reach || !sim.world.is_enabled(FormId(id)).unwrap_or(false) {
             continue;
         }
-        if ws.stats.object_sources_sent.insert(id) {
-            ws.stats.object_sources_by_kind[kind] += 1;
+        if stats.object_sources_sent.insert(id) {
+            stats.object_sources_by_kind[kind] += 1;
         }
         out.write(SoundSource { key: SoundSource::key(1, id), sound, at, looping: false });
     }
