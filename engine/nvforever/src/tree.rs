@@ -457,40 +457,46 @@ fn build(
         }
         debug!("{}: leaf cards cut to {:.0} % of their area", rec.model, 100.0 * kept_area / whole_area.max(1e-6));
         LEAF_AREA.lock().unwrap_or_else(|e| e.into_inner()).add(whole_area, kept_area);
-        let aabb = bounds(pos.iter().copied(), reach + sway);
-        let mut mesh = Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::RENDER_WORLD);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, nor);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, corner);
-        if rec.leaf_dimming.is_some() {
-            mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colour);
+        // Every card clear (each cell's alpha under LEAF_CLEAR): no leaf part, rather than
+        // eight empty meshes.
+        if pos.is_empty() {
+            debug!("{}: every leaf card is clear; no leaf part", rec.model);
+        } else {
+            let aabb = bounds(pos.iter().copied(), reach + sway);
+            let mut mesh = Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::RENDER_WORLD);
+            mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
+            mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, nor);
+            mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
+            mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, corner);
+            if rec.leaf_dimming.is_some() {
+                mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colour);
+            }
+            let orders: [Handle<Mesh>; LEAF_ORDERS] = std::array::from_fn(|k| {
+                let mut m = mesh.clone();
+                m.insert_indices(bevy::mesh::Indices::U32(leaf_indices(&cards, k)));
+                models.meshes.add(m)
+            });
+            let mat = leaf_materials.add(LeafMaterial {
+                base: StandardMaterial {
+                    base_color_texture: Some(image),
+                    alpha_mode: AlphaMode::Mask(0.5),
+                    cull_mode: None,
+                    double_sided: false,
+                    perceptual_roughness: 1.0,
+                    reflectance: 0.1,
+                    ..default()
+                },
+                extension: LeafCards { wind },
+            });
+            parts.push(TreePart { mesh: orders[0].clone(), material: PartMaterial::Leaves(mat), aabb, leaf_orders: Some(Arc::new(orders)) });
         }
-        let orders: [Handle<Mesh>; LEAF_ORDERS] = std::array::from_fn(|k| {
-            let mut m = mesh.clone();
-            m.insert_indices(bevy::mesh::Indices::U32(leaf_indices(&cards, k)));
-            models.meshes.add(m)
-        });
-        let mat = leaf_materials.add(LeafMaterial {
-            base: StandardMaterial {
-                base_color_texture: Some(image),
-                alpha_mode: AlphaMode::Mask(0.5),
-                cull_mode: None,
-                double_sided: false,
-                perceptual_roughness: 1.0,
-                reflectance: 0.1,
-                ..default()
-            },
-            extension: LeafCards { wind },
-        });
-        parts.push(TreePart { mesh: orders[0].clone(), material: PartMaterial::Leaves(mat), aabb, leaf_orders: Some(Arc::new(orders)) });
     }
     (!parts.is_empty()).then_some(TreeVisual { parts, scale })
 }
 
 /// Leaf cards keep the part of their cell above this alpha (of 255), [`LEAF_PAD`] texels
-/// wider: well under the cutoff (0.5), so the soft edge a multisampled view draws from the
-/// alpha just under the cutoff (nvf_assets coverage.wesl) is kept, and a coarser mip,
+/// wider: well under the cutoff (0.5), so a soft edge drawn from the alpha just under the
+/// cutoff (alpha to coverage in a multisampled view) is kept, and a coarser mip,
 /// which spreads the visible texels, loses at most a sliver at the card's edge.
 const LEAF_CLEAR: u8 = 8;
 const LEAF_PAD: f32 = 2.0;
@@ -600,7 +606,8 @@ mod tests {
         assert_eq!(super::leaf_indices(&cards, 0), [8, 9, 10, 8, 10, 11, 4, 5, 6, 4, 6, 7, 0, 1, 2, 0, 2, 3]);
         // Heading 4 is -x.
         assert_eq!(&super::leaf_indices(&cards, 4)[..6], [0, 1, 2, 0, 2, 3]);
-        // A camera at +y of a tree turned a quarter turn about z lies at its -x: heading 4.
+        // A tree turned a quarter turn about z: its local +x points along world +y, so a camera
+        // at +y lies at its +x (heading 0), and one at -y at its -x (heading 4).
         let tree = GlobalTransform::from(Transform::from_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)));
         assert_eq!(super::leaf_heading(&tree, Vec3::new(0.0, 5.0, 0.0)), 0);
         assert_eq!(super::leaf_heading(&tree, Vec3::new(0.0, -5.0, 0.0)), 4);
