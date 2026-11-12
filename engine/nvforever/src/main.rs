@@ -1874,10 +1874,22 @@ fn main() -> AppExit {
     // the task pools (transform propagation, par_iter) still do. The other schedules
     // measured no different either way and keep Bevy's default.
     // `NVF_PLAY_TEST_UPDATE_EXECUTOR=multi` (test aid) puts Bevy's default back, for
-    // measuring one against the other.
+    // measuring one against the other. Systems with no order between them that touch the
+    // same data (ambiguities) run in one fixed order here, frame after frame, where the
+    // multi-threaded executor picked one each frame; a hidden dependency shows up as one
+    // frame late every time instead of now and then. `NVF_PLAY_TEST_UPDATE_AMBIGUITIES=1`
+    // (test aid) has Bevy list them as the schedule is built.
     if std::env::var("NVF_PLAY_TEST_UPDATE_EXECUTOR").as_deref() != Ok("multi") {
         app.edit_schedule(Update, |s| {
             s.set_executor(bevy::ecs::schedule::SingleThreadedExecutor::new());
+        });
+    }
+    if std::env::var("NVF_PLAY_TEST_UPDATE_AMBIGUITIES").as_deref() == Ok("1") {
+        app.edit_schedule(Update, |s| {
+            s.set_build_settings(bevy::ecs::schedule::ScheduleBuildSettings {
+                ambiguity_detection: bevy::ecs::schedule::LogLevel::Warn,
+                ..default()
+            });
         });
     }
     app.run()
