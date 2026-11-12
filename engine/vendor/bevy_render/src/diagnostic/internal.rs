@@ -700,7 +700,8 @@ impl FrameData {
         // NVForever encoder gaps (measurement aid, NVF_PLAY_TEST_PROFILE_ENCODERS=1): the GPU
         // time from the frame's first encoder to its last, how much of it no encoder covers,
         // and the time from the previous frame's last encoder to this frame's first.
-        if std::env::var("NVF_PLAY_TEST_PROFILE_ENCODERS").is_ok_and(|v| v == "1") {
+        static GAPS_ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *GAPS_ON.get_or_init(|| std::env::var("NVF_PLAY_TEST_PROFILE_ENCODERS").is_ok_and(|v| v == "1")) {
             static LAST_END: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
             let mut iv: Vec<(u64, u64, &str)> = self
                 .closed_spans

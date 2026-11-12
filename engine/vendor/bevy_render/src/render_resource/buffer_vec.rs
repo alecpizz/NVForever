@@ -54,7 +54,11 @@ impl<T: NoUninit> RawBufferVec<T> {
     /// NVForever unchanged uploads: [`RawBufferVec::write_buffer`], but nothing is queued
     /// when the same bytes were last written into the same GPU buffer. For buffers only the
     /// CPU writes. Each `queue.write_buffer` is a copy with its own barrier at the start of
-    /// the frame's submission, and the GPU waits for idle at each.
+    /// the frame's submission, and the GPU waits for idle at each. The other writes of this
+    /// vec ([`RawBufferVec::write_buffer`], [`RawBufferVec::write_buffer_range`]) forget what
+    /// this one last wrote, so mixing them never skips a write the GPU buffer needs; a write
+    /// into the GPU buffer by any other path is not seen, so a buffer written here must not be
+    /// written elsewhere.
     pub fn write_buffer_if_changed(&mut self, device: &RenderDevice, queue: &RenderQueue) {
         if self.values.is_empty() {
             return;
@@ -200,6 +204,8 @@ impl<T: NoUninit> RawBufferVec<T> {
     /// Before queuing the write, a [`reserve`](RawBufferVec::reserve) operation
     /// is executed.
     pub fn write_buffer(&mut self, device: &RenderDevice, queue: &RenderQueue) {
+        // NVForever unchanged uploads: the next `write_buffer_if_changed` writes in full.
+        self.last_buffer = None;
         if self.values.is_empty() {
             return;
         }
@@ -225,6 +231,8 @@ impl<T: NoUninit> RawBufferVec<T> {
         render_queue: &RenderQueue,
         range: Range<usize>,
     ) -> Result<(), WriteBufferRangeError> {
+        // NVForever unchanged uploads: the next `write_buffer_if_changed` writes in full.
+        self.last_buffer = None;
         if self.values.is_empty() {
             return Err(WriteBufferRangeError::NoValuesToUpload);
         }
