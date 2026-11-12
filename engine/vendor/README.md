@@ -59,7 +59,11 @@ bevy_render below:
 Upstream resolves the whole target at the end of the opaque, transmissive and transparent
 passes and copies it once: three resolves and a copy where one resolve to the transmission
 texture and one to the main texture are read. Without multisampling, with a resolution
-override, or when the transparent phase is empty, upstream's path runs unchanged.
+override, with order-independent transparency, or when the transparent phase is empty,
+upstream's path runs unchanged. While the resolve is held back, the main texture still holds
+the previous frame's resolve: a system ordered between `main_opaque_pass_3d` and
+`main_transparent_pass_3d` that samples `main_texture()` must give its view a resolution
+override (as the FSR passes do) or be ordered after the transparent pass.
 
 Both FSR changes are already in Bevy's `main`, written almost the same way: bevyengine/bevy#26235
 (transmission, merged 2026-10-26) and bevyengine/bevy#26236 (cluster lookup, merged

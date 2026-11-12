@@ -1,7 +1,7 @@
 use crate::{ScreenSpaceTransmission, Transmissive3d, ViewTransmissionTexture};
 
 use bevy_camera::{MainPassResolutionOverride, Viewport};
-use bevy_core_pipeline::core_3d::Transparent3d;
+use bevy_core_pipeline::{core_3d::Transparent3d, oit::OrderIndependentTransparencySettings};
 use bevy_ecs::prelude::*;
 use bevy_image::ToExtents;
 use bevy_render::{
@@ -26,16 +26,23 @@ use tracing::info_span;
 /// transmissive pass resolves straight into the transmission texture instead of copying
 /// ([`main_transmissive_pass_3d`]), and the transparent pass resolves once, as upstream.
 /// A view with a main-pass resolution override (the game's FSR passes read the resolved
-/// picture between these passes) and a view without multisampling keep upstream's path.
+/// picture between these passes), a view with order-independent transparency (upstream's
+/// transparent pass can return early, without resolving, while its resolve pipeline is not
+/// ready) and a view without multisampling keep upstream's path.
 pub fn begin_deferred_resolve(
-    view: ViewQuery<(&ExtractedView, &ViewTarget, Has<MainPassResolutionOverride>)>,
+    view: ViewQuery<(
+        &ExtractedView,
+        &ViewTarget,
+        Has<MainPassResolutionOverride>,
+        Has<OrderIndependentTransparencySettings>,
+    )>,
     transparent_phases: Res<ViewSortedRenderPhases<Transparent3d>>,
 ) {
-    let (extracted_view, target, resolution_override) = view.into_inner();
+    let (extracted_view, target, resolution_override, has_oit) = view.into_inner();
     let transparent_follows = transparent_phases
         .get(&extracted_view.retained_view_entity)
         .is_some_and(|phase| !phase.items.is_empty());
-    target.set_resolve_deferred(transparent_follows && !resolution_override);
+    target.set_resolve_deferred(transparent_follows && !resolution_override && !has_oit);
 }
 
 /// NVForever one resolve: the passes from here on resolve again ([`begin_deferred_resolve`]).
