@@ -406,8 +406,9 @@ impl SystemBuffer for RenderContextState {
 /// NVForever encoder spans (measurement aid, `NVF_PLAY_TEST_PROFILE_ENCODERS=1`): a GPU
 /// time span around everything each render system records, named `enc:<system>`, so the
 /// work between and after the passes' own spans (copies, resolves, passes without a
-/// span) is timed too. The passes' spans nest inside it.
-fn encoder_spans_on() -> bool {
+/// span) is timed too. The passes' spans nest inside it. Public so the game lists the
+/// spans by the same test.
+pub fn encoder_spans_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("NVF_PLAY_TEST_PROFILE_ENCODERS").is_ok_and(|v| v == "1"))
 }

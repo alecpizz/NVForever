@@ -927,7 +927,7 @@ fn report(
         .collect();
     gpu.sort_by(|a, b| b.1.total_cmp(&a.1));
     if !gpu.is_empty() {
-        let listed: Vec<String> = gpu.iter().take(if std::env::var_os("NVF_PLAY_TEST_PROFILE_ENCODERS").is_some() { 80 } else { 16 }).map(|(k, ms)| format!("{k} {ms:.2}")).collect();
+        let listed: Vec<String> = gpu.iter().take(if bevy::render::renderer::encoder_spans_on() { 80 } else { 16 }).map(|(k, ms)| format!("{k} {ms:.2}")).collect();
         info!("profile gpu: ms a frame: {}", listed.join(", "));
     }
     *w = ProfileWindow { every: w.every, cpu_at: cpu, reports: w.reports.wrapping_add(1), ..default() };
@@ -1038,7 +1038,7 @@ fn ai_counts_line(secs: f32, frames: u32, nav: (u64, u64), apart: (u64, u64, u64
 fn line(secs: f32, frames: u32, frame_secs: f32, totals: &HashMap<String, (f64, u64)>, per: f64) -> String {
     let mut spans: Vec<(&String, &(f64, u64))> = totals.iter().collect();
     spans.sort_by(|a, b| b.1 .0.total_cmp(&a.1 .0));
-    let listed: Vec<String> = spans.iter().take(if std::env::var_os("NVF_PLAY_TEST_PROFILE_ENCODERS").is_some() { 140 } else { LISTED }).map(|(k, (s, _))| format!("{k} {:.2}", s * 1000.0 / per)).collect();
+    let listed: Vec<String> = spans.iter().take(if bevy::render::renderer::encoder_spans_on() { 140 } else { LISTED }).map(|(k, (s, _))| format!("{k} {:.2}", s * 1000.0 / per)).collect();
     let mean = if frames > 0 { frame_secs * 1000.0 / frames as f32 } else { 0.0 };
     if listed.is_empty() {
         format!("profile: {secs:.1} s, {frames} frames, frame mean {mean:.1} ms; no spans seen (build with --features profile)")

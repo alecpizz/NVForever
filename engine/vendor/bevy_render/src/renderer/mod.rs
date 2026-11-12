@@ -5,6 +5,7 @@ mod render_device;
 mod wgpu_wrapper;
 
 pub use render_context::{
+    encoder_spans_on,
     CurrentView, FlushCommands, PendingCommandBuffers, RenderContext, RenderContextState, ViewQuery,
 };
 pub use render_device::*;
