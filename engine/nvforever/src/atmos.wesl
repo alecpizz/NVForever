@@ -133,7 +133,7 @@ fn nvf_cloud_shadow(p: vec3<f32>, to_sun: vec3<f32>, time: f32) -> f32 {
         q = vec2(0.8 * q.x - 0.6 * q.y, 0.6 * q.x + 0.8 * q.y) * 2.03 + vec2(1.7, 9.2);
         a *= 0.5;
     }
-    return 1.0 - 0.7 * smoothstep(0.52, 0.64, v);
+    return 1.0 - 0.6 * smoothstep(0.52, 0.64, v);
 }
 
 struct MarchOut {

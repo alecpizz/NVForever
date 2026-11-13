@@ -57,7 +57,7 @@ the display sum is raised to 2.2 afterwards, and without it 45 % occlusion took 
 ambient light and crushed sunlit scenes' shade.
 
 Outdoors (a shadow-casting sun in the light) the remaster leans the light towards the sun,
-sun up to x1.15 and the ambient a little cooler and bluer (open shade lit by the sky; x(0.93, 1.0, 1.14)), growing with the sun's height from 12 to 35 degrees (dawn and
+sun up to x1.15 and the ambient a little cooler and bluer (open shade lit by the sky; x(0.965, 1.0, 1.07)), growing with the sun's height from 12 to 35 degrees (dawn and
 dusk keep their soft shade): a harder desert light whose shade the bounce fills. The bounce is added as diffuse colour ×
 light. The post-process AO (graphics-enhanced.md §3.1) stays on at 0.35 for contact shadows.
 
@@ -133,12 +133,13 @@ rise from 0.5 to 1, hidden where the GI closes the view. The game's own cube map
 drawn: they would need cube textures in the bindless material; the light probe's faces
 (§2) stand in for them, so glass and metal reflect what is around the camera.
 
-**Cloud shadows** (lights.rs `nvf_sun_cloud`, atmos.wesl): value noise (4 octaves, each turned
-about 37 degrees so the lattice never shows as straight edges, cells of 11,000 units, about a
-third of the ground under cloud) at a cloud layer 30,000 units up, read where the ray from the surface to the
-sun crosses it, drifting with time; the sun dims to 0.3 under a cloud. Only on a directional
-light that casts shadows (the sun outdoors), on surfaces and in the fog's sun light (there
-taken at the ray's two ends and blended).
+**Cloud shadows** (atmos.wesl `nvf_cloud_shadow`, in the fog only): value noise (4 octaves, each
+turned about 37 degrees so the lattice never shows, cells of 11,000 units) at a cloud layer
+30,000 units up, read where the ray to the sun crosses it and blended between the ray's two
+ends, dims the fog's sun light to 0.4 under a cloud. They were on surfaces too for a while and
+were taken off again: shapes drawn without the remaster's shader def (some LOD) stayed sunlit
+inside a cloud as straight-edged patches, and from the ground a cloud over the view read as
+underexposure rather than a passing cloud (reviewer, 2026-11-13).
 
 ## 5. Colour grade (`post.wesl` `grade`)
 

@@ -82,35 +82,6 @@ fn nvf_ambient_ratio() -> vec3<f32> {
     return pow(max(view_bindings::lights.ambient_color.rgb * view_bindings::view.exposure, vec3(1e-6)), vec3(1.2));
 }
 
-// NVForever remaster (graphics-remaster.md §4): drifting cloud shadows on the sun's light,
-// from value noise at a cloud layer 30,000 units up, where the ray to the sun crosses it
-// [engineering choice, by eye]. 1 open sky, down to 0.4 under a cloud.
-fn nvf_hash(p: vec2<f32>) -> f32 {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-}
-fn nvf_value_noise(p: vec2<f32>) -> f32 {
-    let i = floor(p);
-    let f = fract(p);
-    let u = f * f * (3.0 - 2.0 * f);
-    return mix(mix(nvf_hash(i), nvf_hash(i + vec2(1.0, 0.0)), u.x), mix(nvf_hash(i + vec2(0.0, 1.0)), nvf_hash(i + vec2(1.0, 1.0)), u.x), u.y);
-}
-fn nvf_cloud_shadow(p: vec3<f32>, to_sun: vec3<f32>, time: f32) -> f32 {
-    let up = max(to_sun.y, 0.08);
-    let c = p.xz + to_sun.xz / up * (30000.0 - p.y);
-    var q = mat2x2<f32>(0.87, 0.5, -0.5, 0.87) * (c / 11000.0) + vec2(time * 0.04, time * 0.016);
-    var v = 0.0;
-    var a = 0.5;
-    for (var o = 0; o < 4; o++) {
-        v += a * nvf_value_noise(q);
-        // Each octave turned (about 37 degrees) so the lattice of value noise never lines up.
-        q = vec2(0.8 * q.x - 0.6 * q.y, 0.6 * q.x + 0.8 * q.y) * 2.03 + vec2(1.7, 9.2);
-        a *= 0.5;
-    }
-    return 1.0 - 0.7 * smoothstep(0.52, 0.64, v);
-}
-
-// The factor on directional light `i` at `p`: for a light that casts shadows (the sun
-// outdoors), in the remaster (SCREEN_INDIRECT), its cloud shadow; otherwise 2.
 // How far the remaster leans the outdoor light towards the sun (0..1): none at a low sun
 // (dawn and dusk keep their soft shade), all from 35 degrees up [engineering choice].
 @if(!PREPASS_FRAGMENT)
@@ -123,7 +94,10 @@ fn nvf_sun_cloud(i: u32, p: vec3<f32>) -> f32 {
     @if(SCREEN_INDIRECT) {
         let light = &view_bindings::lights.directional_lights[i];
         if ((*light).flags & mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u {
-            return nvf_cloud_shadow(p, (*light).direction_to_light.xyz, view_bindings::globals.time);
+            // No cloud shadow on surfaces: shapes drawn without the remaster's shader def
+            // (some LOD) stayed sunlit inside a cloud, as straight-edged patches; the fog
+            // keeps its clouds (atmos.wesl).
+            return 1.0;
         }
     }
     // 2: no cloud and no lean (the caller reads 1.5 or more as not the sun).
@@ -234,7 +208,7 @@ const DISPLAY_EDITS: [(&str, &str); 7] = [
         var nvf_ambient = view_bindings::lights.ambient_color.rgb * view_bindings::view.exposure * diffuse_occlusion * nvf_open;
         // Open shade under a high sun is lit by the blue sky: the ambient light leans cooler
         // as the sun climbs (remaster) [engineering choice].
-        nvf_ambient *= mix(vec3(1.0), vec3(0.93, 1.0, 1.14), nvf_lean);
+        nvf_ambient *= mix(vec3(1.0), vec3(0.965, 1.0, 1.07), nvf_lean);
         let nvf_sum = max(nvf_weights.x * nvf_ambient + nvf_weights.y * nvf_direct, vec3(0.0));
         // Held to 1 per channel, as the original's lit colour is (lights.rs GAME_CLIP).
         direct_light += min(diffuse_color * pow(nvf_sum, vec3(2.2)), vec3(1.0)) / view_bindings::view.exposure;
