@@ -679,6 +679,7 @@ fn apply(
     suns: Query<(Entity, &DirectionalLight), With<Sun>>,
     eye: Res<crate::eye_adapt::EyeCurve>,
     cutouts: Option<ResMut<nvf_assets::nif_material::BlendedCutouts>>,
+    solari: Option<Res<crate::solari::SolariOn>>,
     mut done: Local<Option<(Graphics, Msaa, bool, Vec<Entity>)>>,
 ) {
     let cam_count = cams.iter().count();
@@ -689,7 +690,8 @@ fn apply(
     // Blended shapes that draw the same as cut-outs (the corn rows) are cut-outs for FSR,
     // which needs their depth and motion (nif_material::BlendedCutouts).
     if let Some(mut cutouts) = cutouts {
-        cutouts.set_if_neq(nvf_assets::nif_material::BlendedCutouts(fsr.is_some()));
+        // Solari (solari.rs) needs them in the G-buffer too.
+        cutouts.set_if_neq(nvf_assets::nif_material::BlendedCutouts(fsr.is_some() || solari.is_some()));
     }
     let want_msaa = if g.screen_aa == ScreenAa::Off && fsr.is_none() { msaa.0 } else { Msaa::Off };
     let aa_matches = cams.iter().all(|(_, actual_msaa, actual_fsr, taa, fxaa, smaa)| {

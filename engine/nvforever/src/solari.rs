@@ -26,6 +26,8 @@ use nvf_assets::nif_material::NifMaterial;
 const EXPOSURE_LIFT: f32 = 1.3;
 /// Game units per metre (FNV's unit is about 1.43 cm).
 pub const UNITS_PER_METRE: f32 = 70.0;
+/// Emissive shapes' light in the traced scene against their colour (see `traced_material`).
+const EMISSIVE_SCALE: f32 = 1.5;
 /// The most triangles an emissive mesh may have in Solari (it panics past 65,535).
 const MAX_EMISSIVE_TRIANGLES: usize = 65_535;
 
@@ -40,8 +42,8 @@ impl Plugin for SolariExperimentPlugin {
         app.add_plugins(SolariPlugins)
             .insert_resource(SolariOn)
             .init_resource::<ProxyCache>()
-            .add_systems(Startup, setup_sky_light)
-            .add_systems(Update, (setup_camera, update_sky_light));
+            .add_systems(Startup, (setup_sky_light, setup_lamp_mesh))
+            .add_systems(Update, (setup_camera, update_sky_light, add_lamps, forward_glows));
         // `NVF_SOLARI_PROXIES=none|terrain|shapes`: a test aid that leaves parts of the
         // traced scene out (default: all).
         let which = std::env::var("NVF_SOLARI_PROXIES").unwrap_or_default();
@@ -159,7 +161,12 @@ fn stripped(mesh: &Mesh) -> Option<(Mesh, usize)> {
 /// roughness and emissive light (an emissive shape becomes a light; held to Solari's
 /// triangle limit). Blended shapes are traced as cut-outs.
 fn traced_material(base: &StandardMaterial, triangles: usize) -> StandardMaterial {
-    let emissive = if triangles <= MAX_EMISSIVE_TRIANGLES { base.emissive } else { LinearRgba::BLACK };
+    // The game's emissive colours are display values over its exposure-free lighting; as
+    // light in the traced scene they are scaled to the sun's units (sky::light_unit).
+    let unit = crate::sky::light_unit() * EMISSIVE_SCALE;
+    let e = base.emissive;
+    let e = LinearRgba::rgb(e.red * unit, e.green * unit, e.blue * unit);
+    let emissive = if triangles <= MAX_EMISSIVE_TRIANGLES { e } else { LinearRgba::BLACK };
     let alpha_mode = match base.alpha_mode {
         AlphaMode::Opaque => AlphaMode::Opaque,
         AlphaMode::Mask(c) => AlphaMode::Mask(c),
@@ -233,8 +240,8 @@ fn add_proxies(
             continue;
         }
         let Some(nif) = nif_materials.get(&material.0) else { continue };
-        // Unlit and additive shapes (glows, effects, the sky's parts) are not surfaces.
-        if nif.base.unlit || matches!(nif.base.alpha_mode, AlphaMode::Add | AlphaMode::Multiply | AlphaMode::Premultiplied) {
+        // Additive and multiplied shapes (glows, effects) are not surfaces.
+        if matches!(nif.base.alpha_mode, AlphaMode::Add | AlphaMode::Multiply | AlphaMode::Premultiplied) {
             commands.entity(e).insert(RtProxied(None));
             continue;
         }
@@ -289,6 +296,8 @@ fn add_terrain_proxies(
 /// Strength of the sky's light (the environment map) against the sun's: the sky's colours
 /// are about the sun's brightness, the sky's light a fraction of the sun's.
 const SKY_STRENGTH: f32 = 1.0;
+/// Indoors the cell's ambient light is all the fill there is (no sky): stronger.
+const INTERIOR_SKY: f32 = 4.0;
 /// The sky cubemap's side, in texels (a power of two: Bevy filters it on the GPU).
 const SKY_SIZE: u32 = 32;
 
@@ -386,9 +395,82 @@ fn update_sky_light(
         if !has {
             commands.entity(e).insert(bevy::light::GeneratedEnvironmentMapLight {
                 environment_map: light.image.clone(),
-                intensity: crate::sky::light_unit() * SKY_STRENGTH,
+                intensity: crate::sky::light_unit() * SKY_STRENGTH * if sky.interior.is_some() { INTERIOR_SKY } else { 1.0 },
                 ..default()
             });
+        }
+    }
+}
+
+/// The radius of the glowing sphere that stands for a point light in the traced scene
+/// (game units).
+const LAMP_RADIUS: f32 = 6.0;
+/// How bright a lamp's sphere is against its light's range: at half the range its light
+/// is about LAMP_LEVEL of a full sun's [engineering choice, by eye].
+const LAMP_LEVEL: f32 = 0.35;
+
+/// A point light that has its glowing sphere in the traced scene.
+#[derive(Component)]
+struct LampProxied;
+
+#[derive(Resource)]
+struct LampMesh(Handle<Mesh>);
+
+fn setup_lamp_mesh(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
+    let sphere = Sphere::new(LAMP_RADIUS).mesh().build();
+    if let Some((mesh, _)) = stripped(&sphere) {
+        commands.insert_resource(LampMesh(meshes.add(mesh)));
+    }
+}
+
+/// Solari has no point lights: each of the game's (lamps, fires, the glow of signs) is a
+/// small glowing sphere in the traced scene instead, so it lights, shadows and bounces as
+/// an area light. Its brightness follows the light's colour (display values) and range
+/// (the game's lights fade out at their range: inverse-square light this bright at half
+/// of it).
+fn add_lamps(
+    mut commands: Commands,
+    lamps: Query<(Entity, &PointLight), Without<LampProxied>>,
+    mesh: Option<Res<LampMesh>>,
+    mut standard: ResMut<Assets<StandardMaterial>>,
+) {
+    let Some(mesh) = mesh else { return };
+    let unit = crate::sky::light_unit();
+    for (e, light) in &lamps {
+        let display = light.color.to_linear();
+        let colour = Vec3::new(display.red, display.green, display.blue).max(Vec3::ZERO).powf(2.2);
+        let half = (light.range * 0.5).max(LAMP_RADIUS * 2.0);
+        // Irradiance at distance d from a sphere of radius r and radiance L: L r^2 / d^2 x pi.
+        let radiance = LAMP_LEVEL * unit * half * half / (LAMP_RADIUS * LAMP_RADIUS);
+        let emissive = colour * radiance;
+        let material = standard.add(StandardMaterial {
+            base_color: Color::BLACK,
+            emissive: LinearRgba::rgb(emissive.x, emissive.y, emissive.z),
+            ..default()
+        });
+        commands.spawn((RaytracingMesh3d(mesh.0.clone()), MeshMaterial3d(material), ChildOf(e)));
+        commands.entity(e).insert(LampProxied);
+    }
+}
+
+/// Unlit and glowing shapes (neon tubes, lit stair treads, signs) keep their own look:
+/// drawn forward, as in the game, not through the G-buffer Solari lights (their traced
+/// copies still glow, so they light what is around them).
+fn forward_glows(mut events: MessageReader<AssetEvent<NifMaterial>>, mut materials: ResMut<Assets<NifMaterial>>) {
+    let ids: Vec<AssetId<NifMaterial>> = events
+        .read()
+        .filter_map(|e| match e {
+            AssetEvent::Added { id } => Some(*id),
+            _ => None,
+        })
+        .collect();
+    for id in ids {
+        let Some(m) = materials.get(id) else { continue };
+        let glows = m.base.unlit || m.base.emissive != LinearRgba::BLACK || m.base.emissive_texture.is_some();
+        if glows && m.base.opaque_render_method != bevy::material::OpaqueRendererMethod::Forward {
+            if let Some(mut m) = materials.get_mut(id) {
+                m.base.opaque_render_method = bevy::material::OpaqueRendererMethod::Forward;
+            }
         }
     }
 }

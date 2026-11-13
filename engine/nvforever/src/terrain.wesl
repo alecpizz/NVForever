@@ -253,7 +253,7 @@ fn fragment(
 
     @if(PREPASS_PIPELINE) {
         pbr_input.material.reflectance = min(pbr_input.material.reflectance, vec3(0.3));
-        pbr_input.material.perceptual_roughness = max(pbr_input.material.perceptual_roughness, 0.6);
+        pbr_input.material.perceptual_roughness = max(pbr_input.material.perceptual_roughness, 0.8);
         return deferred_output(in, pbr_input);
     }
     @if(!PREPASS_PIPELINE) {
