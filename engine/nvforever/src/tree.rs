@@ -390,6 +390,8 @@ fn build(
         mesh.insert_indices(bevy::mesh::Indices::U32(g.indices.clone()));
         let mat = bark_materials.add(BarkMaterial {
             base: StandardMaterial {
+                // Forward where the default is deferred (Solari): no deferred path of its own.
+                opaque_render_method: bevy::material::OpaqueRendererMethod::Forward,
                 base_color: if image.is_some() { Color::WHITE } else { Color::srgb(0.3, 0.25, 0.2) },
                 base_color_texture: image,
                 perceptual_roughness: 0.9,
@@ -474,6 +476,8 @@ fn build(
         });
         let mat = leaf_materials.add(LeafMaterial {
             base: StandardMaterial {
+                // Forward where the default is deferred (Solari): no deferred path of its own.
+                opaque_render_method: bevy::material::OpaqueRendererMethod::Forward,
                 base_color_texture: Some(image),
                 alpha_mode: AlphaMode::Mask(0.5),
                 cull_mode: None,

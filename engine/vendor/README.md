@@ -406,3 +406,11 @@ Each part marked `NVForever screen indirect light` (or `NVForever remaster`):
   softened (its 13 taps averaged with an 8-tap spiral turned per pixel).
 
 Without the component every view draws as upstream.
+
+## bevy_solari 0.20.1 (MIT OR Apache-2.0, Bevy contributors)
+
+For the experimental ray-traced lighting (`--solari`, nvforever solari.rs). One change, in
+`src/scene/bindings.wesl`: `RAY_T_MIN` 0.001 → 1.5 and `RAY_T_MAX` 100,000 → 2,000,000.
+The game's unit is about 1.43 cm and its cells lie tens of thousands of units from the
+origin, where a position reconstructed from depth is off by far more than 0.001: shadow
+rays hit their own surface (black blotches on the terrain).

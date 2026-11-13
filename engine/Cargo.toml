@@ -15,7 +15,7 @@ license = "GPL-3.0-or-later"
 # pbr_specular_textures: normal-map alpha as the specular mask (docs/spec-notes/nif.md §6).
 # `debug`: errors name the command or system that failed (stray_commands.rs in nvforever).
 # raw_vulkan_init: device extensions at creation (anti_lag.rs, #1778).
-bevy = { version = "=0.20.1", features = ["pbr_specular_textures", "debug", "raw_vulkan_init"] }
+bevy = { version = "=0.20.1", features = ["pbr_specular_textures", "debug", "raw_vulkan_init", "bevy_solari"] }
 fnv-nif = { path = "../crates/fnv-nif" }
 fnv-dds = { path = "../crates/fnv-dds" }
 fnv-spt = { path = "../crates/fnv-spt" }
@@ -72,4 +72,5 @@ opt-level = 3
 gpu-allocator = { path = "vendor/gpu-allocator" }
 bevy_pbr = { path = "vendor/bevy_pbr" }
 bevy_render = { path = "vendor/bevy_render" }
+bevy_solari = { path = "vendor/bevy_solari" }
 wgpu-hal = { path = "vendor/wgpu-hal" }

@@ -158,6 +158,7 @@ mod ssao;
 mod gi;
 mod atmos;
 mod probe;
+mod solari;
 mod taa;
 mod fg_presenter;
 mod frame_gen;
@@ -475,6 +476,10 @@ struct Args {
     /// runs (--screenshot, --timelapse, --frame-json, --run-seconds) always default to it.
     #[arg(long, value_enum)]
     graphics: Option<graphics::Preset>,
+    /// Experimental: hardware ray-traced lighting through Bevy Solari (solari.rs,
+    /// docs/design/graphics-solari.md). Needs a GPU with ray queries.
+    #[arg(long)]
+    solari: bool,
     /// FSR 3.1 upscaling (frame generation: --frame-generation). Replaces other anti-aliasing while on.
     /// Saved Graphics settings take precedence in normal play, as for other switches.
     #[arg(long, value_enum, default_value = "off")]
@@ -1333,7 +1338,7 @@ fn main() -> AppExit {
     // Asks for VK_AMD_anti_lag or VK_NV_low_latency2 when Bevy creates the device: before
     // DefaultPlugins (anti_lag.rs, nv_low_latency.rs).
     app.add_plugins(anti_lag::AntiLagInitPlugin);
-    app.add_plugins(
+    let default_plugins = 
         DefaultPlugins
             .set(task_pools(cpu_placed.pool_threads))
             .set(ImagePlugin {
@@ -1389,12 +1394,28 @@ fn main() -> AppExit {
                     ..default()
                 }),
                 ..default()
-            }),
-    )
+            });
+    // `--solari`: the device asks for ray queries and binding arrays (solari.rs).
+    let default_plugins = if args.solari {
+        default_plugins.set(bevy::render::RenderPlugin {
+            render_creation: bevy::render::settings::RenderCreation::Automatic(Box::new(bevy::render::settings::WgpuSettings {
+                features: bevy::solari::SolariPlugins::required_wgpu_features(),
+                ..default()
+            })),
+            ..default()
+        })
+    } else {
+        default_plugins
+    };
+    app.add_plugins(default_plugins)
     .add_plugins((window_icon::WindowIconPlugin, window_mode::WindowModePlugin))
     .add_plugins(nvf_play::audio_out::AudioOutPlugin)
     .add_plugins((ArchivePlugin(game), lights::LightsPlugin, fog::FogPlugin, eye_adapt::EyeAdaptPlugin, emittance::EmittancePlugin, water::WaterPlugin, tree::TreePlugin, terrain::TerrainPlugin, reflection::ReflectionPlugin, ripples::RipplesPlugin))
-    .add_plugins((imagespace::ImageSpacePlugin, sky::SkyPlugin, graphics::GraphicsPlugin(graphics, msaa, frame_times)))
+    .add_plugins((imagespace::ImageSpacePlugin, sky::SkyPlugin, graphics::GraphicsPlugin(graphics, msaa, frame_times)));
+    if args.solari {
+        app.add_plugins(solari::SolariExperimentPlugin);
+    }
+    app
     // The switches the settings page weighs against the INI (`--play` only), for the
     // frame split's start-time decision (perf_overlay/split.rs).
     .add_plugins(perf_overlay::PerfOverlayPlugin(args.fps, play.is_some().then(|| settings::given_switches(&args, &command_line()))))

@@ -210,7 +210,8 @@ fn sky_material(base: StandardMaterial, sun: f32) -> SkyMaterial {
     let applies = if matches!(base.alpha_mode, AlphaMode::Add) { 0.0 } else { 1.0 };
     let light = SkyLight { params: Vec4::new(1.0, 0.0, applies, sun), ..default() };
     ExtendedMaterial {
-        base: StandardMaterial { unlit: true, fog_enabled: false, cull_mode: None, ..base },
+        // Forward even where the default is deferred (Solari, solari.rs): the sky is a picture, not a lit surface.
+        base: StandardMaterial { unlit: true, fog_enabled: false, cull_mode: None, opaque_render_method: bevy::material::OpaqueRendererMethod::Forward, ..base },
         extension: SkyDisplay { light, ..default() },
     }
 }

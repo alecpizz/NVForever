@@ -62,7 +62,7 @@ import bevy_pbr::{
 
 @if(PREPASS_PIPELINE) import bevy_pbr::{
     prepass::io::{VertexOutput, FragmentOutput},
-    pbr_deferred_functions::deferred_output,
+    deferred::functions::deferred_output,
 };
 @if(!PREPASS_PIPELINE) import bevy_pbr::{
     render::forward_io::{VertexOutput, FragmentOutput},
@@ -73,6 +73,8 @@ import bevy_pbr::{
     render::mesh_view_types::FOG_MODE_ATMOSPHERIC,
     render::view_transformations::{position_ndc_to_world, depth_ndc_to_view_z},
 };
+// The deferred G-buffer pass (Solari, nvforever solari.rs) reads the same flags.
+@if(PREPASS_PIPELINE) import bevy_pbr::render::pbr_types::{STANDARD_MATERIAL_FLAGS_UNLIT_BIT, STANDARD_MATERIAL_FLAGS_ALPHA_MODE_RESERVED_BITS, STANDARD_MATERIAL_FLAGS_ALPHA_MODE_ADD, STANDARD_MATERIAL_FLAGS_ALPHA_MODE_BLEND, STANDARD_MATERIAL_FLAGS_ALPHA_MODE_PREMULTIPLIED, STANDARD_MATERIAL_FLAGS_BASE_COLOR_TEXTURE_BIT};
 @if(!PREPASS_PIPELINE && DEPTH_PREPASS) import bevy_pbr::prepass::utils as prepass_utils;
 @if(!PREPASS_PIPELINE) import nvf_assets::first_person_depth;
 @if(!PREPASS_PIPELINE && SHADE_LIGHT) import bevy_pbr::{
@@ -640,7 +642,10 @@ fn nif_fragment(
     // display values, blew out white (nif.md §6 "Additive blend", 2026-10-25).
     // Unlit shapes without External Emittance and authored cut-out signs also bypass the scale [hypothesis, fitted
     // to the 2026-11-06 frames; nif.md §6 "Unlit shapes that are pictures, and cut-out signs"].
-    let emissive_scale = select(view_emissive_scale(), 1.0, surface.emissive_rule.x > 0.5 || (pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_ALPHA_MODE_RESERVED_BITS) == STANDARD_MATERIAL_FLAGS_ALPHA_MODE_ADD);
+    // The deferred G-buffer (Solari, solari.rs) has no view fog to scale by.
+    @if(!PREPASS_PIPELINE) let view_scale = view_emissive_scale();
+    @if(PREPASS_PIPELINE) let view_scale = 1.0;
+    let emissive_scale = select(view_scale, 1.0, surface.emissive_rule.x > 0.5 || (pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_ALPHA_MODE_RESERVED_BITS) == STANDARD_MATERIAL_FLAGS_ALPHA_MODE_ADD);
     let e = vec4(pbr_input.material.emissive.rgb * emissive_scale, pbr_input.material.emissive.a);
     pbr_input.material.emissive = vec4(e.rgb * pbr_input.material.base_color.rgb, e.a);
 
@@ -654,6 +659,11 @@ fn nif_fragment(
         pbr_input.N = nvf_detail_normal(pbr_input.N, pbr_input.world_position.xyz, nvf_d, 4.0);
         pbr_input.material.base_color = vec4(nvf_detail_colour(pbr_input.material.base_color.rgb, pbr_input.world_position.xyz, nvf_d, 0.12), pbr_input.material.base_color.a);
     }
+    // The G-buffer for Solari's physical lighting (nvforever solari.rs): the game's specular
+    // masks, fitted to its display-value highlights, turn rock and rust to foil when lit
+    // physically; held to a plain dielectric's sheen.
+    @if(PREPASS_PIPELINE) pbr_input.material.reflectance = min(pbr_input.material.reflectance, vec3(0.3));
+    @if(PREPASS_PIPELINE) pbr_input.material.perceptual_roughness = max(pbr_input.material.perceptual_roughness, 0.55);
     @if(PREPASS_PIPELINE) let out = deferred_output(in, pbr_input);
     @if(!PREPASS_PIPELINE) var out: FragmentOutput;
     @if(!PREPASS_PIPELINE) if (pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) == 0u {

@@ -14,12 +14,22 @@
 // light: Bevy's ambient specular taken out again, then fog (and tonemapping in a view
 // without HDR).
 
-import bevy_pbr::{
+// PREPASS_PIPELINE: the deferred G-buffer pass (Solari, nvforever solari.rs): the same
+// blended surface, written to the G-buffer instead of lit here.
+@if(!PREPASS_PIPELINE) import bevy_pbr::{
     render::forward_io::{VertexOutput, FragmentOutput},
-    render::pbr_fragment::pbr_input_from_standard_material,
-    render::pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing, calculate_F0, calculate_tbn_mikktspace, apply_normal_mapping},
+    render::pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing, calculate_F0},
     render::pbr_lighting::{EnvBRDFApprox, F_AB},
-    render::mesh_view_bindings::{lights, view},
+    render::mesh_view_bindings::lights,
+};
+@if(PREPASS_PIPELINE) import bevy_pbr::{
+    prepass::io::{VertexOutput, FragmentOutput},
+    deferred::functions::deferred_output,
+};
+import bevy_pbr::{
+    render::pbr_fragment::pbr_input_from_standard_material,
+    render::pbr_functions::{calculate_tbn_mikktspace, apply_normal_mapping},
+    render::mesh_view_bindings::view,
     render::mesh_bindings::mesh,
     render::mesh_functions::get_local_from_world,
     render::pbr_types::StandardMaterial,
@@ -224,11 +234,15 @@ fn fragment(
             @if(VERTEX_TANGENTS) if (counts.y & (1u << k)) != 0u {
                 layer_n = apply_normal_mapping(standard.flags, tbn, false, is_front, layer_normal(k, in.instance_index, uv));
             }
+            // A normal that went bad (no tangent in some passes): the surface's own.
+            if any(layer_n != layer_n) || dot(layer_n, layer_n) < 1e-6 {
+                layer_n = plain;
+            }
             colour = mix(colour, texel.rgb * tint * standard.base_color.rgb, share);
             normal = mix(normal, layer_n, share);
         }
         pbr_input.material.base_color = vec4(colour, 1.0);
-        pbr_input.N = normalize(normal);
+        pbr_input.N = select(plain, normalize(normal), dot(normal, normal) > 1e-6);
     }
     pbr_input.material.base_color.a = 1.0;
     @if(SCREEN_INDIRECT) {
@@ -237,6 +251,12 @@ fn fragment(
         pbr_input.material.base_color = vec4(nvf_detail_colour(pbr_input.material.base_color.rgb, pbr_input.world_position.xyz, nvf_d, 0.14), 1.0);
     }
 
+    @if(PREPASS_PIPELINE) {
+        pbr_input.material.reflectance = min(pbr_input.material.reflectance, vec3(0.3));
+        pbr_input.material.perceptual_roughness = max(pbr_input.material.perceptual_roughness, 0.6);
+        return deferred_output(in, pbr_input);
+    }
+    @if(!PREPASS_PIPELINE) {
     var out: FragmentOutput;
     out.color = apply_pbr_lighting(pbr_input);
     // Bevy's ambient specular out again, as in nif_material.wesl (the game's ambient light
@@ -253,4 +273,5 @@ fn fragment(
     out.color = vec4(max(out.color.rgb - view.exposure * ambient_spec, vec3(0.0)), out.color.a);
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
     return out;
+    }
 }

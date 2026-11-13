@@ -550,6 +550,8 @@ fn load_model(path: &str, models: &mut ModelCtx, materials: &mut Assets<GrassMat
         let uvs = md.uv_sets.first().filter(|u| u.len() == n).cloned().unwrap_or_else(|| vec![[0.0, 0.0]; n]);
         let material = materials.add(GrassMaterial {
             base: StandardMaterial {
+                // Forward where the default is deferred (Solari): no deferred path of its own.
+                opaque_render_method: bevy::material::OpaqueRendererMethod::Forward,
                 base_color: if image.is_some() { Color::WHITE } else { Color::srgb(0.55, 0.5, 0.3) },
                 base_color_texture: image,
                 alpha_mode: AlphaMode::Mask(cutoff.unwrap_or(0.5)),

@@ -175,6 +175,10 @@ impl MaterialExtension for TerrainLayers {
     fn fragment_shader() -> ShaderRef {
         SHADER.into()
     }
+    /// The same shader writes the deferred G-buffer (Solari, solari.rs).
+    fn deferred_fragment_shader() -> ShaderRef {
+        SHADER.into()
+    }
     fn specialize(
         _: &MaterialExtensionPipeline,
         descriptor: &mut RenderPipelineDescriptor,

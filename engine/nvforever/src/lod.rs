@@ -795,8 +795,13 @@ pub fn update_lod(
     }
 }
 
+/// A distant-LOD mesh (left out of Solari's ray-traced scene: it overlaps the full
+/// terrain and objects near the camera, solari.rs).
+#[derive(Component)]
+pub struct DistantLod;
+
 fn spawn_entity(commands: &mut Commands, root: Entity, mesh: Handle<Mesh>, material: Handle<NifMaterial>, t: Transform, fade: Option<VisibilityRange>) -> Entity {
-    let e = commands.spawn((Mesh3d(mesh), MeshMaterial3d(material), t)).id();
+    let e = commands.spawn((Mesh3d(mesh), MeshMaterial3d(material), t, DistantLod)).id();
     if let Some(r) = fade {
         commands.entity(e).insert(r);
     }
