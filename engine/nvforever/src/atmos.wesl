@@ -124,15 +124,16 @@ fn nvf_value_noise(p: vec2<f32>) -> f32 {
 fn nvf_cloud_shadow(p: vec3<f32>, to_sun: vec3<f32>, time: f32) -> f32 {
     let up = max(to_sun.y, 0.08);
     let c = p.xz + to_sun.xz / up * (30000.0 - p.y);
-    var q = c / 17000.0 + vec2(time * 0.03, time * 0.012);
+    var q = mat2x2<f32>(0.87, 0.5, -0.5, 0.87) * (c / 11000.0) + vec2(time * 0.04, time * 0.016);
     var v = 0.0;
     var a = 0.5;
-    for (var o = 0; o < 3; o++) {
+    for (var o = 0; o < 4; o++) {
         v += a * nvf_value_noise(q);
-        q = q * 2.03 + vec2(1.7, 9.2);
+        // Each octave turned (about 37 degrees) so the lattice of value noise never lines up.
+        q = vec2(0.8 * q.x - 0.6 * q.y, 0.6 * q.x + 0.8 * q.y) * 2.03 + vec2(1.7, 9.2);
         a *= 0.5;
     }
-    return 1.0 - 0.6 * smoothstep(0.42, 0.62, v);
+    return 1.0 - 0.7 * smoothstep(0.52, 0.64, v);
 }
 
 struct MarchOut {
@@ -168,7 +169,11 @@ fn march(in: FullscreenVertexOutput) -> MarchOut {
         sun_colour = pow(max((*light).color.rgb * view.exposure / PI, vec3(0.0)), vec3(2.2)) * atmos.params2.y;
         cos_sun = dot(dir, (*light).direction_to_light.xyz);
     }
-    let ambient = pow(max(lights.ambient_color.rgb * view.exposure, vec3(0.0)), vec3(2.2)) * atmos.params2.z;
+    // The air's own blue: the ambient light scattered more in blue than in red (Rayleigh's
+    // tint, held to the ambient light's brightness) [engineering choice].
+    let ambient_lin = pow(max(lights.ambient_color.rgb * view.exposure, vec3(0.0)), vec3(2.2));
+    let ambient_lum = dot(ambient_lin, vec3(0.2126, 0.7152, 0.0722));
+    let ambient = mix(ambient_lin, ambient_lum * vec3(0.62, 0.92, 1.55), 0.6) * atmos.params2.z;
     let phase = phase_hg(atmos.params2.x, cos_sun);
     // The cloud shadow at the ray's two ends, blended along it (the clouds are kilometres
     // wide; once per step cost a quarter of the pass).

@@ -57,7 +57,7 @@ the display sum is raised to 2.2 afterwards, and without it 45 % occlusion took 
 ambient light and crushed sunlit scenes' shade.
 
 Outdoors (a shadow-casting sun in the light) the remaster leans the light towards the sun,
-sun up to x1.15 (the ambient stays), growing with the sun's height from 12 to 35 degrees (dawn and
+sun up to x1.15 and the ambient a little cooler and bluer (open shade lit by the sky; x(0.93, 1.0, 1.14)), growing with the sun's height from 12 to 35 degrees (dawn and
 dusk keep their soft shade): a harder desert light whose shade the bounce fills. The bounce is added as diffuse colour ×
 light. The post-process AO (graphics-enhanced.md §3.1) stays on at 0.35 for contact shadows.
 
@@ -102,7 +102,7 @@ below the camera, thinning to 1/e over 1,200 units of height and ramping in betw
 5,000 units from the camera (what is near stays crisp). Each step takes the sun's light
 through its shadow cascades (the pass binds Bevy's mesh view bind group as Bevy's volumetric
 fog does; the sun is the directional light whose cascades reach furthest) with a
-Henyey-Greenstein phase (g 0.55, strength 3) and the ambient light evenly (0.5); then a
+Henyey-Greenstein phase (g 0.55, strength 3) and the ambient light evenly (0.8), tinted towards the sky's blue (60 % of it the ambient's brightness in (0.62, 0.92, 1.55): the air's own colour at a distance); then a
 temporal blend (20 % new, clamped near the new value) and a depth-aware composite into the
 HDR picture (picture × transmittance + light). Off indoors (the cell's own fog stands).
 
@@ -133,9 +133,10 @@ rise from 0.5 to 1, hidden where the GI closes the view. The game's own cube map
 drawn: they would need cube textures in the bindless material; the light probe's faces
 (§2) stand in for them, so glass and metal reflect what is around the camera.
 
-**Cloud shadows** (lights.rs `nvf_sun_cloud`, atmos.wesl): value noise (3 octaves, cells of
-17,000 units) at a cloud layer 30,000 units up, read where the ray from the surface to the
-sun crosses it, drifting with time; the sun dims to 0.4 under a cloud. Only on a directional
+**Cloud shadows** (lights.rs `nvf_sun_cloud`, atmos.wesl): value noise (4 octaves, each turned
+about 37 degrees so the lattice never shows as straight edges, cells of 11,000 units, about a
+third of the ground under cloud) at a cloud layer 30,000 units up, read where the ray from the surface to the
+sun crosses it, drifting with time; the sun dims to 0.3 under a cloud. Only on a directional
 light that casts shadows (the sun outdoors), on surfaces and in the fog's sun light (there
 taken at the ray's two ends and blended).
 

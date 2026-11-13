@@ -49,7 +49,7 @@ const REACH: f32 = 14000.0;
 const ANISOTROPY: f32 = 0.55;
 /// Strength of the sun's and the ambient light in the fog.
 const SUN: f32 = 3.0;
-const AMBIENT: f32 = 0.5;
+const AMBIENT: f32 = 0.8;
 /// The share of this frame's march in the accumulated result.
 const NEW_SHARE: f32 = 0.2;
 /// A camera that moved further than this in a frame (game units) starts again.
