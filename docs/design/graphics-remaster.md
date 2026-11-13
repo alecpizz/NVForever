@@ -95,7 +95,7 @@ depth prepass becomes world heights (R32Float) the frame it is drawn. In the mar
 half-resolution pixel sends 3 cosine-distributed rays through the field in 10 growing steps
 out to about 3,000 units: a ray that passes under the field has hit something and brings back
 the colour seen from above there (0.8), one that gets away is open sky; the share shut in
-occludes the ambient light (up to 0.55, the larger of it and the screen march's). So what the
+occludes the ambient light (up to 0.25, the larger of it and the screen march's; at 0.55 it dulled Novac's grass and terrain at a low sun, reviewer 2026-11-13). A ray must pass 60 units under the field to hit, so grass and bushes seen from above do not cover their own bases. So what the
 screen does not hold counts: the far side of a canyon, buildings behind the camera, the
 cover of eaves and roofs (whatever is under something seen from above). Debug views 6 and 7
 (`NVF_GI`'s fifth value) show the field's colour and its height against each pixel.

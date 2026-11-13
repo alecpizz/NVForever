@@ -96,7 +96,7 @@ fn world_rays(p: vec3<f32>, n: vec3<f32>, noise_a: f32, noise_b: f32) -> vec4<f3
         let phi = 6.2831853 * u1;
         let sr = sqrt(u2);
         let dir = normalize(tx * (cos(phi) * sr) + ty * (sin(phi) * sr) + n * sqrt(max(1.0 - u2, 0.0)));
-        let start = p + n * 25.0;
+        let start = p + n * 40.0;
         var t = 60.0;
         for (var s = 0u; s < 10u; s++) {
             let q = start + dir * t;
@@ -105,7 +105,9 @@ fn world_rays(p: vec3<f32>, n: vec3<f32>, noise_a: f32, noise_b: f32) -> vec4<f3
                 break;
             }
             let h = textureLoad(hf_height, c.xy, 0).r;
-            if q.y < h - 20.0 {
+            // Well under the field: grass and bushes (about 50 units) seen from above do
+            // not cover their own bases.
+            if q.y < h - 60.0 {
                 light += min(textureLoad(hf_colour, c.xy, 0).rgb, vec3(gi.params2.z));
                 shut += 1.0;
                 break;

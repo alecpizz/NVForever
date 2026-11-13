@@ -68,7 +68,7 @@ const GLOW: f32 = 7.0;
 /// Strength of the light the world rays (height field) bring back from what they hit.
 const WORLD_BOUNCE: f32 = 0.8;
 /// How much of the sky the world rays may shut out (0..1).
-const WORLD_OCCLUSION: f32 = 0.55;
+const WORLD_OCCLUSION: f32 = 0.25;
 /// Strength of the light probe's light (probe.rs) on surfaces, by their normal.
 const PROBE: f32 = 0.6;
 /// A camera that moved further than this in a frame (game units) starts again.
