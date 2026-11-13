@@ -87,6 +87,23 @@ Goodsprings; one face every 4th frame adds about 0.7 ms on average, with the slo
 near 14 ms. Limits: one probe at the camera, so no parallax (a window reflects what the
 camera's position sees), and it lights by direction only.
 
+**Height field** (probe.rs `HeightField`, gi_height.wesl, gi.wesl `world_rays`; world space,
+outdoors): an orthographic camera 20,000 units over the player looks straight down on a
+12,000-unit square at 512 x 512 (about 23 units a texel), its centre held to the texel grid,
+every 8th frame and never on a probe frame. Its picture is the lit world seen from above; its
+depth prepass becomes world heights (R32Float) the frame it is drawn. In the march each
+half-resolution pixel sends 3 cosine-distributed rays through the field in 10 growing steps
+out to about 3,000 units: a ray that passes under the field has hit something and brings back
+the colour seen from above there (0.8), one that gets away is open sky; the share shut in
+occludes the ambient light (up to 0.55, the larger of it and the screen march's). So what the
+screen does not hold counts: the far side of a canyon, buildings behind the camera, the
+cover of eaves and roofs (whatever is under something seen from above). Debug views 6 and 7
+(`NVF_GI`'s fifth value) show the field's colour and its height against each pixel.
+Limits: one height per texel (no overhang seen from below, walls take the height of the roof
+above them), the colour is the top surface's, 23-unit texels. Cost at Goodsprings, 1920 x 1080:
+frame 8.37 ms against 8.07 without (the extra view every 8th frame and the rays); slowest
+frames near 13.8 ms.
+
 Indoors (the cell has its own lighting) 0.07 of light (linear) is added where the
 surroundings are open: FNV's dimmest rooms (the Prospector Saloon) otherwise crush to black
 under the occlusion and the grade.

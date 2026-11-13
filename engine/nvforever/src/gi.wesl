@@ -42,6 +42,12 @@ struct Gi {
     world_from_view: mat4x4<f32>,
     // The light probe: x its strength on surfaces.
     probe: vec4<f32>,
+    // The camera's world position.
+    cam_world: vec4<f32>,
+    // The height field: x, y its centre (world x, z), z its span, w 1 when valid.
+    hf: vec4<f32>,
+    // x the top-down camera's height, y its far plane, z bounce strength, w occlusion.
+    hf2: vec4<f32>,
 }
 
 @if(MULTISAMPLED) @group(0) @binding(0) var depth: texture_depth_multisampled_2d;
@@ -59,6 +65,56 @@ struct Gi {
 // The light probe's faces (probe.rs FACES order) and their mean light (6 x 1).
 @group(0) @binding(7) var probe_faces: texture_2d_array<f32>;
 @group(0) @binding(8) var probe_cube: texture_2d<f32>;
+// The height field (probe.rs): heights (world y) and the lit colour seen from above.
+@group(0) @binding(9) var hf_height: texture_2d<f32>;
+@group(0) @binding(10) var hf_colour: texture_2d<f32>;
+
+// The height field's texel under world (x, z) `p`, and whether it lies inside.
+fn hf_texel(p: vec2<f32>) -> vec3<i32> {
+    // The camera looks down with -z up: its picture's right is +x, its top is -z.
+    let uv = (p - gi.hf.xy) / gi.hf.z + 0.5;
+    let inside = all(uv >= vec2(0.0)) && all(uv < vec2(1.0));
+    let dims = vec2<i32>(textureDimensions(hf_height));
+    return vec3<i32>(vec2<i32>(uv * vec2<f32>(dims)), select(0, 1, inside));
+}
+
+// World rays through the height field (graphics-remaster.md §2 "Height field"): `count`
+// cosine-distributed rays from world point `p` with normal `n`, each marched in growing
+// steps out to about 2,700 units; a ray under the field takes the colour seen from above
+// there (the lit top of what it hit), one that gets away is open sky. Returns the light
+// brought back (rgb) and the share of rays shut in (a).
+fn world_rays(p: vec3<f32>, n: vec3<f32>, noise_a: f32, noise_b: f32) -> vec4<f32> {
+    let up = select(vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), abs(n.y) > 0.9);
+    let tx = normalize(cross(up, n));
+    let ty = cross(n, tx);
+    var light = vec3(0.0);
+    var shut = 0.0;
+    let count = 3u;
+    for (var r = 0u; r < count; r++) {
+        let u1 = fract(noise_a + f32(r) / f32(count));
+        let u2 = fract(noise_b + f32(r) * 0.618034);
+        let phi = 6.2831853 * u1;
+        let sr = sqrt(u2);
+        let dir = normalize(tx * (cos(phi) * sr) + ty * (sin(phi) * sr) + n * sqrt(max(1.0 - u2, 0.0)));
+        let start = p + n * 25.0;
+        var t = 60.0;
+        for (var s = 0u; s < 10u; s++) {
+            let q = start + dir * t;
+            let c = hf_texel(q.xz);
+            if c.z == 0 {
+                break;
+            }
+            let h = textureLoad(hf_height, c.xy, 0).r;
+            if q.y < h - 20.0 {
+                light += min(textureLoad(hf_colour, c.xy, 0).rgb, vec3(gi.params2.z));
+                shut += 1.0;
+                break;
+            }
+            t *= 1.55;
+        }
+    }
+    return vec4(light, shut) / f32(count);
+}
 
 const PI: f32 = 3.14159265;
 const HALF_PI: f32 = 1.5707963;
@@ -243,8 +299,18 @@ fn trace(in: FullscreenVertexOutput) -> TraceOut {
         closed += f32(countOneBits(mask)) / 32.0;
     }
     let fade = 1.0 - smoothstep(gi.params.w * 0.6, gi.params.w, z);
-    let occlusion = min(saturate(closed / f32(SLICES)), gi.params2.x) * fade;
-    out.light = vec4(light * (gi.params.z / f32(SLICES)) * fade, occlusion);
+    var occlusion = min(saturate(closed / f32(SLICES)), gi.params2.x) * fade;
+    var bounce = light * (gi.params.z / f32(SLICES)) * fade;
+    // World rays through the height field: what the screen does not hold (behind the
+    // camera, under eaves, the far side of a canyon) shuts out the sky and bounces light.
+    if gi.hf.w > 0.5 {
+        let pw = (gi.world_from_view * vec4(p, 0.0)).xyz + gi.cam_world.xyz;
+        let nw = normalize((gi.world_from_view * vec4(n, 0.0)).xyz);
+        let wr = world_rays(pw, nw, noise_a, noise_b);
+        bounce += wr.rgb * gi.hf2.z;
+        occlusion = max(occlusion, wr.a * gi.hf2.w);
+    }
+    out.light = vec4(bounce, occlusion);
     return out;
 }
 
@@ -279,6 +345,18 @@ fn upsample(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         let dd = textureLoad(input_b, hp, 0).r;
         if gi.debug.x < 1.5 { return vec4(vec3(dd / 3000.0), -1.0); }
         if gi.debug.x < 2.5 { return vec4(vec3(1.0 - acc.a), -1.0); }
+        if gi.debug.x > 5.5 {
+            // Modes 6 and 7: the height field under this pixel: its colour, and its height
+            // above the pixel (red above, green below, 500 units full).
+            let d6 = depth_at(vec2<i32>(floor(in.position.xy)));
+            let p6 = view_pos(floor(in.position.xy) + 0.5, d6);
+            let pw6 = (gi.world_from_view * vec4(p6, 0.0)).xyz + gi.cam_world.xyz;
+            let c6 = hf_texel(pw6.xz);
+            if c6.z == 0 || gi.hf.w < 0.5 { return vec4(0.0, 0.0, 1.0, -1.0); }
+            if gi.debug.x < 6.5 { return vec4(textureLoad(hf_colour, c6.xy, 0).rgb, -1.0); }
+            let dh = textureLoad(hf_height, c6.xy, 0).r - pw6.y;
+            return vec4(saturate(dh / 500.0), saturate(-dh / 500.0), 0.0, -1.0);
+        }
         if gi.debug.x > 3.5 {
             let g = textureSampleLevel(input_c, linear_sampler, in.position.xy / gi.size.xy, 0.0).rgb;
             // Mode 5: last frame's picture itself (its brightest values show the scale).

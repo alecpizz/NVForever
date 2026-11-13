@@ -124,3 +124,117 @@ fn follow(
         }
     }
 }
+
+/// The height field's side, in texels, and the square it covers (game units): about 23
+/// units a texel (graphics-remaster.md §2 "Height field").
+pub const HEIGHT_SIZE: u32 = 512;
+pub const HEIGHT_SPAN: f32 = 12_000.0;
+/// The top-down camera stands this far above the player and sees this far down.
+const HEIGHT_ABOVE: f32 = 20_000.0;
+pub const HEIGHT_FAR: f32 = 60_000.0;
+/// The height field is drawn every this many frames, never on a probe frame.
+const HEIGHT_EVERY: usize = 8;
+
+/// The top-down camera of the height field (main world; extracted so gi.rs finds its
+/// depth prepass).
+#[derive(Component, bevy::render::extract_component::ExtractComponent, Clone, Copy, Default)]
+#[extract_app(bevy::render::RenderApp)]
+pub struct HeightCamera;
+
+/// The height field: the world seen from straight above the player, outdoors. `image`
+/// holds its lit colour; gi.rs turns the camera's depth into heights the frame it is drawn
+/// (`fresh`). `origin`: x, z the square's centre, y the camera's height; w 1 once drawn.
+#[derive(Resource, ExtractResource, Clone)]
+#[extract_app(bevy::render::RenderApp)]
+pub struct HeightField {
+    pub image: Handle<Image>,
+    pub origin: Vec4,
+    pub fresh: bool,
+}
+
+pub struct HeightFieldPlugin;
+
+impl Plugin for HeightFieldPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_plugins((
+            ExtractResourcePlugin::<HeightField>::default(),
+            bevy::render::extract_component::ExtractComponentPlugin::<HeightCamera>::default(),
+        ))
+        .add_systems(Startup, setup_height)
+        .add_systems(
+            PostUpdate,
+            follow_height
+                .after(TransformSystems::Propagate)
+                .before(bevy::camera::visibility::VisibilitySystems::UpdateFrusta)
+                .before(bevy::light::SimulationLightSystems::UpdateDirectionalLightCascades),
+        );
+    }
+}
+
+fn setup_height(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+    let mut image = Image::new_uninit(
+        Extent3d { width: HEIGHT_SIZE, height: HEIGHT_SIZE, depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        TextureFormat::Rgba16Float,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    );
+    image.texture_descriptor.usage |= TextureUsages::TEXTURE_BINDING | TextureUsages::RENDER_ATTACHMENT;
+    let image = images.add(image);
+    commands.spawn((
+        Name::new("Height field camera"),
+        HeightCamera,
+        Camera3d::default(),
+        Camera { order: -3, is_active: false, ..default() },
+        RenderTarget::Image(image.clone().into()),
+        bevy::camera::Hdr,
+        Tonemapping::Linear,
+        Msaa::Off,
+        bevy::core_pipeline::prepass::DepthPrepass,
+        Projection::Orthographic(OrthographicProjection {
+            near: 0.0,
+            far: HEIGHT_FAR,
+            scaling_mode: bevy::camera::ScalingMode::Fixed { width: HEIGHT_SPAN, height: HEIGHT_SPAN },
+            ..OrthographicProjection::default_3d()
+        }),
+        RenderLayers::from_layers(&[0]),
+        Transform::default(),
+    ));
+    commands.insert_resource(HeightField { image, origin: Vec4::ZERO, fresh: false });
+}
+
+/// Every [`HEIGHT_EVERY`] frames, outdoors with global illumination: the camera over the
+/// player, its centre held to the texel grid so the field does not shimmer as he walks.
+#[allow(clippy::type_complexity)]
+fn follow_height(
+    sky: Option<Res<crate::sky::SkyState>>,
+    main: Query<(&GlobalTransform, Has<crate::gi::GlobalIllumination>), (With<FlyCam>, Without<HeightCamera>)>,
+    mut cam: Query<(&mut Camera, &mut Transform, &mut GlobalTransform), (With<HeightCamera>, Without<FlyCam>)>,
+    mut field: ResMut<HeightField>,
+    mut frame: Local<usize>,
+) {
+    *frame = frame.wrapping_add(1);
+    let indoors = sky.is_some_and(|s| s.interior.is_some());
+    let Ok((mut camera, mut t, mut gt)) = cam.single_mut() else { return };
+    let at = main.single().ok().filter(|(_, gi)| *gi && !indoors).map(|(g, _)| g.translation());
+    // Never on the probe's frames (every 4th): one extra view a frame at most.
+    let on = at.is_some() && *frame % HEIGHT_EVERY == 2;
+    if camera.is_active != on {
+        camera.is_active = on;
+    }
+    if field.fresh != on {
+        field.fresh = on;
+    }
+    if !on {
+        if at.is_none() && field.origin.w != 0.0 {
+            field.origin.w = 0.0;
+        }
+        return;
+    }
+    let Some(p) = at else { return };
+    let texel = HEIGHT_SPAN / HEIGHT_SIZE as f32;
+    let c = Vec2::new((p.x / texel).round() * texel, (p.z / texel).round() * texel);
+    let y = p.y + HEIGHT_ABOVE;
+    *t = Transform::from_xyz(c.x, y, c.y).looking_to(Vec3::NEG_Y, Vec3::NEG_Z);
+    *gt = GlobalTransform::from(*t);
+    field.origin = Vec4::new(c.x, y, c.y, 1.0);
+}

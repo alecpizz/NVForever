@@ -65,6 +65,10 @@ const INTERIOR_FILL: f32 = 0.07;
 /// Strength of the emissive glow field (gi.wesl `glow_*`): the light of bright
 /// emitters (neon, bulbs, fire) spread wide onto what is near them.
 const GLOW: f32 = 7.0;
+/// Strength of the light the world rays (height field) bring back from what they hit.
+const WORLD_BOUNCE: f32 = 0.8;
+/// How much of the sky the world rays may shut out (0..1).
+const WORLD_OCCLUSION: f32 = 0.55;
 /// Strength of the light probe's light (probe.rs) on surfaces, by their normal.
 const PROBE: f32 = 0.6;
 /// A camera that moved further than this in a frame (game units) starts again.
@@ -108,6 +112,14 @@ pub struct GiUniform {
     pub world_from_view: Mat4,
     /// The light probe (probe.rs): x its strength.
     pub probe: Vec4,
+    /// The camera's world position (xyz).
+    pub cam_world: Vec4,
+    /// The height field (probe.rs `HeightField`): x, y its centre (world x, z), z its span,
+    /// w 1 when it holds the world around the camera.
+    pub hf: Vec4,
+    /// x the height camera's height, y its far plane; z the world rays' bounce strength,
+    /// w their occlusion strength.
+    pub hf2: Vec4,
 }
 
 pub struct GiPlugin;
@@ -115,6 +127,7 @@ pub struct GiPlugin;
 impl Plugin for GiPlugin {
     fn build(&self, app: &mut App) {
         bevy::asset::embedded_asset!(app, "gi.wesl");
+        bevy::asset::embedded_asset!(app, "gi_height.wesl");
         app.add_plugins((
             ExtractComponentPlugin::<GiUniform>::default(),
             UniformComponentPlugin::<GiUniform>::default(),
@@ -132,7 +145,7 @@ impl Plugin for GiPlugin {
 }
 
 /// The camera's motion since last frame and its projection into the uniform.
-fn follow_camera(sky: Option<Res<crate::sky::SkyState>>, mut cams: Query<(&GlobalTransform, &Projection, &Camera, &mut GlobalIllumination, &mut GiUniform), With<FlyCam>>) {
+fn follow_camera(sky: Option<Res<crate::sky::SkyState>>, field: Option<Res<crate::probe::HeightField>>, mut cams: Query<(&GlobalTransform, &Projection, &Camera, &mut GlobalIllumination, &mut GiUniform), With<FlyCam>>) {
     let indoors = sky.as_ref().is_some_and(|s| s.interior.is_some());
     for (transform, projection, camera, mut gi, mut uniform) in &mut cams {
         let Projection::Perspective(p) = projection else { continue };
@@ -158,6 +171,13 @@ fn follow_camera(sky: Option<Res<crate::sky::SkyState>>, mut cams: Query<(&Globa
             debug: Vec4::new(t[4], t[5], if indoors { INTERIOR_FILL } else { 0.0 }, t[6]),
             world_from_view: Mat4::from_mat3(Mat3::from(a.matrix3)),
             probe: Vec4::new(PROBE, 0.0, 0.0, 0.0),
+            cam_world: a.translation.extend(1.0),
+            hf: field.as_ref().map_or(Vec4::ZERO, |f| {
+                // Valid while the field holds this camera's surroundings.
+                let near = (Vec2::new(f.origin.x, f.origin.z) - Vec2::new(a.translation.x, a.translation.z)).length() < crate::probe::HEIGHT_SPAN * 0.25;
+                Vec4::new(f.origin.x, f.origin.z, crate::probe::HEIGHT_SPAN, if f.origin.w > 0.5 && near && !indoors { 1.0 } else { 0.0 })
+            }),
+            hf2: Vec4::new(field.as_ref().map_or(0.0, |f| f.origin.y), crate::probe::HEIGHT_FAR, WORLD_BOUNCE, WORLD_OCCLUSION),
         };
     }
 }
@@ -167,6 +187,9 @@ const DIST_FORMAT: TextureFormat = TextureFormat::R16Float;
 
 #[derive(Resource)]
 struct GiPipelines {
+    /// The height field's pass: the top-down camera's depth into heights.
+    height_layout: BindGroupLayoutDescriptor,
+    height_id: CachedRenderPipelineId,
     /// One layout for every entry, by whether the depth is multisampled.
     layouts: [BindGroupLayoutDescriptor; 2],
     sampler: Sampler,
@@ -191,6 +214,8 @@ fn init_pipelines(mut commands: Commands, device: Res<RenderDevice>, assets: Res
                     tex(),
                     tex(),
                     texture_2d_array(TextureSampleType::Float { filterable: true }),
+                    tex(),
+                    texture_2d(TextureSampleType::Float { filterable: false }),
                     tex(),
                 ),
             ),
@@ -227,7 +252,23 @@ fn init_pipelines(mut commands: Commands, device: Res<RenderDevice>, assets: Res
         out
     });
     let sampler = device.create_sampler(&SamplerDescriptor { mag_filter: FilterMode::Linear, min_filter: FilterMode::Linear, ..default() });
-    commands.insert_resource(GiPipelines { layouts, sampler, ids });
+    let height_layout = BindGroupLayoutDescriptor::new(
+        "gi_height_layout",
+        &BindGroupLayoutEntries::sequential(ShaderStages::FRAGMENT, (texture_depth_2d(), uniform_buffer::<GiUniform>(true))),
+    );
+    let height_id = cache.queue_render_pipeline(RenderPipelineDescriptor {
+        label: Some("gi_height_from_depth".into()),
+        layout: vec![height_layout.clone()],
+        vertex: fullscreen.to_vertex_state(),
+        fragment: Some(FragmentState {
+            shader: assets.load("embedded://nvforever/gi_height.wesl"),
+            entry_point: Some("height_from_depth".into()),
+            targets: vec![Some(ColorTargetState { format: TextureFormat::R32Float, blend: None, write_mask: ColorWrites::ALL })],
+            ..default()
+        }),
+        ..default()
+    });
+    commands.insert_resource(GiPipelines { layouts, sampler, ids, height_layout, height_id });
 }
 
 struct Tex {
@@ -286,6 +327,8 @@ struct ViewTextures {
     /// The light probe's faces (probe.rs), and their mean light per face (6 x 1).
     probe: Tex,
     cube: Tex,
+    /// The height field's heights (world y, R32Float), from the top-down camera's depth.
+    height: Tex,
 }
 
 #[derive(Resource, Default)]
@@ -322,6 +365,7 @@ fn prepare(
                     glow: [make(&device, "gi_glow_0", (half + UVec2::splat(7)) / 8, LIGHT_FORMAT), make(&device, "gi_glow_1", (half + UVec2::splat(7)) / 8, LIGHT_FORMAT)],
                     probe: make_probe_array(&device),
                     cube: make(&device, "gi_probe_cube", UVec2::new(6, 1), LIGHT_FORMAT),
+                    height: make(&device, "gi_height", UVec2::splat(crate::probe::HEIGHT_SIZE), TextureFormat::R32Float),
                 },
             );
         }
@@ -356,6 +400,8 @@ fn gi_pass(
     view: ViewQuery<(&DynamicUniformIndex<GiUniform>, &GiUniform, &GiView, &ViewPrepassTextures)>,
     probe_images: Option<Res<crate::probe::ProbeImages>>,
     gpu_images: Res<bevy::render::render_asset::RenderAssets<bevy::render::texture::GpuImage>>,
+    field: Option<Res<crate::probe::HeightField>>,
+    height_cams: Query<&ViewPrepassTextures, With<crate::probe::HeightCamera>>,
     pipelines: Res<GiPipelines>,
     textures: Res<GiTextures>,
     cache: Res<PipelineCache>,
@@ -380,14 +426,24 @@ fn gi_pass(
     let Some(binding) = uniforms.uniforms().binding() else { return };
     let layout = cache.get_bind_group_layout(&pipelines.layouts[multi as usize]);
     let parity = (uniform.proj.w as u32 % 2) as usize;
+    // The height field's colour (the top-down camera's picture), or a placeholder.
+    let hf_colour = field.as_ref().and_then(|f| gpu_images.get(&f.image)).map_or(&t.blank.view, |g| &g.texture_view);
+    // The frame the top-down camera drew: its depth into heights, before the march.
+    if field.as_ref().is_some_and(|f| f.fresh) {
+        if let (Some(depth_view), Some(pipeline)) = (height_cams.iter().find_map(|p| p.depth_only_view().cloned()), cache.get_render_pipeline(pipelines.height_id)) {
+            let hl = cache.get_bind_group_layout(&pipelines.height_layout);
+            let bg = device.create_bind_group("gi_height", &hl, &BindGroupEntries::sequential((&depth_view, binding.clone())));
+            run(&mut ctx, pipeline, &bg, index.index(), "gi_height_from_depth", &[&t.height.view]);
+        }
+    }
     let (accum_now, accum_then) = (&t.accum[parity].view, &t.accum[1 - parity].view);
     let diagnostics = ctx.diagnostic_recorder();
     let diagnostics = diagnostics.as_deref();
     let span = diagnostics.time_span(ctx.command_encoder(), "nvf_global_illumination");
     let s = &pipelines.sampler;
-    let bg = device.create_bind_group("gi_trace", &layout, &BindGroupEntries::sequential((depth, binding.clone(), &t.history.view, s, &t.blank.view, &t.blank.view, &t.blank.view, &t.probe.view, &t.cube.view)));
+    let bg = device.create_bind_group("gi_trace", &layout, &BindGroupEntries::sequential((depth, binding.clone(), &t.history.view, s, &t.blank.view, &t.blank.view, &t.blank.view, &t.probe.view, &t.cube.view, &t.height.view, hf_colour)));
     run(&mut ctx, trace, &bg, index.index(), "gi_trace", &[&t.trace.view, &t.dist.view]);
-    let bg = device.create_bind_group("gi_temporal", &layout, &BindGroupEntries::sequential((depth, binding.clone(), &t.trace.view, s, accum_then, &t.dist.view, &t.history.view, &t.probe.view, &t.cube.view)));
+    let bg = device.create_bind_group("gi_temporal", &layout, &BindGroupEntries::sequential((depth, binding.clone(), &t.trace.view, s, accum_then, &t.dist.view, &t.history.view, &t.probe.view, &t.cube.view, &t.height.view, hf_colour)));
     run(&mut ctx, temporal, &bg, index.index(), "gi_temporal", &[accum_now]);
     // The light probe: its faces into the array, then their mean light per face.
     if let Some(probe) = probe_images.as_ref() {
@@ -406,15 +462,15 @@ fn gi_pass(
             );
         }
     }
-    let bg = device.create_bind_group("gi_probe_reduce", &layout, &BindGroupEntries::sequential((depth, binding.clone(), &t.blank.view, s, &t.blank.view, &t.blank.view, &t.blank.view, &t.probe.view, &t.blank.view)));
+    let bg = device.create_bind_group("gi_probe_reduce", &layout, &BindGroupEntries::sequential((depth, binding.clone(), &t.blank.view, s, &t.blank.view, &t.blank.view, &t.blank.view, &t.probe.view, &t.blank.view, &t.height.view, hf_colour)));
     run(&mut ctx, reduce, &bg, index.index(), "gi_probe_reduce", &[&t.cube.view]);
     // The glow field from last frame's picture: bright texels, then blurred both ways.
     let glow_steps = [(&t.history.view, &t.glow[0].view, "gi_glow_down"), (&t.glow[0].view, &t.glow[1].view, "gi_glow_across"), (&t.glow[1].view, &t.glow[0].view, "gi_glow_down_blur")];
     for (pipeline, (from, to, label)) in glow.into_iter().zip(glow_steps) {
-        let bg = device.create_bind_group(label, &layout, &BindGroupEntries::sequential((depth, binding.clone(), from, s, &t.blank.view, &t.blank.view, &t.blank.view, &t.probe.view, &t.cube.view)));
+        let bg = device.create_bind_group(label, &layout, &BindGroupEntries::sequential((depth, binding.clone(), from, s, &t.blank.view, &t.blank.view, &t.blank.view, &t.probe.view, &t.cube.view, &t.height.view, hf_colour)));
         run(&mut ctx, pipeline, &bg, index.index(), label, &[to]);
     }
-    let bg = device.create_bind_group("gi_upsample", &layout, &BindGroupEntries::sequential((depth, binding, accum_now, s, &t.dist.view, &t.glow[0].view, &t.history.view, &t.probe.view, &t.cube.view)));
+    let bg = device.create_bind_group("gi_upsample", &layout, &BindGroupEntries::sequential((depth, binding, accum_now, s, &t.dist.view, &t.glow[0].view, &t.history.view, &t.probe.view, &t.cube.view, &t.height.view, hf_colour)));
     run(&mut ctx, upsample, &bg, index.index(), "gi_upsample", &[&t.full.view]);
     span.end(ctx.command_encoder());
 }
@@ -438,6 +494,6 @@ fn capture_pass(
     let layout = cache.get_bind_group_layout(&pipelines.layouts[multi as usize]);
     let picture: &TextureView = target.main_texture_view();
     let s = &pipelines.sampler;
-    let bg = device.create_bind_group("gi_capture", &layout, &BindGroupEntries::sequential((depth, binding, picture, s, &t.blank.view, &t.blank.view, &t.blank.view, &t.probe.view, &t.cube.view)));
+    let bg = device.create_bind_group("gi_capture", &layout, &BindGroupEntries::sequential((depth, binding, picture, s, &t.blank.view, &t.blank.view, &t.blank.view, &t.probe.view, &t.cube.view, &t.height.view, &t.blank.view)));
     run(&mut ctx, capture, &bg, index.index(), "gi_capture", &[&t.history.view]);
 }
