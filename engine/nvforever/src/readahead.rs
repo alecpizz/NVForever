@@ -182,8 +182,9 @@ pub fn ready_to_draw(world: &ActorWorld, sim: Option<&fnv_sim::World<'_>>, ctx: 
 type AnimsKey = (String, Body, Option<&'static str>);
 
 enum Job {
-    /// Resolve the actor and start reading what it is drawn from.
-    Actor { reference: u32, base: u32, creature: bool },
+    /// Resolve the actor and start reading what it is drawn from. `door`: listed for a
+    /// load door's destination (seamless doors, `door_ahead.rs`), kept indoors.
+    Actor { reference: u32, base: u32, creature: bool, door: bool },
     /// Prepare the part (or with `true` the skeleton) at this path once it has been read.
     Prepare(String, bool),
     /// Read the FaceGen file (`.egm`, `.egt`) at this path on a worker thread.
@@ -232,6 +233,8 @@ pub struct ReadAhead {
     anims_wanted: HashSet<AnimsKey>,
     /// Whether the last [`read_ahead`] ran with an interior loaded.
     indoors: bool,
+    /// Actors listed for doors' destinations ([`ReadAhead::list_for_door`]).
+    door_listed: HashSet<u32>,
     rings: usize,
     actors_listed: usize,
     parts_read: usize,
@@ -273,7 +276,7 @@ impl ReadAhead {
         let (queued, anims_queued) = (&mut self.queued, &mut self.anims_queued);
         self.jobs.retain(|j| {
             let keep = match j {
-                Job::Actor { .. } => false,
+                Job::Actor { door, .. } => *door,
                 Job::Prepare(path, _) | Job::FaceGen(path) => wanted.contains(path),
                 Job::Anims { skeleton, body, prefix, .. } => anims_wanted.contains(&(skeleton.clone(), *body, *prefix)),
             };
@@ -291,6 +294,30 @@ impl ReadAhead {
             keep
         });
         before - self.jobs.len()
+    }
+
+    /// List actors for a load door's destination (seamless doors, `door_ahead.rs`):
+    /// `(reference, base, creature)`, not listed again while their job waits. Returns how
+    /// many were listed now.
+    pub fn list_for_door(&mut self, actors: impl IntoIterator<Item = (u32, u32, bool)>) -> usize {
+        if self.off {
+            return 0;
+        }
+        let mut n = 0;
+        for (reference, base, creature) in actors {
+            if self.door_listed.insert(reference) {
+                self.jobs.push_back(Job::Actor { reference, base, creature, door: true });
+                n += 1;
+            }
+        }
+        self.actors_listed += n;
+        n
+    }
+
+    /// Forget which actors were listed for doors (the doors near the player changed: an
+    /// actor listed again is resolved again, with what it wears now).
+    pub fn forget_door_actors(&mut self) {
+        self.door_listed.clear();
     }
 
     pub fn from_env() -> ReadAhead {
@@ -418,13 +445,13 @@ pub fn read_ahead(
                 let Some(p) = placement(world.lo, world.schema, r).filter(|p| !p.deleted() && world.enabled(p, 0)) else { continue };
                 let Some(b) = p.base.and_then(|b| base_object(world.lo, world.schema, b)).filter(|b| matches!(&b.sig, b"NPC_" | b"CREA")) else { continue };
                 if listed.insert(r) {
-                    ahead.jobs.push_back(Job::Actor { reference: r, base: b.form_id, creature: &b.sig == b"CREA" });
+                    ahead.jobs.push_back(Job::Actor { reference: r, base: b.form_id, creature: &b.sig == b"CREA", door: false });
                 }
             }
         }
         for (r, base, creature) in residents.as_deref().map(|res| res.undrawn_in(world.world, &cells)).unwrap_or_default() {
             if listed.insert(r) {
-                ahead.jobs.push_back(Job::Actor { reference: r, base, creature });
+                ahead.jobs.push_back(Job::Actor { reference: r, base, creature, door: false });
             }
         }
         ahead.rings += 1;
@@ -439,8 +466,8 @@ pub fn read_ahead(
             debug!("actor read-ahead: indoors: {dropped} job(s) queued for the exterior ring dropped");
         }
     } else if indoors {
-        // Unresolved exterior actors listed since (none are listed indoors).
-        ahead.jobs.retain(|j| !matches!(j, Job::Actor { .. }));
+        // Unresolved exterior actors listed since (none are listed indoors but a door's).
+        ahead.jobs.retain(|j| matches!(j, Job::Actor { door: true, .. }) || !matches!(j, Job::Actor { .. }));
     }
     ahead.indoors = indoors;
     ahead.wanted.clear();
@@ -476,7 +503,7 @@ pub fn read_ahead(
         left -= 1;
         let Some(job) = ahead.jobs.pop_front() else { break };
         match job {
-            Job::Actor { reference, base, creature } => {
+            Job::Actor { reference, base, creature, .. } => {
                 let shared = sim.as_deref().map(|s| &s.world);
                 let equipment_world = residents.as_deref().map_or(shared, |r| r.prefetch_world(reference, shared));
                 let Some(mut plan) = actor_plan(aw, equipment_world, reference, base, creature) else { continue };
@@ -688,7 +715,7 @@ mod tests {
         let waiting = Plan { parts: vec!["inside.nif".into()], skeleton: "inside_skel.nif".into(),
             prefix: Some("2hr"), facegen: vec!["inside.egm".into()], ..ring.clone() };
         let mut ahead = ReadAhead::default();
-        ahead.jobs.push_back(Job::Actor { reference: 7, base: 8, creature: false });
+        ahead.jobs.push_back(Job::Actor { reference: 7, base: 8, creature: false, door: false });
         assert!(!ahead.queue_plan(&ring, false, true, false, |_| PartState::Reading, |_| false));
         assert!(!ahead.queue_plan(&waiting, false, true, false, |_| PartState::Reading, |_| false));
         ahead.want(&waiting);

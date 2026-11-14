@@ -76,6 +76,19 @@ pub const PICTURE_FRAMES: u32 = 3;
 /// depend on it; about twice the 2-2.9 s measured, and the scripts take about 5 s beside it].
 pub const PICTURE_CAP_SECS: f64 = 5.0;
 
+/// Seamless doors' fade (`crate::seamless`, step 2): real seconds the view takes to go
+/// black before the travel goes out, and to come back once the destination is in
+/// [engineering choice: short enough to read as a cut through the door, long enough not
+/// to flash].
+pub const FADE_OUT_SECS: f64 = 0.2;
+pub const FADE_IN_SECS: f64 = 0.3;
+/// Real seconds after the travel went out at which a fade still waiting shows the
+/// loading picture after all [engineering choice: a place not prepared ahead].
+pub const FADE_PICTURE_AFTER_SECS: f64 = 0.75;
+/// The settle time behind a fade [engineering choice: what was prepared ahead is on the
+/// graphics card already; the fade in covers the rest].
+pub const FADE_SETTLE_SECS: f64 = 0.05;
+
 /// Move the player to another place behind a loading screen; see [`Travel`] for the
 /// fields. Sent by activation and scripts; [`LoadingPlugin`] turns it into the `Travel`.
 #[derive(Message, Clone, Copy, Debug, PartialEq)]
@@ -104,6 +117,32 @@ struct Trip {
     started: f64,
     /// Since when everything has been loaded (real time, frames).
     ready: Option<(f64, u32)>,
+    /// A fade through black rather than the picture (seamless doors), and whether the
+    /// picture came up after all ([`FADE_PICTURE_AFTER_SECS`]).
+    fade: Option<FadeTrip>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FadeTrip {
+    /// Real time the travel went out.
+    sent_at: Option<f64>,
+    picture: bool,
+    /// The trip's destination, for the picture if it comes.
+    to: Option<Destination>,
+    /// What it waited for last, as [`waits_key`] (logged when it changes).
+    waits: Option<u64>,
+}
+
+/// The black veil of a fade (seamless doors). Not a [`LoadingRoot`]: it stays while the
+/// view fades back in, after the trip is over.
+#[derive(Component)]
+struct Veil;
+
+/// The veil's state: fading out since (real time) with the trip, or fading back in since.
+#[derive(Resource, Default)]
+struct VeilState {
+    out_since: Option<f64>,
+    in_since: Option<f64>,
 }
 
 /// Asked for by nvforever for a run that starts in the world (`--play`, not on the main
@@ -240,8 +279,10 @@ impl Plugin for LoadingPlugin {
                 PreUpdate,
                 hold_input.after(bevy::input::InputSystems).after(crate::pad::menu_keys).after(crate::test_aid::real_presses).before(bevy::ui::UiSystems::Focus),
             )
+            .init_resource::<VeilState>()
+            .init_resource::<crate::seamless::TravelKeeps>()
             .add_systems(Update, (send.in_set(PlaySet::Input), (begin_start, begin, hold, look::fit_tip, look::turn_emblem).chain().in_set(PlaySet::Sync)))
-            .add_systems(Last, finish);
+            .add_systems(Last, (finish, veil).chain());
     }
 }
 
@@ -348,6 +389,7 @@ fn begin(
     mut clock: ResMut<Time<Virtual>>,
     mut next: ResMut<NextState<PlayState>>,
     mut art: Art,
+    (seamless, mut veil): (Option<Res<crate::seamless::Seamless>>, ResMut<VeilState>),
 ) {
     let Some(TravelRequest(travel)) = requests.read().last().copied() else { return };
     if let Some(trip) = loading.trip.as_mut() {
@@ -363,14 +405,40 @@ fn begin(
     if loading.start.is_some() {
         // Under the start's screen: the travel goes out behind it, and the start waits
         // for the destination too.
-        loading.trip = Some(Trip { travel, sent: false, frames: SHOW_FRAMES, started: real.elapsed_secs_f64(), ready: None });
+        loading.trip = Some(Trip { travel, sent: false, frames: SHOW_FRAMES, started: real.elapsed_secs_f64(), ready: None, fade: None });
         return;
     }
     let to = (!std::mem::take(&mut loading.generic_next)).then(|| destination(&travel, *location));
-    spawn_screen(&mut commands, &mut loading, &mut art, to.as_ref());
+    let now = real.elapsed_secs_f64();
+    // Seamless doors: a fade through black, for a door's trip and a script's move alike;
+    // the picture only if it takes long (`FADE_PICTURE_AFTER_SECS`).
+    let fade = seamless.is_some_and(|s| s.fade).then_some(FadeTrip { sent_at: None, picture: false, to, waits: None });
+    if fade.is_some() {
+        info!("loading screen: a fade through black (seamless doors) for {}", describe(to.as_ref()));
+        commands.spawn((
+            Veil,
+            Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
+            BackgroundColor(Color::BLACK.with_alpha(0.0)),
+            GlobalZIndex(199),
+            bevy::ui::FocusPolicy::Block,
+        ));
+        *veil = VeilState { out_since: Some(now), in_since: None };
+        loading.shown += 1;
+    } else {
+        spawn_screen(&mut commands, &mut loading, &mut art, to.as_ref());
+    }
     clock.pause();
     next.set(PlayState::Loading);
-    loading.trip = Some(Trip { travel, sent: false, frames: 0, started: real.elapsed_secs_f64(), ready: None });
+    loading.trip = Some(Trip { travel, sent: false, frames: 0, started: now, ready: None, fade });
+}
+
+/// A destination for the log.
+fn describe(to: Option<&Destination>) -> String {
+    match to.map(|t| (t.interior, t.exterior)) {
+        Some((Some(c), _)) => format!("interior {c:08X}"),
+        Some((None, Some((w, c)))) => format!("worldspace {w:08X} {c:?}"),
+        _ => "anywhere".to_string(),
+    }
 }
 
 /// A [`CoverRequest`]: the screen with no trip; an [`Uncover`]: down again.
@@ -472,14 +540,47 @@ fn spawn_screen(commands: &mut Commands, loading: &mut Loading, art: &mut Art, t
 /// Once the screen has been drawn: the travel itself, for physics and the renderer.
 /// Test aid `NVF_PLAY_TEST_LOADING_SHOT=<png>`: save the window as it is then (the
 /// second screen of a run to `<name>-2.png`, and so on).
-fn send(mut loading: ResMut<Loading>, mut travel: MessageWriter<Travel>, mut commands: Commands) {
+#[allow(clippy::type_complexity)]
+fn send(
+    mut loading: ResMut<Loading>,
+    mut travel: MessageWriter<Travel>,
+    mut commands: Commands,
+    real: Res<Time<Real>>,
+    (seamless, d, location, player, phys, mut keeps): (
+        Option<Res<crate::seamless::Seamless>>,
+        Option<Res<PlayWorld>>,
+        Res<Location>,
+        Option<Res<crate::player::Player>>,
+        Option<Res<PhysState>>,
+        ResMut<crate::seamless::TravelKeeps>,
+    ),
+) {
     let shown = loading.shown;
+    let now = real.elapsed_secs_f64();
     let Some(trip) = loading.trip.as_mut().filter(|t| !t.sent) else { return };
     trip.frames += 1;
     if trip.frames < SHOW_FRAMES {
         return;
     }
+    if let Some(f) = trip.fade.as_mut() {
+        // The view goes black first.
+        if now - trip.started < FADE_OUT_SECS {
+            return;
+        }
+        f.sent_at = Some(now);
+    }
     trip.sent = true;
+    // Seamless doors (step 3): whether the place left stays loaded, decided once here
+    // for physics and the renderer (`seamless::TravelKeeps`).
+    let feet = phys.as_deref().and_then(|p| p.player.as_ref()).map(|c| c.feet).or(player.as_deref().map(|p| p.feet));
+    let keep = match (seamless.as_deref().filter(|s| s.keep), d.as_deref(), feet) {
+        (Some(_), Some(d), Some(feet)) => crate::seamless::keeps(d, *location, feet, &trip.travel),
+        _ => false,
+    };
+    keeps.0 = Some((trip.travel, keep));
+    if seamless.is_some_and(|s| s.keep) {
+        info!("seamless doors: the place left {}", if keep { "stays loaded" } else { "is dropped (another worldspace, or the two places overlap)" });
+    }
     travel.write(trip.travel);
     if let Some(path) = std::env::var_os("NVF_PLAY_TEST_LOADING_SHOT").map(std::path::PathBuf::from) {
         let path = match (shown, path.file_stem().and_then(|s| s.to_str())) {
@@ -549,6 +650,47 @@ fn waiting_for(loading: &mut Loading, phys: Option<&PhysState>, scripts: Option<
     wait
 }
 
+/// What a screen waits for as a number, to see it change (FNV-1a over the names).
+fn waits_key(wait: &[&str]) -> u64 {
+    wait.iter().flat_map(|w| w.bytes().chain([0])).fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3))
+}
+
+/// [`settled`] behind a fade: [`FADE_SETTLE_SECS`] and two frames.
+fn fade_settled(ready: &mut Option<(f64, u32)>, ok: bool, now: f64) -> bool {
+    if !ok {
+        *ready = None;
+        return false;
+    }
+    let (since, frames) = ready.get_or_insert((now, 0));
+    *frames += 1;
+    *frames >= 2 && now - *since >= FADE_SETTLE_SECS
+}
+
+/// The fade's veil: black over [`FADE_OUT_SECS`] as a trip begins, back over
+/// [`FADE_IN_SECS`] once it is over, then gone.
+fn veil(mut commands: Commands, real: Res<Time<Real>>, mut state: ResMut<VeilState>, mut veils: Query<(Entity, &mut BackgroundColor), With<Veil>>) {
+    if veils.is_empty() {
+        return;
+    }
+    let now = real.elapsed_secs_f64();
+    let alpha = match (state.out_since, state.in_since) {
+        (_, Some(t)) => 1.0 - ((now - t) / FADE_IN_SECS).clamp(0.0, 1.0),
+        (Some(t), None) => ((now - t) / FADE_OUT_SECS).clamp(0.0, 1.0),
+        (None, None) => 0.0,
+    };
+    let gone = alpha <= 0.0 && state.in_since.is_some();
+    for (e, mut c) in &mut veils {
+        if gone {
+            commands.entity(e).despawn();
+        } else {
+            c.0 = Color::BLACK.with_alpha(alpha as f32);
+        }
+    }
+    if gone {
+        *state = VeilState::default();
+    }
+}
+
 /// Whether `ready` has held for the settle time, counting this frame; `false` resets it.
 fn settled(ready: &mut Option<(f64, u32)>, ok: bool, now: f64) -> bool {
     if !ok {
@@ -573,14 +715,31 @@ fn finish(
     mut clock: ResMut<Time<Virtual>>,
     mut next: ResMut<NextState<PlayState>>,
     roots: Query<Entity, With<LoadingRoot>>,
+    (mut art, mut veil): (Art, ResMut<VeilState>),
 ) {
     let now = real.elapsed_secs_f64();
     let starting = loading.start.is_some();
     if loading.trip.as_ref().is_some_and(|t| t.sent) {
         let wait = waiting_for(&mut loading, phys.as_deref(), None, false, now);
+        // A fade still waiting long after the travel: the picture after all.
+        let late = loading.trip.as_ref().and_then(|t| t.fade).filter(|f| !f.picture && !wait.is_empty() && f.sent_at.is_some_and(|at| now - at >= FADE_PICTURE_AFTER_SECS));
+        if let Some(f) = late {
+            info!("loading screen: the fade still waits for {} after {FADE_PICTURE_AFTER_SECS:.2} s: the picture comes up", wait.join(", "));
+            spawn_screen(&mut commands, &mut loading, &mut art, f.to.as_ref());
+            if let Some(f) = loading.trip.as_mut().and_then(|t| t.fade.as_mut()) {
+                f.picture = true;
+            }
+        }
         let trip = loading.trip.as_mut().expect("trip");
         let waited = now - trip.started;
-        if !settled(&mut trip.ready, wait.is_empty(), now) {
+        if let Some(f) = trip.fade.as_mut().filter(|f| f.waits != Some(waits_key(&wait))) {
+            info!("loading screen: the fade waits for {} ({waited:.2} s)", if wait.is_empty() { "nothing".to_string() } else { wait.join(", ") });
+            f.waits = Some(waits_key(&wait));
+        }
+        let faded = trip.fade.is_some();
+        let ok = wait.is_empty();
+        let done = if faded { fade_settled(&mut trip.ready, ok, now) } else { settled(&mut trip.ready, ok, now) };
+        if !done {
             if !wait.is_empty() && waited >= TIMEOUT_SECS {
                 warn!("loading screen: still waiting for {} after {waited:.0} s; going on without it", wait.join(", "));
             } else {
@@ -592,7 +751,12 @@ fn finish(
             // A travel under the start's screen: the start goes on waiting under it.
             return;
         }
-        info!("loading screen down after {waited:.2} s");
+        if faded {
+            info!("loading screen down after {waited:.2} s (a fade through black: the view comes back over {FADE_IN_SECS:.2} s)");
+            *veil = VeilState { out_since: None, in_since: Some(now) };
+        } else {
+            info!("loading screen down after {waited:.2} s");
+        }
     } else if starting && loading.trip.is_none() {
         let wait = waiting_for(&mut loading, phys.as_deref(), scripts.as_deref(), true, now);
         let hold = loading.start.as_mut().expect("start");

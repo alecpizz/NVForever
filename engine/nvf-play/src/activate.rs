@@ -527,6 +527,7 @@ pub(crate) fn activate(
     script: Option<ResMut<crate::script::ScriptState>>,
     locks: Option<Res<crate::control::ControlLocks>>,
     stats: Option<ResMut<crate::control::LockStats>>,
+    (portals, mut portal): (Option<Res<crate::seamless::PortalDoors>>, MessageWriter<crate::seamless::OpenPortal>),
 ) {
     // A reference queued by a lock just opened, or by the perks' choice list answered
     // with the default action: activated as if E were pressed on it.
@@ -695,6 +696,16 @@ pub(crate) fn activate(
         match e {
             Effect::RefChanged(form_id) => {
                 changed.write(RefChanged::new(form_id));
+            }
+            Effect::Travel { .. } if portals.as_ref().is_some_and(|p| p.0.contains(&t.form_id)) => {
+                // Seamless doors (step 4): the door opens onto its other side, which is
+                // loaded; walking into it is the travel (nvforever `door_portal.rs`). The
+                // player stays where it is until then.
+                if let (Some((cell, pos, rot)), Ok(p)) = (before, sim.world.get(FormId::PLAYER_REF)) {
+                    (p.cell, p.pos, p.rot) = (cell, pos, rot);
+                }
+                info!("activate 0x{:08X} {}: the door opens onto its other side (seamless doors)", t.form_id, t.name);
+                portal.write(crate::seamless::OpenPortal { door: t.form_id });
             }
             Effect::Travel { world, interior, feet, heading_deg } => {
                 let to = match (interior, world) {

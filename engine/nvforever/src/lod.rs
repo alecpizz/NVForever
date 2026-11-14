@@ -266,6 +266,10 @@ pub struct LodState {
     pub gen: Option<GenState>,
     /// Distant tree billboards (treelod.rs).
     pub trees: crate::treelod::DistantTrees,
+    /// Seamless doors (step 3): hidden while the player is in an interior that keeps the
+    /// outdoors loaded, drawn again as it was on coming back out ([`LodState::park`]).
+    /// Whether it was on before, when parked.
+    pub parked: Option<bool>,
     /// Game terrain chunks drawn (and per level, finest first), generated terrain
     /// chunks and object blocks drawn.
     pub chunks: usize,
@@ -393,6 +397,7 @@ impl LodState {
             centre: None,
             chosen: Vec::new(),
             squares: Vec::new(),
+            parked: None,
             terrain: HashMap::new(),
             outgoing: HashMap::new(),
             block_entities: HashMap::new(),
@@ -422,7 +427,28 @@ impl LodState {
     }
 
     /// Turn distant LOD on or off (off: its entities are removed now).
+    /// Seamless doors (step 3): hide what is drawn and stop updating (`true`), or show it
+    /// again and go on where it was (`false`), instead of dropping it and building it
+    /// again ([`LodState::set_enabled`]).
+    pub fn park(&mut self, commands: &mut Commands, park: bool) {
+        let vis = if park { Visibility::Hidden } else { Visibility::Inherited };
+        let all = self.terrain.values().chain(self.outgoing.values()).flat_map(|t| t.entities.iter().copied());
+        let blocks = self.block_entities.values().flat_map(|b| b.entities.iter().copied().chain(b.pieces.iter().map(|p| p.1)));
+        for e in all.chain(blocks).chain(self.trees.entities()) {
+            if let Ok(mut ec) = commands.get_entity(e) {
+                ec.insert(vis);
+            }
+        }
+        if park {
+            self.parked = Some(self.enabled);
+            self.enabled = false;
+        } else if let Some(was) = self.parked.take() {
+            self.enabled = was;
+        }
+    }
+
     pub fn set_enabled(&mut self, commands: &mut Commands, enabled: bool) {
+        self.parked = None;
         self.enabled = enabled;
         self.centre = None;
         for (_, t) in self.terrain.drain().chain(self.outgoing.drain()) {

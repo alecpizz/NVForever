@@ -1492,6 +1492,16 @@ impl Residents {
         self.core.list.iter().filter(|r| r.present && !r.spawned && !r.failed).filter_map(at).collect()
     }
 
+    /// [`Residents::undrawn_in`] for an interior: the residents not drawn whose walkers
+    /// stand in it (seamless doors' read-ahead, `door_ahead.rs`).
+    pub fn undrawn_inside(&self, interior: u32) -> Vec<(u32, u32, bool)> {
+        let at = |r: &Resident| {
+            let w = &self.core.ai.agents.get(&r.actor)?.walker;
+            (w.space == Space::Interior(interior)).then_some((r.actor.0, r.base, r.creature))
+        };
+        self.core.list.iter().filter(|r| r.present && !r.spawned && !r.failed).filter_map(at).collect()
+    }
+
     /// Draw `actor` anew (a resurrected corpse, `resurrect.rs`): its body is taken away and
     /// [`drive`] spawns a fresh one where its walker stands. Whether it is a resident.
     pub fn redraw(&mut self, commands: &mut Commands, actor: u32) -> bool {

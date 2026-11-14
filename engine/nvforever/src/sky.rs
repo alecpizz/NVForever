@@ -1989,6 +1989,42 @@ pub fn update_sky(
     }
 }
 
+/// How a place is lit, for a view of it drawn by a camera of its own (seamless doors'
+/// portal, `door_portal.rs`): ambient, the directional light, fog and the clear colour.
+#[derive(Clone, Debug)]
+pub struct PlaceLook {
+    pub ambient: Color,
+    pub ambient_brightness: f32,
+    pub light: Color,
+    pub illuminance: f32,
+    /// The directional light's rotation (Bevy space).
+    pub light_rotation: Quat,
+    pub fog: DistanceFog,
+    pub clear: Color,
+}
+
+impl SkyState {
+    /// An interior's look, as [`update_sky`] lights it when the player is inside.
+    pub fn interior_look(l: &fnv_world::lighting::CellLighting) -> PlaceLook {
+        let unit = light_unit();
+        let c = |v: [u8; 3]| to_color(v.map(fnv_world::sky::srgb_to_linear));
+        let shown = |v: [u8; 3]| v.map(|b| b as f32 / 255.0);
+        let from = game_to_bevy().rotation * interior_light_from(l.directional_rotation_xy, l.directional_rotation_z);
+        let mut fog = initial_fog();
+        fog.color = c(l.fog_color);
+        fog.falloff = crate::fog::falloff(l.fog_near.max(0.0), l.fog_far, l.fog_power, false, 1.0);
+        PlaceLook {
+            ambient: crate::lights::display_ambient(shown(l.ambient)),
+            ambient_brightness: unit * INTERIOR_AMBIENT_SHARE,
+            light: crate::lights::display_color(shown(l.directional)),
+            illuminance: PI * unit * l.directional_fade.clamp(0.0, 1.0) * INTERIOR_DIRECTIONAL_SHARE,
+            light_rotation: Transform::IDENTITY.looking_to(-from, Vec3::Y).rotation,
+            fog,
+            clear: c(l.fog_color),
+        }
+    }
+}
+
 pub fn initial_fog() -> DistanceFog {
     DistanceFog { color: Color::WHITE, falloff: FogFalloff::Linear { start: 8_000.0, end: 20_000.0 }, ..default() }
 }

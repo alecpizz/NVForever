@@ -36,6 +36,7 @@ pub mod drawn;
 mod loader;
 pub mod prepare;
 pub mod step_lift;
+pub mod warm;
 #[cfg(test)]
 mod tests;
 mod trace;
@@ -145,6 +146,15 @@ pub struct PhysState {
     models: Arc<ModelCache>,
     /// Cells being prepared on the loader thread.
     loader: loader::Loader,
+    /// Cells prepared ahead for load doors' destinations (seamless doors step 1,
+    /// [`warm`]).
+    pub warm: warm::Warm,
+    /// The cells of the place the player left through a door, kept in the world while
+    /// they cannot be reached from where the player is (seamless doors step 3,
+    /// docs/design/seamless-doors.md §4): going back finds them in. Streaming does not
+    /// unload them; the next travel either makes them the player's place again or
+    /// leaves them to streaming.
+    pub kept: BTreeSet<PhysCell>,
     /// Test aid: prepares cells instead of the plugins and archives.
     #[cfg(test)]
     fake: Option<fn(&Job) -> Prepared>,
@@ -217,6 +227,8 @@ impl Default for PhysState {
             persistent_by_grid: HashMap::new(),
             models: Arc::default(),
             loader: loader::Loader::default(),
+            warm: warm::Warm::default(),
+            kept: BTreeSet::new(),
             #[cfg(test)]
             fake: None,
         }
@@ -671,6 +683,7 @@ impl PhysState {
     pub fn set_world(&mut self, d: &PlayData, world: u32) {
         self.worldspace = world;
         self.persistent_by_grid.clear();
+        self.warm.clear();
         let ws = d.index.worldspaces.get(&world);
         if let Some(w) = ws.filter(|w| w.parent.is_some() && w.parent_flags & !PNAM_USE_MAP_DATA != 0) {
             warn!(
@@ -922,7 +935,10 @@ impl PhysState {
             return;
         }
         self.loader.cancel(cell);
-        let p = self.work(ctx, cell)();
+        let p = match self.warm.take(warm::key(self.worldspace, cell)) {
+            Some(p) => p,
+            None => self.work(ctx, cell)(),
+        };
         self.insert(ctx, p);
     }
 
@@ -1626,7 +1642,50 @@ impl PhysState {
         for c in all {
             self.unload(c);
         }
+        self.kept.clear();
         self.space = space;
+    }
+
+    /// A door's travel to `space` that keeps the place left in the world (seamless doors
+    /// step 3, [`PhysState::kept`]): its cells stay loaded and are not streamed out; the
+    /// cells kept from the trip before stay too, now left to streaming (going back
+    /// through the door makes them the player's place again). The actors' characters go,
+    /// as with [`PhysState::reset`]: their walkers place them again where they are drawn.
+    pub fn leave_keeping(&mut self, space: Space) {
+        for id in self.npcs.keys().copied().collect::<Vec<_>>() {
+            self.remove_npc(id);
+        }
+        self.standing.clear();
+        self.loader.clear();
+        let old = std::mem::take(&mut self.kept);
+        self.kept = self.cells.keys().copied().filter(|c| !old.contains(c)).collect();
+        self.space = space;
+    }
+
+    /// Prepare `cells` ahead on the warm thread (seamless doors step 1), those not loaded
+    /// and not prepared or being prepared already. Outdoors they are squares of the
+    /// worldspace being played. Returns how many were asked for now.
+    pub fn warm_cells(&mut self, ctx: &LoadCtx, cells: &[PhysCell], now: f64) -> usize {
+        let mut asked = 0;
+        for &c in cells {
+            let k = warm::key(self.worldspace, c);
+            if self.cells.contains_key(&c) || self.warm.has(k, now) {
+                continue;
+            }
+            let job = with_poses(self.job(ctx.d, c), ctx.sim);
+            let refs = job.refs.iter().copied().collect();
+            #[cfg(test)]
+            if let Some(fake) = self.fake {
+                let job = Job { models: self.fake_models(), ..job };
+                self.warm.ask(k, refs, Box::new(move || fake(&job)), now);
+                asked += 1;
+                continue;
+            }
+            let src = self.source(ctx);
+            self.warm.ask(k, refs, Box::new(move || prepare::cell(&src, &job)), now);
+            asked += 1;
+        }
+        asked
     }
 
     /// Unload what is out of range, request the missing cells around `feet` from the
@@ -1637,10 +1696,17 @@ impl PhysState {
         known.extend(self.loader.pending());
         let plan = cells::plan(self.space, &known, feet);
         for c in plan.unload {
-            self.unload(c);
+            if !self.kept.contains(&c) {
+                self.unload(c);
+            }
         }
         let own = self.cell_at(feet);
         for c in plan.load {
+            if self.warm.ready(warm::key(self.worldspace, c)) {
+                // Prepared ahead for a door: in at once (seamless doors step 1).
+                self.load(ctx, c);
+                continue;
+            }
             if c != own {
                 let work = self.work(ctx, c);
                 if !self.loader.request(c, work) {
@@ -1821,6 +1887,7 @@ fn travel(
     mut phys: ResMut<PhysState>,
     mut player: ResMut<Player>,
     mut location: ResMut<Location>,
+    keeps: Res<crate::seamless::TravelKeeps>,
 ) {
     let Some(t) = msgs.read().last().copied() else { return };
     let to = t.destination(*location);
@@ -1828,7 +1895,13 @@ fn travel(
         Some(id) => Space::Interior(id),
         None => Space::Exterior,
     };
-    phys.reset(space);
+    if keeps.keeps(&t) && to.world == phys.worldspace {
+        // Seamless doors (step 3): the place left stays in the world.
+        phys.leave_keeping(space);
+        info!("physics: the place left stays loaded ({} cells kept)", phys.kept.len());
+    } else {
+        phys.reset(space);
+    }
     if to.world != phys.worldspace {
         info!("physics: worldspace {:08X} -> {:08X} ({})", phys.worldspace, to.world, world_name(&d, to.world));
         phys.set_world(&d, to.world);
@@ -1893,9 +1966,11 @@ fn ref_changed(
     let now = time.elapsed_secs_f64();
     let ctx = LoadCtx { d: &d, sim: &sim, data: data.as_deref() };
     for id in ids {
+        phys.warm.forget_ref(id);
         phys.sync_ref(&ctx, id);
     }
     for id in moved {
+        phys.warm.forget_ref(id);
         phys.repose_ref(&ctx, id, now);
     }
     phys.flush_reposes(&ctx, now);
@@ -1972,6 +2047,7 @@ fn stream(
     let playing = phys.player.is_some();
     let feet = phys.player.as_ref().map_or(player.feet, |c| c.feet);
     let ctx = LoadCtx { d: &d, sim: &sim, data: data.as_deref() };
+    phys.warm.poll(crate::seamless::now_secs());
     // Behind a loading screen a long frame does not show: take more prepared cells.
     let budget = if loading.is_some_and(|l| l.unseen_frames()) { CELLS_BEHIND_LOADING_SCREEN } else { CELLS_PER_FRAME };
     phys.stream(&ctx, feet, budget);

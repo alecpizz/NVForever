@@ -63,6 +63,8 @@ mod dialogue_look;
 mod door_fade;
 mod draw_distance;
 mod doors;
+mod door_ahead;
+mod door_portal;
 mod emittance;
 mod fade;
 mod face_morphs;
@@ -293,6 +295,12 @@ struct Args {
     /// Do not draw distant LOD.
     #[arg(long)]
     no_lod: bool,
+    /// Seamless doors (docs/design/seamless-doors.md; NVForever's own, not the
+    /// original's): `all` (the default when given alone), `off`, or parts of `ahead`
+    /// (prepare a near door's destination), `fade` (a fade through black for the loading
+    /// screen), `keep` (keep the place left loaded), `portal` (see through open doors).
+    #[arg(long, value_name = "PARTS", num_args = 0..=1, default_missing_value = "all")]
+    seamless_doors: Option<String>,
     /// Draw every room of an interior: no room and portal culling (rooms.rs).
     #[arg(long)]
     no_room_culling: bool,
@@ -1557,6 +1565,7 @@ fn main() -> AppExit {
         centre: None,
         waiting: Vec::new(),
         model_overrides: Default::default(),
+        parked: None,
     })
     .insert_resource(world)
     .init_resource::<nvf_assets::actor::ActorParts>()
@@ -1655,6 +1664,15 @@ fn main() -> AppExit {
     if let Some(p) = pending {
         app.insert_resource(p);
     }
+    if let Some(parts) = args.seamless_doors.as_deref() {
+        match nvf_play::seamless::Seamless::parse(parts) {
+            Ok(s) => {
+                info!("seamless doors: {}", s.describe());
+                app.insert_resource(s);
+            }
+            Err(e) => return fail(format!("--seamless-doors: {e}")),
+        }
+    }
     if args.menu {
         app.insert_resource(nvf_play::main_menu::MainMenuStart);
     } else if args.play {
@@ -1672,6 +1690,10 @@ fn main() -> AppExit {
             .add_systems(Update, (worldspace::switch, world::travel, world::cell_image_space).chain().after(nvf_play::PlaySet::Input).before(world::stream))
             .add_plugins(pipeline_gate::PipelineGatePlugin)
             .add_systems(Update, world::loading_gate.after(world::stream))
+            .init_resource::<door_ahead::DoorAhead>()
+            .add_systems(Update, door_ahead::door_ahead.run_if(world::world_not_held).after(world::stream).before(readahead::read_ahead))
+            .add_systems(Last, door_ahead::report)
+            .add_plugins(door_portal::DoorPortalPlugin)
             .configure_sets(Update, nvf_play::PlaySet::Physics.before(world::stream));
         // Animation groups scripts play on objects (object_anims.rs).
         app.add_plugins(object_anims::ObjectAnimsPlugin);

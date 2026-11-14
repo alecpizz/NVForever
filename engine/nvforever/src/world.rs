@@ -208,6 +208,27 @@ pub struct Streamer {
     /// Destroyed references drawn with their destruction stage's replacement model
     /// (`destroyed.rs`): kept here so a cell drawn again draws them so.
     pub model_overrides: HashMap<u32, String>,
+    /// Seamless doors (step 3): the place the player left through a door, its cells kept
+    /// spawned and hidden ([`travel`]); going back draws them again at once.
+    pub parked: Option<Parked>,
+}
+
+/// The cells of a place left through a door, kept spawned (seamless doors step 3,
+/// `nvf_play::seamless`). Hidden; still `RenderCell`s, so what nvf-play draws into them
+/// (dropped items, script-drawn references) stays in step with the simulation.
+pub struct Parked {
+    /// The interior, or `None` for the worldspace's exterior.
+    pub interior: Option<u32>,
+    pub world: u32,
+    /// The cells as they were in `Streamer::loaded`.
+    pub cells: HashMap<(i32, i32), Entity>,
+}
+
+impl Parked {
+    /// Whether this is the place `interior` (or the exterior of `world`).
+    pub fn is(&self, interior: Option<u32>, world: u32) -> bool {
+        self.interior == interior && (interior.is_some() || self.world == world)
+    }
 }
 
 /// `base` drawn with the model `path` (a DMDL replacement model) instead of its own.
@@ -569,42 +590,85 @@ pub struct ReadAhead {
     listed: HashMap<(i32, i32), CellAhead>,
     /// When each cell wanted for drawing was first found not ready (seconds).
     waiting: HashMap<(i32, i32), f64>,
+    /// Cells read ahead for a load door's destination outdoors (seamless doors,
+    /// `door_ahead.rs`): kept whatever the ring around the camera ([`pin_cells`]).
+    pinned: HashSet<(i32, i32)>,
+}
+
+impl ReadAhead {
+    /// Cells pinned for doors, and how many of them are read with their models prepared.
+    pub fn pinned_ready(&self) -> (usize, usize) {
+        (self.pinned.len(), self.pinned.iter().filter(|c| self.listed.get(c).is_some_and(|a| a.ready)).count())
+    }
+}
+
+/// Start reading cell `c` ahead on a worker thread, unless it is drawn, being read or read.
+fn start_cell(world: &WorldData, streamer: &mut Streamer, c: (i32, i32), tile: f32) {
+    let Streamer { ahead, loaded, spawning, hide, .. } = streamer;
+    if loaded.contains_key(&c) || spawning.contains_key(&c) || ahead.listing.contains_key(&c) || ahead.listed.contains_key(&c) {
+        return;
+    }
+    let Some(cell) = world.grid_cell(c) else { return };
+    let mut refs = cell.refs.clone();
+    refs.extend(world.persistent_by_grid.get(&c).into_iter().flatten());
+    let land = cell.land;
+    let around = world.neighbour_lands(c);
+    let (lo, schema, hide) = (world.lo, world.schema, hide.clone());
+    let task = nvf_assets::read_pool::read_pool().spawn(async move {
+        CellAhead {
+            models: cell_models(lo, schema, &refs, &hide),
+            terrain: land.and_then(|l| prepare_terrain(lo, schema, l, c, tile, around)),
+            ready: false,
+        }
+    });
+    ahead.listing.insert(c, task);
+}
+
+/// Seamless doors (step 1): read ahead `cells`, the squares a door's travel arrives
+/// among, and keep them read until other cells are pinned (`door_ahead.rs`). Runs
+/// indoors too, where [`stream`] reads nothing ahead. Their models are prepared as soon
+/// as they are listed, and asked again each call so they keep their place in the cache.
+pub fn pin_cells(world: &WorldData, streamer: &mut Streamer, cells: &[(i32, i32)], tile: f32, models: &mut ModelCtx) {
+    if streamer.ahead.world != world.world {
+        streamer.ahead = ReadAhead { world: world.world, ..default() };
+    }
+    streamer.ahead.pinned = cells.iter().copied().collect();
+    for &c in cells {
+        start_cell(world, streamer, c, tile);
+    }
+    take_listed(&mut streamer.ahead, models);
+    for c in cells {
+        if let Some(a) = streamer.ahead.listed.get_mut(c).filter(|a| !a.ready) {
+            a.ready = models.models_ready(a.models.iter().map(|(p, s)| (p.as_str(), s.as_slice())));
+        }
+    }
 }
 
 /// Start reading ahead the cells within `ring` steps of `centre` that are not drawn or
 /// read yet; take in the readings done and send their models to be prepared; forget
 /// cells far beyond the ring.
 fn read_ahead(world: &WorldData, streamer: &mut Streamer, centre: (i32, i32), ring: i32, tile: f32, models: &mut ModelCtx) {
-    let Streamer { ahead, loaded, spawning, hide, .. } = streamer;
-    if ahead.world != world.world {
-        *ahead = ReadAhead { world: world.world, ..default() };
+    if streamer.ahead.world != world.world {
+        streamer.ahead = ReadAhead { world: world.world, ..default() };
     }
-    let steps = |c: &(i32, i32)| (c.0 - centre.0).abs().max((c.1 - centre.1).abs());
-    ahead.listing.retain(|c, _| steps(c) <= ring + 1);
-    ahead.listed.retain(|c, _| steps(c) <= ring + 1);
-    ahead.waiting.retain(|c, _| steps(c) <= ring);
+    {
+        let ahead = &mut streamer.ahead;
+        let steps = |c: &(i32, i32)| (c.0 - centre.0).abs().max((c.1 - centre.1).abs());
+        let pinned = &ahead.pinned;
+        ahead.listing.retain(|c, _| steps(c) <= ring + 1 || pinned.contains(c));
+        ahead.listed.retain(|c, _| steps(c) <= ring + 1 || pinned.contains(c));
+        ahead.waiting.retain(|c, _| steps(c) <= ring);
+    }
     for dx in -ring..=ring {
         for dy in -ring..=ring {
-            let c = (centre.0 + dx, centre.1 + dy);
-            if loaded.contains_key(&c) || spawning.contains_key(&c) || ahead.listing.contains_key(&c) || ahead.listed.contains_key(&c) {
-                continue;
-            }
-            let Some(cell) = world.grid_cell(c) else { continue };
-            let mut refs = cell.refs.clone();
-            refs.extend(world.persistent_by_grid.get(&c).into_iter().flatten());
-            let land = cell.land;
-            let around = world.neighbour_lands(c);
-            let (lo, schema, hide) = (world.lo, world.schema, hide.clone());
-            let task = nvf_assets::read_pool::read_pool().spawn(async move {
-                CellAhead {
-                    models: cell_models(lo, schema, &refs, &hide),
-                    terrain: land.and_then(|l| prepare_terrain(lo, schema, l, c, tile, around)),
-                    ready: false,
-                }
-            });
-            ahead.listing.insert(c, task);
+            start_cell(world, streamer, (centre.0 + dx, centre.1 + dy), tile);
         }
     }
+    take_listed(&mut streamer.ahead, models);
+}
+
+/// Take in the cells read on worker threads and send their models to be prepared.
+fn take_listed(ahead: &mut ReadAhead, models: &mut ModelCtx) {
     let mut done = Vec::new();
     ahead.listing.retain(|c, task| match check_ready(task) {
         Some(a) => {
@@ -634,7 +698,7 @@ fn cell_ready(world: &WorldData, ahead: &mut ReadAhead, c: (i32, i32), models: &
 
 /// The distinct models (path, alternate textures) the references `refs` draw as static
 /// models (`spawn_model`): what a cell's read-ahead prepares. Runs on a worker thread.
-fn cell_models(lo: &LoadOrder, schema: &EsmSchema, refs: &[u32], hide: &[String]) -> Vec<(String, Vec<AltTexture>)> {
+pub(crate) fn cell_models(lo: &LoadOrder, schema: &EsmSchema, refs: &[u32], hide: &[String]) -> Vec<(String, Vec<AltTexture>)> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for &r in refs {
@@ -889,6 +953,7 @@ pub fn note_other_cameras(
 /// worldspace and an interior; streaming reloads around the camera, which the player
 /// systems have moved to the destination. With `--play` this happens behind a loading
 /// screen, which stays until `Streamer::settled` ([`loading_gate`]).
+#[allow(clippy::too_many_arguments)]
 pub fn travel(
     mut commands: Commands,
     mut msgs: MessageReader<nvf_play::Travel>,
@@ -897,13 +962,34 @@ pub fn travel(
     mut sky: ResMut<crate::sky::SkyState>,
     mut lod: ResMut<crate::lod::LodState>,
     args: Res<crate::Args>,
+    keeps: Option<Res<nvf_play::seamless::TravelKeeps>>,
 ) {
     let Some(t) = msgs.read().last().copied() else { return };
-    for (_, e) in streamer.loaded.drain() {
-        commands.entity(e).despawn();
-    }
+    // `worldspace::switch` has run before: `world.world` is the destination's.
+    let keep = keeps.is_some_and(|k| k.keeps(&t));
+    let back = streamer.parked.take_if(|p| p.is(t.interior, world.world));
     for (_, sp) in streamer.spawning.drain() {
         commands.entity(sp.entity).despawn();
+    }
+    let left: HashMap<(i32, i32), Entity> = streamer.loaded.drain().collect();
+    if keep {
+        // Seamless doors (step 3): the place left stays, hidden; a place parked before
+        // that is not the destination goes.
+        if let Some(old) = streamer.parked.take() {
+            old.cells.into_values().for_each(|e| retire(&mut commands, &mut streamer.dying, e));
+        }
+        for &e in left.values() {
+            commands.entity(e).insert(Visibility::Hidden);
+        }
+        info!("world: the place left stays loaded and hidden ({} cells)", left.len());
+        streamer.parked = Some(Parked { interior: streamer.interior, world: world.world, cells: left });
+    } else {
+        left.into_values().for_each(|e| {
+            commands.entity(e).despawn();
+        });
+        if let Some(old) = streamer.parked.take() {
+            old.cells.into_values().for_each(|e| retire(&mut commands, &mut streamer.dying, e));
+        }
     }
     despawn_all_dying(&mut commands, &mut streamer.dying);
     // The destination appears at once, as after a loading screen.
@@ -911,9 +997,27 @@ pub fn travel(
     streamer.settled = false;
     streamer.interior = t.interior;
     streamer.arrival = t.interior.is_none().then(|| cell_of(t.feet[0], t.feet[1]));
+    let back_out = back.as_ref().is_some_and(|p| p.interior.is_none());
+    if let Some(p) = back {
+        // Going back to the place parked: drawn again as it was.
+        info!("world: back to the place left: {} cells drawn again at once", p.cells.len());
+        for (&c, &e) in &p.cells {
+            commands.entity(e).insert(Visibility::Inherited);
+            streamer.loaded.insert(c, e);
+        }
+        if t.interior.is_some() {
+            streamer.settled = true;
+        }
+    }
     sky.set_interior(t.interior.and_then(|id| fnv_world::lighting::cell_lighting(world.lo, world.schema, id)));
     sky.interior_grade = t.interior.and_then(|id| crate::sky::SkyState::cell_grade(world.lo, world.schema, id));
-    lod.set_enabled(&mut commands, t.interior.is_none() && !args.no_lod);
+    match (keep, t.interior.is_some(), lod.parked.is_some()) {
+        // Seamless doors (step 3): into an interior keeping the outdoors, the distant
+        // land is hidden, not dropped; back out, it is drawn again as it was.
+        (true, true, false) if streamer.parked.as_ref().is_some_and(|p| p.interior.is_none()) => lod.park(&mut commands, true),
+        (_, false, true) if back_out => lod.park(&mut commands, false),
+        _ => lod.set_enabled(&mut commands, t.interior.is_none() && !args.no_lod),
+    }
 }
 
 /// SetCellImageSpace (`fnv_game::game::FormChanges::cell_image_spaces`): an interior

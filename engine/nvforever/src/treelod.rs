@@ -70,6 +70,12 @@ struct DrawnCell {
 }
 
 impl DistantTrees {
+    /// The billboards' entities (hidden while the distant land is parked,
+    /// `LodState::park`).
+    pub fn entities(&self) -> impl Iterator<Item = Entity> + '_ {
+        self.drawn.values().flat_map(|d| d.entities.iter().copied())
+    }
+
     /// Remove every billboard (LOD off, interiors, another worldspace).
     pub fn clear(&mut self, commands: &mut Commands) {
         for (_, d) in self.drawn.drain() {
@@ -186,6 +192,11 @@ pub fn update_distant_trees(
     let dist = lod.settings.trees;
     let lod = &mut *lod;
     let trees = &mut lod.trees;
+    if lod.parked.is_some() {
+        // Hidden with the distant land while an interior keeps the outdoors (seamless
+        // doors): kept as they are.
+        return;
+    }
     if !lod.enabled || dist <= 0.0 || streamer.interior.is_some() {
         if !trees.drawn.is_empty() {
             trees.clear(&mut commands);

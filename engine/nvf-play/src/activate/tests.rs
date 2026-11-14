@@ -175,6 +175,7 @@ fn scene(colliding: &[(u32, f32)]) -> App {
         .init_resource::<HudMessage>()
         .init_resource::<crate::furniture::PlayerSeat>()
         .add_message::<TravelRequest>()
+        .add_message::<crate::seamless::OpenPortal>()
         .add_message::<OpenContainer>()
         .add_message::<RefChanged>()
         .add_message::<crate::furniture::UseFurniture>()
