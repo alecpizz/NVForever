@@ -236,6 +236,10 @@ pub struct SkyState {
     pub interior: Option<fnv_world::lighting::CellLighting>,
     /// Interior mode: the cell's own image space (CELL XCIM) grades the picture.
     pub interior_grade: Option<Cinematic>,
+    /// Seamless doors: the grade before a travel that kept the place left, and how far
+    /// (0..1) the grade has eased from it to the place's own ([`SkyState::cinematic`]), so
+    /// that walking through a door does not change the picture at once.
+    pub grade_ease: Option<(Cinematic, f32)>,
     /// The sun casts shadows (`--sun-shadows` with `--shadow-distance` above 0; the settings page:
     /// [`set_shadows`]).
     pub shadows: bool,
@@ -481,6 +485,7 @@ impl SkyState {
             fog_override: None,
             interior: None,
             interior_grade: None,
+            grade_ease: None,
             shadows: false,
             shadow_distance: DEFAULT_SHADOW_DISTANCE,
             shadow_reach: 1.0,
@@ -836,6 +841,15 @@ impl SkyState {
     /// The image-space grade now: the base image space with the weather's adapters for
     /// the time of day, blended across a weather fade; none indoors yet [interim].
     pub fn cinematic(&self) -> Cinematic {
+        let target = self.cinematic_target();
+        match &self.grade_ease {
+            Some((from, t)) => from.lerp(&target, smoothstep(0.0, 1.0, *t)),
+            None => target,
+        }
+    }
+
+    /// [`SkyState::cinematic`] without the ease from a door's travel.
+    fn cinematic_target(&self) -> Cinematic {
         if !self.grade {
             return Cinematic::default();
         }
@@ -1289,7 +1303,7 @@ fn fallback_dome() -> SkyShape {
 }
 
 /// Transform of a sky mesh around the camera: game space to Bevy, scaled to the dome.
-fn sky_transform(at: Vec3) -> Transform {
+pub(crate) fn sky_transform(at: Vec3) -> Transform {
     Transform { translation: at, rotation: game_to_bevy().rotation, scale: Vec3::splat(DOME_RADIUS / NIF_SKY_RADIUS) }
 }
 
@@ -2094,6 +2108,7 @@ mod tests {
             fog_override: None,
             interior: None,
             interior_grade: None,
+            grade_ease: None,
             shadows: false,
             shadow_distance: DEFAULT_SHADOW_DISTANCE,
             shadow_reach: 1.0,
@@ -2160,6 +2175,7 @@ mod tests {
             fog_override: None,
             interior: None,
             interior_grade: None,
+            grade_ease: None,
             shadows: false,
             shadow_distance: DEFAULT_SHADOW_DISTANCE,
             shadow_reach: 1.0,

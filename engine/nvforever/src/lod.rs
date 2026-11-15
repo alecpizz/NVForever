@@ -427,6 +427,14 @@ impl LodState {
     }
 
     /// Turn distant LOD on or off (off: its entities are removed now).
+    /// Every entity drawn (terrain chunks, object blocks and their pieces, tree
+    /// billboards): seamless doors show them through a door while parked.
+    pub fn entities(&self) -> Vec<Entity> {
+        let all = self.terrain.values().chain(self.outgoing.values()).flat_map(|t| t.entities.iter().copied());
+        let blocks = self.block_entities.values().flat_map(|b| b.entities.iter().copied().chain(b.pieces.iter().map(|p| p.1)));
+        all.chain(blocks).chain(self.trees.entities()).collect()
+    }
+
     /// Seamless doors (step 3): hide what is drawn and stop updating (`true`), or show it
     /// again and go on where it was (`false`), instead of dropping it and building it
     /// again ([`LodState::set_enabled`]).

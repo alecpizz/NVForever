@@ -47,6 +47,12 @@ use std::collections::HashMap;
 /// The render layer the parked place is drawn on while a door shows it.
 pub const PORTAL_LAYER: usize = 20;
 
+/// The layer of the parked place's meshes that lie wholly behind the far door, which the
+/// door's view leaves out (seen from behind the far door's wall, they would stand in the
+/// doorway) [design: in place of an oblique near plane, whose skewed far plane cut away
+/// the saloon's ceiling fan and light shafts from the view].
+pub const PORTAL_BEHIND_LAYER: usize = 21;
+
 /// The player's feet this near the door's plane (game units), inside its width and looking
 /// into it, go through [engineering choice: the player's capsule stops at about its radius
 /// from the closed door's collision].
@@ -74,6 +80,9 @@ pub struct PortalMaterial {
     #[texture(0)]
     #[sampler(1)]
     pub image: Handle<Image>,
+    /// x = 1: drawn flat magenta (the probe test aid's mask of the doorway).
+    #[uniform(2)]
+    pub debug: Vec4,
 }
 
 impl Material for PortalMaterial {
@@ -157,8 +166,10 @@ struct Open {
     from: DoorFrame,
     to: DoorFrame,
     map: Affine3A,
-    /// The doorway: half its width, its bottom and top (local to `from`).
+    /// The doorway: half its width and height, its centre (game space).
     half_width: f32,
+    half_height: f32,
+    quad_centre: Vec3,
     camera: Entity,
     sun: Entity,
     quad: Entity,
@@ -168,17 +179,57 @@ struct Open {
 pub struct Portal {
     open: Option<Open>,
     image: Option<Handle<Image>>,
-    /// Layers of the parked place's entities before the portal took them.
-    saved: HashMap<Entity, Option<RenderLayers>>,
+    /// Layers of the parked place's entities before the portal took them, and the ones the
+    /// portal gave them.
+    saved: HashMap<Entity, (Option<RenderLayers>, RenderLayers)>,
     /// Door models hidden while open, with their visibility before.
     hidden: Vec<(Entity, Visibility)>,
     /// The outdoors' look, last seen outdoors (for a view out of an interior).
     outside: Option<PlaceLook>,
+    /// The sky's parts drawn outdoors then: the dome and the cloud layers showing.
+    outside_sky: Vec<Entity>,
+    /// Copies of them drawn in the door's view out of an interior ([`PortalSky`]).
+    sky: Vec<Entity>,
     /// Open this door (the one just come out of) once the travel is in.
     reopen: Option<u32>,
     last_cross: f64,
     opened: usize,
     crossings: usize,
+    /// Test aid `NVF_PLAY_TEST_PORTAL_PROBE` ([`probe`]).
+    probe: Probe,
+}
+
+/// Test aid `NVF_PLAY_TEST_PORTAL_PROBE=<dir>[:<count>]`: for the first `count` (1)
+/// doors the player opens and walks up to, a screenshot through the doorway once the
+/// player is within [`PROBE_DISTANCE`] of it (`probe<n>-a.png`), the crossing forced two
+/// frames later, and screenshots 3 and 30 frames after it (`-b`, `-c`); the doorway's
+/// rectangle on screen is logged. A frame through the door and the first after it should
+/// be the same picture. Not a game behaviour.
+#[derive(Default)]
+struct Probe {
+    dir: Option<std::path::PathBuf>,
+    left: u32,
+    n: u32,
+    /// The frame the mask was asked for; screenshot A; the frame the crossing went.
+    mask_at: Option<u32>,
+    shot_at: Option<u32>,
+    crossed_at: Option<u32>,
+    /// Hold the player's own crossing while probing; force it.
+    hold: bool,
+    force: bool,
+}
+
+/// The probe's screenshot through the doorway is taken this near it (game units).
+const PROBE_DISTANCE: f32 = CROSS_DISTANCE + 12.0;
+
+fn probe_from_env() -> Probe {
+    let Ok(v) = std::env::var("NVF_PLAY_TEST_PORTAL_PROBE") else { return Probe::default() };
+    let (dir, count) = match v.rsplit_once(':').filter(|(_, c)| !c.is_empty() && c.chars().all(|ch| ch.is_ascii_digit())) {
+        Some((d, c)) => (d.to_string(), c.parse().unwrap_or(1)),
+        None => (v.clone(), 1),
+    };
+    info!("test aid NVF_PLAY_TEST_PORTAL_PROBE: {count} door(s) probed into {dir}");
+    Probe { dir: Some(dir.into()), left: count, ..default() }
 }
 
 pub struct DoorPortalPlugin;
@@ -187,12 +238,12 @@ impl Plugin for DoorPortalPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "door_portal.wesl");
         app.add_plugins(MaterialPlugin::<PortalMaterial>::default())
-            .init_resource::<Portal>()
-            .add_systems(Update, (ready_doors, open_portal, cross).chain().in_set(nvf_play::PlaySet::Input))
-            .add_systems(Update, remember_outside.after(crate::world::stream))
-            .add_systems(PostUpdate, adopt_new.before(bevy::camera::visibility::VisibilitySystems::CheckVisibility))
+            .insert_resource(Portal { probe: probe_from_env(), ..default() })
+            .add_systems(Update, (ready_doors, open_portal, probe, cross).chain().in_set(nvf_play::PlaySet::Input))
+            .add_systems(Update, (remember_outside, ease_grade).after(crate::world::stream))
+            .add_systems(PostUpdate, (adopt_new, reassert).chain().before(bevy::camera::visibility::VisibilitySystems::CheckVisibility))
             .add_systems(PostUpdate, drive.after(bevy::transform::TransformSystems::Propagate))
-            .add_systems(Last, report);
+            .add_systems(Last, (report, debug_refs));
     }
 }
 
@@ -289,7 +340,11 @@ fn open_portal(
     visuals: Query<(Entity, &RefVisual, &Visibility, &GlobalTransform, Option<&bevy::camera::primitives::Aabb>)>,
     children: Query<&Children>,
     layers: Query<Option<&RenderLayers>>,
+    room_hidden: Query<(), With<crate::rooms::RoomHidden>>,
+    bounds: Query<(&GlobalTransform, &bevy::camera::primitives::Aabb)>,
+    (lod, sky_parts): (Res<crate::lod::LodState>, Query<(&Mesh3d, &MeshMaterial3d<crate::sky::SkyMaterial>, &Transform), Without<PortalSky>>),
     (mut images, mut meshes, mut materials, window): (ResMut<Assets<Image>>, ResMut<Assets<Mesh>>, ResMut<Assets<PortalMaterial>>, Query<&Window, With<PrimaryWindow>>),
+    (sky, main): (Res<SkyState>, Query<(Option<&crate::ssao::AmbientOcclusion>, Option<&bevy::light::ShadowFilteringMethod>), crate::fly::WorldCamera>),
 ) {
     let mut wanted = asked.read().last().map(|o| o.door);
     if wanted.is_none() {
@@ -332,14 +387,17 @@ fn open_portal(
     let roots: Vec<Entity> = streamer.parked.as_ref().map(|p| p.cells.values().copied().collect()).unwrap_or_default();
     let mut stack = roots.clone();
     while let Some(e) = stack.pop() {
-        let before = layers.get(e).ok().flatten().cloned();
+        let culled = room_hidden.contains(e);
+        let before = if culled { None } else { layers.get(e).ok().flatten().cloned() };
+        if culled {
+            // Hidden by an interior's room culling when it was left: drawn through the door.
+            commands.entity(e).remove::<crate::rooms::RoomHidden>();
+        }
         let world_layer = before.as_ref().is_none_or(|l| l.intersects(&RenderLayers::layer(0)));
         if world_layer {
-            let new = match &before {
-                Some(l) => l.clone().without(0).with(PORTAL_LAYER),
-                None => RenderLayers::layer(PORTAL_LAYER),
-            };
-            portal.saved.insert(e, before);
+            let behind = bounds.get(e).is_ok_and(|(gt, aabb)| wholly_behind(&to_frame, gt, aabb));
+            let new = portal_layers(before.as_ref(), behind);
+            portal.saved.insert(e, (before, new.clone()));
             commands.entity(e).insert(new);
         }
         if let Ok(c) = children.get(e) {
@@ -348,6 +406,37 @@ fn open_portal(
     }
     for &e in &roots {
         commands.entity(e).insert(Visibility::Inherited);
+    }
+    // Out of an interior: the distant land, kept hidden (`LodState::park`), and the sky.
+    if to.interior.is_none() && streamer.interior.is_some() {
+        let mut stack = lod.entities();
+        for &e in &stack {
+            portal.hidden.push((e, Visibility::Hidden));
+            commands.entity(e).insert(Visibility::Inherited);
+        }
+        while let Some(e) = stack.pop() {
+            let before = layers.get(e).ok().flatten().cloned();
+            if before.as_ref().is_none_or(|l| l.intersects(&RenderLayers::layer(0))) {
+                let new = portal_layers(before.as_ref(), false);
+                portal.saved.insert(e, (before, new.clone()));
+                commands.entity(e).insert(new);
+            }
+            if let Ok(c) = children.get(e) {
+                stack.extend(c.iter());
+            }
+        }
+        let parts: Vec<Entity> = portal.outside_sky.clone();
+        for e in parts {
+            let Ok((mesh, material, t)) = sky_parts.get(e) else { continue };
+            let mut t = *t;
+            if t.scale.x <= 0.0 {
+                t = crate::sky::sky_transform(t.translation);
+            }
+            let copy = commands
+                .spawn((Name::new("Door portal sky"), PortalSky, Mesh3d(mesh.0.clone()), MeshMaterial3d(material.0.clone()), t, RenderLayers::layer(PORTAL_LAYER), bevy::light::NotShadowCaster, bevy::light::NotShadowReceiver))
+                .id();
+            portal.sky.push(copy);
+        }
     }
     // The texture, the camera and its light.
     let size = window.single().map(|w| Extent3d { width: w.physical_width().max(1), height: w.physical_height().max(1), depth_or_array_layers: 1 }).unwrap_or(Extent3d { width: 1280, height: 720, depth_or_array_layers: 1 });
@@ -381,7 +470,7 @@ fn open_portal(
             Camera { order: -2, clear_color: ClearColorConfig::Custom(look.clear), ..default() },
             RenderTarget::Image(image.clone().into()),
             Hdr,
-            Tonemapping::Linear,
+            Tonemapping::None,
             Msaa::Off,
             Projection::Perspective(PerspectiveProjection::default()),
             look.fog.clone(),
@@ -390,12 +479,17 @@ fn open_portal(
             PortalCamera,
         ))
         .id();
+    // The main view's shadow filter, so its shadows look the same (`graphics.rs`).
+    if let Ok((_, Some(f))) = main.single() {
+        commands.entity(camera).insert(*f);
+    }
     let sun = commands
         .spawn((
             Name::new("Door portal light"),
-            DirectionalLight { color: look.light, illuminance: look.illuminance, shadow_maps_enabled: false, ..default() },
+            DirectionalLight { color: look.light, illuminance: look.illuminance, shadow_maps_enabled: sky.shadows, ..default() },
             Transform::from_rotation(look.light_rotation),
             RenderLayers::layer(PORTAL_LAYER),
+            crate::sky::shadow_cascades(sky.shadow_distance, sky.shadow_reach, sky.shadow_cascades),
         ))
         .id();
     // The doorway: a quad on the door's front, facing out.
@@ -408,7 +502,7 @@ fn open_portal(
         .spawn((
             Name::new("Door portal"),
             Mesh3d(meshes.add(Rectangle::new(w, h))),
-            MeshMaterial3d(materials.add(PortalMaterial { image })),
+            MeshMaterial3d(materials.add(PortalMaterial { image, debug: Vec4::ZERO })),
             Transform { translation: game_to_bevy().transform_point(centre), rotation: Quat::from_mat3(&Mat3::from_cols(bx, by, bz)), ..default() },
         ))
         .id();
@@ -423,7 +517,7 @@ fn open_portal(
         portal.saved.len()
     );
     portal.opened += 1;
-    portal.open = Some(Open { door: d, back, from, to: to_frame, map, half_width: (x1 - x0) / 2.0, camera, sun, quad });
+    portal.open = Some(Open { door: d, back, from, to: to_frame, map, half_width: (x1 - x0) / 2.0, half_height: (z1 - z0) / 2.0, quad_centre: centre, camera, sun, quad });
 }
 
 /// While a door is open, meshes and lights spawned into the parked place since (an
@@ -457,14 +551,47 @@ fn adopt_new(
         }
         if inside {
             let before = layers.cloned();
-            let new = match &before {
-                Some(l) => l.clone().without(0).with(PORTAL_LAYER),
-                None => RenderLayers::layer(PORTAL_LAYER),
-            };
-            portal.saved.insert(e, before);
+            let new = portal_layers(before.as_ref(), false);
+            portal.saved.insert(e, (before, new.clone()));
             commands.entity(e).insert(new);
         }
     }
+}
+
+/// While a door is open, the place behind it stays on the portal's layer: another system
+/// that sets or takes away render layers (an interior's room culling) is undone.
+fn reassert(mut commands: Commands, portal: Res<Portal>, layers: Query<Option<&RenderLayers>>) {
+    if portal.open.is_none() {
+        return;
+    }
+    for (&e, (_, want)) in &portal.saved {
+        if let Ok(now) = layers.get(e) {
+            if now != Some(want) {
+                commands.entity(e).insert(want.clone());
+            }
+        }
+    }
+}
+
+/// The layers an entity of the parked place has while a door shows it: the portal's in
+/// place of the world's, or, `behind` the far door, one the door's view leaves out.
+fn portal_layers(before: Option<&RenderLayers>, behind: bool) -> RenderLayers {
+    let layer = if behind { PORTAL_BEHIND_LAYER } else { PORTAL_LAYER };
+    match before {
+        Some(l) => l.clone().without(0).with(layer),
+        None => RenderLayers::layer(layer),
+    }
+}
+
+/// Whether a mesh's bounds lie wholly on the far side of a door from its out side
+/// (behind its wall), by more than a couple of units.
+fn wholly_behind(frame: &DoorFrame, gt: &GlobalTransform, aabb: &bevy::camera::primitives::Aabb) -> bool {
+    let (c, h) = (Vec3::from(aabb.center), Vec3::from(aabb.half_extents));
+    (0..8).all(|i| {
+        let s = Vec3::new(if i & 1 == 0 { -1.0 } else { 1.0 }, if i & 2 == 0 { -1.0 } else { 1.0 }, if i & 4 == 0 { -1.0 } else { 1.0 });
+        let p = bevy_to_game(gt.transform_point(c + h * s));
+        (p - frame.origin).dot(frame.out) < -2.0
+    })
 }
 
 /// Close the open door: its camera, light and quad go, the doors' models come back, the
@@ -482,14 +609,17 @@ fn close(commands: &mut Commands, portal: &mut Portal, streamer: &Streamer) {
     }
 }
 
-/// The door models and the parked place's layers as they were.
+/// The door models and the parked place's layers as they were; the sky's copies go.
 fn restore(commands: &mut Commands, portal: &mut Portal) {
+    for e in portal.sky.drain(..) {
+        commands.entity(e).despawn();
+    }
     for (e, v) in portal.hidden.drain(..) {
         if let Ok(mut ec) = commands.get_entity(e) {
             ec.insert(v);
         }
     }
-    for (e, l) in portal.saved.drain() {
+    for (e, (l, _)) in portal.saved.drain() {
         if let Ok(mut ec) = commands.get_entity(e) {
             match l {
                 Some(l) => ec.insert(l),
@@ -532,9 +662,12 @@ fn cross(
     let playing = state.is_none_or(|s| *s.get() == nvf_play::PlayState::Playing);
     let look = Vec3::from_array(player.look_dir());
     let into = look.truncate().normalize_or_zero().dot((-o.from.out).truncate()) > 0.3;
-    if !playing || now - portal.last_cross < CROSS_COOLDOWN || l.y > CROSS_DISTANCE || l.y < -CROSS_DISTANCE || l.x.abs() > o.half_width || !into {
+    let half_width = o.half_width;
+    let forced = std::mem::take(&mut portal.probe.force);
+    if !forced && (portal.probe.hold || !playing || now - portal.last_cross < CROSS_COOLDOWN || l.y > CROSS_DISTANCE || l.y < -CROSS_DISTANCE || l.x.abs() > half_width || !into) {
         return;
     }
+    let o = portal.open.as_ref().expect("open");
     // Through: the travel puts the player where the portal camera stood.
     let at = o.map.transform_point3(feet);
     let yaw = map_yaw(&o.map);
@@ -573,6 +706,106 @@ fn cross(
     portal.reopen = Some(back);
 }
 
+/// The probe test aid ([`Probe`]).
+#[allow(clippy::too_many_arguments)]
+fn probe(
+    mut commands: Commands,
+    mut portal: ResMut<Portal>,
+    mut materials: ResMut<Assets<PortalMaterial>>,
+    quads: Query<&MeshMaterial3d<PortalMaterial>>,
+    frames: Res<bevy::diagnostic::FrameCount>,
+    player: Option<Res<nvf_play::player::Player>>,
+    main: Query<(&Camera, &GlobalTransform), crate::fly::WorldCamera>,
+) {
+    let Some(dir) = portal.probe.dir.clone() else { return };
+    let frame = frames.0;
+    let shot = |commands: &mut Commands, name: String| {
+        let path = dir.join(name);
+        info!("test aid: portal probe screenshot {}", path.display());
+        commands.spawn(bevy::render::view::screenshot::Screenshot::primary_window()).observe(bevy::render::view::screenshot::save_to_disk(path));
+    };
+    let n = portal.probe.n;
+    if let Some(at) = portal.probe.crossed_at {
+        if frame == at + 3 {
+            shot(&mut commands, format!("probe{n}-b.png"));
+        } else if frame >= at + 30 {
+            shot(&mut commands, format!("probe{n}-c.png"));
+            portal.probe.crossed_at = None;
+            portal.probe.n += 1;
+        }
+        return;
+    }
+    let set_mask = |materials: &mut Assets<PortalMaterial>, portal: &Portal, on: bool| {
+        if let Some(mut m) = portal.open.as_ref().and_then(|o| quads.get(o.quad).ok()).and_then(|h| materials.get_mut(&h.0)) {
+            m.debug = Vec4::new(if on { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0);
+        }
+    };
+    if let Some(at) = portal.probe.mask_at {
+        if frame >= at + 2 {
+            set_mask(&mut materials, &portal, false);
+            portal.probe.mask_at = None;
+            portal.probe.shot_at = Some(frame + 2);
+        }
+        return;
+    }
+    if let Some(at) = portal.probe.shot_at {
+        if frame == at {
+            shot(&mut commands, format!("probe{n}-a.png"));
+            return;
+        }
+        if frame >= at + 3 {
+            portal.probe.force = true;
+            portal.probe.hold = false;
+            portal.probe.shot_at = None;
+            portal.probe.crossed_at = Some(frame);
+        }
+        return;
+    }
+    let (Some(o), Some(player)) = (portal.open.as_ref(), player) else { return };
+    if portal.probe.left == 0 {
+        return;
+    }
+    let l = o.from.local(Vec3::from_array(player.feet));
+    let look = Vec3::from_array(player.look_dir());
+    let into = look.truncate().normalize_or_zero().dot((-o.from.out).truncate()) > 0.5;
+    if l.y > PROBE_DISTANCE || l.y < 0.0 || l.x.abs() > o.half_width || !into {
+        return;
+    }
+    // The doorway on screen.
+    if let Ok((cam, gt)) = main.single() {
+        let (c, r, u) = (o.quad_centre, o.from.right(), Vec3::Z);
+        let (w, h) = (o.half_width, o.half_height);
+        let corners = [c - r * w - u * h, c + r * w - u * h, c - r * w + u * h, c + r * w + u * h];
+        let size = cam.logical_viewport_size().unwrap_or(Vec2::new(1280.0, 800.0));
+        let pts: Vec<Vec2> = corners
+            .iter()
+            .filter_map(|p| cam.world_to_ndc(gt, game_to_bevy().transform_point(*p)))
+            .map(|n| Vec2::new((n.x.clamp(-1.0, 1.0) + 1.0) / 2.0 * size.x, (1.0 - n.y.clamp(-1.0, 1.0)) / 2.0 * size.y))
+            .collect();
+        if pts.len() == 4 {
+            let (lo, hi) = pts.iter().fold((Vec2::splat(f32::MAX), Vec2::splat(f32::MIN)), |(a, b), p| (a.min(*p), b.max(*p)));
+            info!("test aid: portal probe {n}: door {:08X}, doorway on screen {:.0} {:.0} {:.0} {:.0}", o.door.door, lo.x, lo.y, hi.x, hi.y);
+        }
+    }
+    shot(&mut commands, format!("probe{n}-mask.png"));
+    set_mask(&mut materials, &portal, true);
+    portal.probe.left -= 1;
+    portal.probe.hold = true;
+    portal.probe.mask_at = Some(frame);
+}
+
+/// Seconds the grade takes to ease from the place left to the place come into
+/// [engineering choice: about the eye adaptation's own pace].
+pub const GRADE_EASE_SECS: f32 = 1.5;
+
+fn ease_grade(time: Res<Time<Real>>, mut sky: ResMut<SkyState>) {
+    let Some((_, t)) = sky.grade_ease.as_mut() else { return };
+    *t += time.delta_secs() / GRADE_EASE_SECS;
+    if *t >= 1.0 {
+        sky.grade_ease = None;
+    }
+}
+
 /// Outdoors: remember how the outdoors is lit, for a view out from an interior.
 #[allow(clippy::type_complexity)]
 fn remember_outside(
@@ -581,7 +814,7 @@ fn remember_outside(
     main: Query<&DistanceFog, crate::fly::WorldCamera>,
     sun: Query<(&DirectionalLight, &GlobalTransform), With<crate::sky::Sun>>,
     ambient: Res<GlobalAmbientLight>,
-    clear: Res<ClearColor>,
+    sky_parts: Query<(Entity, &Visibility), Or<(With<crate::sky::SkyDome>, With<crate::sky::CloudLayer>)>>,
     mut frames: Local<u32>,
 ) {
     *frames += 1;
@@ -589,14 +822,17 @@ fn remember_outside(
         return;
     }
     let (Ok(fog), Ok((light, t))) = (main.single(), sun.single()) else { return };
+    portal.outside_sky = sky_parts.iter().filter(|(_, v)| **v != Visibility::Hidden).map(|(e, _)| e).collect();
     portal.outside = Some(PlaceLook {
         ambient: ambient.color,
         ambient_brightness: ambient.brightness,
         light: light.color,
         illuminance: light.illuminance,
         light_rotation: t.compute_transform().rotation,
+        // Past everything drawn the outdoors fade into their fog: the sky is not drawn in
+        // the door's view, so its background is the fog's colour at the horizon.
         fog: fog.clone(),
-        clear: clear.0,
+        clear: fog.color.with_alpha(1.0),
     });
 }
 
@@ -606,12 +842,17 @@ fn drive(
     portal: Res<Portal>,
     main: Query<(&GlobalTransform, &Projection), (crate::fly::WorldCamera, Without<PortalCamera>)>,
     mut cams: Query<(&mut Transform, &mut GlobalTransform, &mut Projection), With<PortalCamera>>,
+    mut skies: Query<(&mut Transform, &mut GlobalTransform), (With<PortalSky>, Without<PortalCamera>, Without<crate::fly::FlyCam>)>,
 ) {
     let Some(o) = portal.open.as_ref() else { return };
     let (Ok((main_gt, Projection::Perspective(p))), Ok((mut t, mut gt, mut proj))) = (main.single(), cams.get_mut(o.camera)) else { return };
     let m = to_bevy(&o.map) * main_gt.to_matrix();
     *t = Transform::from_matrix(m);
     *gt = GlobalTransform::from(*t);
+    for (mut st, mut sgt) in &mut skies {
+        st.translation = t.translation;
+        *sgt = GlobalTransform::from(*st);
+    }
     // Keep only what lies on the room side of the far door's plane.
     let rot = game_to_bevy().rotation;
     let n = rot * o.to.out;
@@ -619,18 +860,52 @@ fn drive(
     let view_from_world = m.inverse();
     let n_view = view_from_world.transform_vector3(n).normalize();
     let p_view = view_from_world.transform_point3(on_plane);
-    let w = -n_view.dot(p_view);
-    // An oblique near plane needs the camera behind it [documented: Lengyel 2005, the
-    // method bevy_camera's PerspectiveProjection follows]: once the map has put the
-    // camera past the far door (the player within SHIFT of this one), what lies behind
-    // that door is behind the camera too, and the plain near plane is kept.
-    let near_clip_plane = if w < -p.near { n_view.extend(w) } else { Vec4::new(0.0, 0.0, -1.0, -p.near) };
-    *proj = Projection::Perspective(PerspectiveProjection { near_clip_plane, ..p.clone() });
+    let _ = (n_view, p_view);
+    // No oblique near plane: what lies behind the far door is left out by layer
+    // ([`PORTAL_BEHIND_LAYER`]).
+    *proj = Projection::Perspective(PerspectiveProjection { near_clip_plane: Vec4::new(0.0, 0.0, -1.0, -p.near), ..p.clone() });
 }
+
+/// A copy of a part of the sky (dome, cloud layer) for the door's view out of an
+/// interior: indoors the sky itself is not drawn. Its colours stay as the sky was last
+/// seen outdoors [design: the sky's material is updated only outdoors].
+#[derive(Component)]
+pub struct PortalSky;
 
 /// Marks the portal's camera.
 #[derive(Component)]
 pub struct PortalCamera;
+
+/// Diagnostic `NVF_PORTAL_DEBUG_REFS=<hex>,...`: 60 frames after a door opens, log every
+/// entity of those references: its layers and visibility.
+#[allow(clippy::type_complexity)]
+fn debug_refs(
+    portal: Res<Portal>,
+    mut since: Local<(Option<Entity>, u32)>,
+    q: Query<(Entity, &RefVisual, Option<&RenderLayers>, &Visibility, &InheritedVisibility, &ViewVisibility, Has<Mesh3d>, Option<&ChildOf>)>,
+) {
+    static REFS: std::sync::OnceLock<Vec<u32>> = std::sync::OnceLock::new();
+    let refs = REFS.get_or_init(|| {
+        std::env::var("NVF_PORTAL_DEBUG_REFS").map(|v| v.split(',').filter_map(|h| u32::from_str_radix(h.trim().trim_start_matches("0x"), 16).ok()).collect()).unwrap_or_default()
+    });
+    if refs.is_empty() {
+        return;
+    }
+    let cam = portal.open.as_ref().map(|o| o.camera);
+    if cam != since.0 {
+        *since = (cam, 0);
+        return;
+    }
+    since.1 += 1;
+    if cam.is_none() || since.1 != 60 {
+        return;
+    }
+    for (e, r, l, v, iv, vv, mesh, parent) in &q {
+        if refs.contains(&r.0) {
+            info!("portal debug: {:08X} entity {e:?} mesh {mesh} layers {:?} visibility {:?} inherited {} view {} parent {:?}", r.0, l, v, iv.get(), vv.get(), parent.map(|p| p.parent()));
+        }
+    }
+}
 
 fn report(mut exit: MessageReader<AppExit>, seamless: Option<Res<Seamless>>, portal: Res<Portal>) {
     if exit.read().next().is_none() || !seamless.is_some_and(|s| s.portal) {

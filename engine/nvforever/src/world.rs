@@ -1009,6 +1009,10 @@ pub fn travel(
             streamer.settled = true;
         }
     }
+    if keep {
+        // Seamless doors: the grade eases from the place left's (`door_portal.rs`).
+        sky.grade_ease = Some((sky.cinematic(), 0.0));
+    }
     sky.set_interior(t.interior.and_then(|id| fnv_world::lighting::cell_lighting(world.lo, world.schema, id)));
     sky.interior_grade = t.interior.and_then(|id| crate::sky::SkyState::cell_grade(world.lo, world.schema, id));
     match (keep, t.interior.is_some(), lod.parked.is_some()) {

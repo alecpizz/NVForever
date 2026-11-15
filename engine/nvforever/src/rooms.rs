@@ -365,14 +365,25 @@ fn assign(
     mut commands: Commands,
     rooms: Res<Rooms>,
     new: Query<(Entity, &DrawClass, &GlobalTransform, &Aabb), (With<RefVisual>, Without<InRooms>, Without<Unroomed>)>,
+    streamer: Option<Res<crate::world::Streamer>>,
+    parents: Query<&ChildOf>,
 ) {
     if rooms.rooms.is_empty() && rooms.planes.is_empty() {
         return;
     }
+    // Seamless doors keep the place left drawn (hidden, or seen through a door): only the
+    // interior's own meshes are in its rooms.
+    let cell = streamer.as_ref().filter(|s| s.parked.is_some()).and_then(|s| s.loaded.values().next().copied());
     for (e, class, gt, aabb) in &new {
         if !matches!(class, DrawClass::Object | DrawClass::Item) {
             commands.entity(e).insert(Unroomed);
             continue;
+        }
+        if let Some(cell) = cell {
+            if !parents.iter_ancestors(e).any(|a| a == cell) {
+                commands.entity(e).insert(Unroomed);
+                continue;
+            }
         }
         let (min, max) = game_bounds(gt, aabb);
         let in_rooms: Vec<usize> = rooms.rooms.iter().enumerate().filter(|(_, r)| r.touches(min, max, MARGIN)).map(|(i, _)| i).collect();
