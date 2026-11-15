@@ -211,7 +211,21 @@ pub struct Portal {
     /// The door swinging open ([`swing`]): its meshes with their transforms closed, the
     /// hinge and the turn's sign, and since when (real seconds).
     swing: Option<Swing>,
+    /// The door dissolving as it opens ([`dissolve`]): its meshes and since when.
+    dissolving: Option<(Vec<Entity>, f64, bool)>,
+    /// The doorway's quad, hidden until the view is drawn, since when and frames since.
+    showing: Option<(Entity, f64, u32)>,
 }
+
+/// How long an opened door takes to dissolve (real seconds) [engineering choice: as an
+/// actor fading at a door, quicker].
+const DISSOLVE_SECS: f64 = 0.3;
+
+/// A door opened is shown open only once its view has been drawn this long and this many
+/// frames (its first frames show an empty texture while its pipelines compile)
+/// [engineering choice: about what the saloon's first open took].
+const SHOW_AFTER_SECS: f64 = 0.35;
+const SHOW_AFTER_FRAMES: u32 = 10;
 
 struct Swing {
     meshes: Vec<(Entity, Transform)>,
@@ -281,7 +295,7 @@ impl Plugin for DoorPortalPlugin {
             .init_resource::<crate::imagespace::PortalGradeSource>()
             .add_systems(PostUpdate, (drive, doorway_grade).chain().after(bevy::transform::TransformSystems::Propagate))
             .add_systems(Last, (report, debug_refs))
-            .add_systems(Update, (give_back.after(cross), swing.after(cross)));
+            .add_systems(Update, (give_back.after(cross), swing.after(cross), (show_when_drawn, dissolve).chain().after(cross)));
     }
 }
 
@@ -522,13 +536,22 @@ fn open_portal(
     }
     // The far door's model is hidden; this one swings open into its doorway (or is hidden).
     let mut swinging = Vec::new();
+    let mut dissolving = Vec::new();
     for (e, v, vis, _, _) in &visuals {
-        if v.0 == back.door || (v.0 == door && !room) {
+        if v.0 == back.door {
             portal.hidden.push((e, *vis));
             commands.entity(e).insert(Visibility::Hidden);
+        } else if v.0 == door && !room {
+            // Dissolves, then hidden ([`dissolve`]).
+            portal.hidden.push((e, *vis));
+            dissolving.push(e);
         } else if v.0 == door {
             swinging.push(e);
         }
+    }
+    if !dissolving.is_empty() {
+        // Starts once the doorway is shown ([`show_when_drawn`]).
+        portal.dissolving = Some((dissolving, f64::INFINITY, false));
     }
     if !swinging.is_empty() {
         let meshes: Vec<(Entity, Transform)> = swinging.iter().filter_map(|&e| local.get(e).ok().map(|t| (e, *t))).collect();
@@ -696,8 +719,10 @@ fn open_portal(
             Mesh3d(meshes.add(Rectangle::new(w, h))),
             MeshMaterial3d(materials.add(PortalMaterial { image, debug: Vec4::ZERO, recess: (game_to_bevy().rotation * -from.out).extend(recess) })),
             Transform { translation: game_to_bevy().transform_point(centre), rotation: Quat::from_mat3(&Mat3::from_cols(bx, by, bz)), ..default() },
+            Visibility::Hidden,
         ))
         .id();
+    portal.showing = Some((quad, nvf_play::seamless::now_secs(), 0));
     info!(
         "door portal: {door:08X} opens onto {} ({:.0} x {:.0} doorway; {} entities of the place behind it shown)",
         match to.interior {
@@ -830,8 +855,16 @@ fn close(commands: &mut Commands, portal: &mut Portal, streamer: &Streamer) {
 
 /// The door models and the parked place's layers as they were; the sky's copies go.
 fn restore(commands: &mut Commands, portal: &mut Portal) {
+    portal.showing = None;
     for e in portal.sky.drain(..) {
         commands.entity(e).despawn();
+    }
+    if let Some((meshes, _, _)) = portal.dissolving.take() {
+        for e in meshes {
+            if let Ok(mut ec) = commands.get_entity(e) {
+                ec.insert(crate::fade::drawn(crate::fade::STEPS));
+            }
+        }
     }
     if let Some(sw) = portal.swing.take() {
         for (e, t) in sw.meshes {
@@ -938,6 +971,52 @@ fn cross(
 fn give_back(mut portal: ResMut<Portal>, mut changed: MessageWriter<nvf_play::RefChanged>) {
     for d in portal.give_back.drain(..) {
         changed.write(nvf_play::RefChanged::new(d));
+    }
+}
+
+/// The doorway is shown once the door's view has been drawn ([`SHOW_AFTER_SECS`]); the
+/// door then dissolves.
+fn show_when_drawn(mut commands: Commands, mut portal: ResMut<Portal>) {
+    let Some((quad, since, frames)) = portal.showing.as_mut() else { return };
+    *frames += 1;
+    let now = nvf_play::seamless::now_secs();
+    if now - *since < SHOW_AFTER_SECS || *frames < SHOW_AFTER_FRAMES {
+        return;
+    }
+    let quad = *quad;
+    portal.showing = None;
+    if let Ok(mut ec) = commands.get_entity(quad) {
+        ec.insert(Visibility::Inherited);
+    }
+    if let Some(d) = portal.dissolving.as_mut() {
+        d.1 = now;
+    }
+}
+
+/// The opened door dithers away (as an actor at a door, `door_fade.rs`), then is hidden.
+fn dissolve(mut commands: Commands, mut portal: ResMut<Portal>, mut meshes: Query<(&mut MeshMaterial3d<nvf_assets::NifMaterial>, Has<bevy::camera::visibility::VisibilityRange>)>) {
+    let Some((list, since, false)) = portal.dissolving.as_ref() else { return };
+    if !since.is_finite() {
+        return;
+    }
+    let share = ((nvf_play::seamless::now_secs() - since) / DISSOLVE_SECS).clamp(0.0, 1.0) as f32;
+    let k = crate::fade::step(1.0 - share);
+    for &e in list {
+        if let Ok((mut material, ranged)) = meshes.get_mut(e) {
+            commands.entity(e).insert(crate::fade::drawn(k));
+            if !ranged {
+                material.set_changed();
+            }
+        }
+        if share >= 1.0 {
+            commands.entity(e).insert(Visibility::Hidden);
+        }
+    }
+    if share >= 1.0 {
+        // Hidden now; its full range given back on closing ([`restore`]).
+        if let Some(d) = portal.dissolving.as_mut() {
+            d.2 = true;
+        }
     }
 }
 
