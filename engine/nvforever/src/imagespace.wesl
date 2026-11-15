@@ -32,6 +32,27 @@ struct Grade {
     // the last one's (imagespace.rs).
     motion: vec4<f32>,
     reproject: mat4x4<f32>,
+    // Seamless doors: the grade of the place seen through an open door (saturation,
+    // contrast, contrast average luminance, brightness; tint rgb, amount), the doorway's
+    // corners on screen (uv, one per column), x of portal_on 1 while open (imagespace.rs).
+    portal_grade: vec4<f32>,
+    portal_tint: vec4<f32>,
+    portal_quad: mat4x4<f32>,
+    portal_on: vec4<f32>,
+}
+
+// Whether `p` lies inside the convex outline a, b, c, d (either winding).
+fn in_quad(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>, c: vec2<f32>, d: vec2<f32>) -> bool {
+    let e = array<vec2<f32>, 4>(a, b, c, d);
+    var pos = 0;
+    var neg = 0;
+    for (var i = 0; i < 4; i++) {
+        let s = e[i];
+        let t = e[(i + 1) % 4];
+        let z = (t.x - s.x) * (p.y - s.y) - (t.y - s.y) * (p.x - s.x);
+        if z > 0.0 { pos += 1; } else if z < 0.0 { neg += 1; }
+    }
+    return pos == 0 || neg == 0;
 }
 
 @group(0) @binding(0) var screen: texture_2d<f32>;
@@ -129,11 +150,18 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     var c = to_srgb(clamp(lin, vec3(0.0), vec3(1.0)));
     let marked = abs(src.a - SCREEN_MARK) < 0.02;
     if !marked {
+        var g = vec4(grade.saturation, grade.contrast, grade.contrast_avg_lum, grade.brightness);
+        var tint = grade.tint;
+        let q = grade.portal_quad;
+        if grade.portal_on.x > 0.5 && in_quad(in.uv, q[0].xy, q[1].xy, q[2].xy, q[3].xy) {
+            g = grade.portal_grade;
+            tint = grade.portal_tint;
+        }
         let lum = dot(c, vec3(0.2125, 0.7154, 0.0721));
-        c = mix(vec3(lum), c, grade.saturation);
-        c = mix(c, lum * grade.tint.rgb, grade.tint.a);
-        c = c * grade.brightness;
-        c = mix(vec3(grade.contrast_avg_lum), c, grade.contrast);
+        c = mix(vec3(lum), c, g.x);
+        c = mix(c, lum * tint.rgb, tint.a);
+        c = c * g.w;
+        c = mix(vec3(g.z), c, g.y);
         c = clamp(c, vec3(0.0), vec3(1.0));
     }
     // VATS mode: the amber grade left of the swipe's edge, the band riding the edge, the

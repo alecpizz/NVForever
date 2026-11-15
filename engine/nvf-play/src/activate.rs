@@ -612,6 +612,16 @@ pub(crate) fn activate(
         info!("activate 0x{:08X} {}: nothing to do (an inaccessible door)", t.form_id, t.name);
         return;
     }
+    // Seamless doors (step 4): a load door whose other side is loaded opens onto it; the
+    // door's activation (the player entering the cell, teammates coming along) runs when
+    // the player walks through it (`seamless::crossed`). A door with a script of its own
+    // activates as before.
+    if matches!(t.action, Action::Travel { .. }) && portals.as_ref().is_some_and(|p| p.0.contains(&t.form_id)) && !crate::seamless::door_scripted(&sim, t.form_id) {
+        info!("activate 0x{:08X} {}: the door opens onto its other side (seamless doors)", t.form_id, t.name);
+        sounds.write(crate::world_sounds::Activated { reference: t.form_id });
+        portal.write(crate::seamless::OpenPortal { door: t.form_id });
+        return;
+    }
     // The actor's place before, to put back if a teleport cannot be followed.
     let before = sim.world.peek(FormId::PLAYER_REF).map(|p| (p.cell, p.pos, p.rot));
     let a = match crate::script::activate_by_hand(script.map(|s| s.into_inner()), &mut sim, t.form_id) {
@@ -696,16 +706,6 @@ pub(crate) fn activate(
         match e {
             Effect::RefChanged(form_id) => {
                 changed.write(RefChanged::new(form_id));
-            }
-            Effect::Travel { .. } if portals.as_ref().is_some_and(|p| p.0.contains(&t.form_id)) => {
-                // Seamless doors (step 4): the door opens onto its other side, which is
-                // loaded; walking into it is the travel (nvforever `door_portal.rs`). The
-                // player stays where it is until then.
-                if let (Some((cell, pos, rot)), Ok(p)) = (before, sim.world.get(FormId::PLAYER_REF)) {
-                    (p.cell, p.pos, p.rot) = (cell, pos, rot);
-                }
-                info!("activate 0x{:08X} {}: the door opens onto its other side (seamless doors)", t.form_id, t.name);
-                portal.write(crate::seamless::OpenPortal { door: t.form_id });
             }
             Effect::Travel { world, interior, feet, heading_deg } => {
                 let to = match (interior, world) {

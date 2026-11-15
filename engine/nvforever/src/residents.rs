@@ -866,6 +866,8 @@ struct Resident {
     joined: bool,
     spawned: bool,
     root: Option<Entity>,
+    /// The root marked as standing in the place parked (`world::ParkedActor`).
+    parked_root: Option<Entity>,
     failed: bool,
     /// In the world and enabled, as the game has it.
     present: bool,
@@ -1616,6 +1618,7 @@ impl Core {
             joined: false,
             spawned: false,
             root: None,
+            parked_root: None,
             failed: false,
             present: false,
             waiting: None,
@@ -3008,6 +3011,16 @@ fn describe(data: &GameData, world: &WorldData, e: &AiEvent) -> String {
     }
 }
 
+/// Whether a place is in the place parked by a seamless door (`world::Parked`).
+fn drawn_parked(world: &WorldData, streamer: &Streamer, space: Space, feet: [f32; 3]) -> bool {
+    let Some(p) = streamer.parked.as_ref() else { return false };
+    match (space, p.interior) {
+        (Space::Interior(c), Some(i)) => c == i,
+        (Space::World(w), None) => w == world.world && p.cells.contains_key(&fnv_world::cell_of(feet[0], feet[1])),
+        _ => false,
+    }
+}
+
 /// Whether a place is in the cells drawn now.
 fn drawn(world: &WorldData, streamer: &Streamer, space: Space, feet: [f32; 3]) -> bool {
     match (space, streamer.interior) {
@@ -3295,7 +3308,10 @@ pub fn drive(
         }
         let Some(agent) = core.ai.agents.get(&r.actor) else { continue };
         let w = &agent.walker;
-        let visible = r.present && drawn(&world, &streamer, w.space, w.feet);
+        // Seamless doors: also drawn in the place parked, which a door may show
+        // (`door_portal.rs`; marked `ParkedActor` below).
+        let parked = !drawn(&world, &streamer, w.space, w.feet) && drawn_parked(&world, &streamer, w.space, w.feet);
+        let visible = r.present && (parked || drawn(&world, &streamer, w.space, w.feet));
         if visible && !r.spawned {
             if budget == 0 {
                 continue;
@@ -3434,6 +3450,18 @@ pub fn drive(
                 warn!("ai: {} could not be drawn ({e})", r.label);
             }
             r.failed = true;
+        }
+        let now_root = r.root.filter(|_| r.spawned && parked);
+        if now_root != r.parked_root {
+            if let Some(e) = r.parked_root.take() {
+                if let Ok(mut ec) = commands.get_entity(e) {
+                    ec.remove::<crate::world::ParkedActor>();
+                }
+            }
+            if let Some(e) = now_root {
+                commands.entity(e).insert(crate::world::ParkedActor);
+            }
+            r.parked_root = now_root;
         }
         // Its first second drawn after a script made, enabled or moved it: the clips it
         // walks or runs with (`FirstSteps`).

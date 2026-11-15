@@ -97,7 +97,21 @@ pub struct ImageSpaceGrade {
     pub motion: Vec4,
     /// Clip space of this frame to clip space of the last one (`update_motion`).
     pub reproject: Mat4,
+    /// Seamless doors (`door_portal.rs`): the place seen through an open door is graded
+    /// with its own grade, inside the doorway's outline on screen. Saturation, contrast,
+    /// contrast average luminance, brightness; the tint (rgb, amount).
+    pub portal_grade: Vec4,
+    pub portal_tint: Vec4,
+    /// The doorway's four corners on screen (uv, y down), one per column (x, y, 0, 0), in
+    /// order round the outline; x of `portal_on` 1 while a door is open.
+    pub portal_quad: Mat4,
+    pub portal_on: Vec4,
 }
+
+/// The grade of the place an open door shows (`door_portal.rs` sets it; [`update_grade`]
+/// grades it with the screen's modifiers into `ImageSpaceGrade::portal_grade`).
+#[derive(Resource, Default)]
+pub struct PortalGradeSource(pub Option<fnv_world::imagespace::Cinematic>);
 
 /// VATS mode's grade for the interface's colour `rgb` (the settings page's HUD colour):
 /// the amber's own figures for amber (docs/design/vats-mode.md §5), and for another
@@ -135,6 +149,10 @@ impl Default for ImageSpaceGrade {
             dof_mode: Vec4::ZERO,
             motion: Vec4::ZERO,
             reproject: Mat4::IDENTITY,
+            portal_grade: Vec4::new(1.0, 1.0, 0.5, 1.0),
+            portal_tint: Vec4::new(1.0, 1.0, 1.0, 0.0),
+            portal_quad: Mat4::ZERO,
+            portal_on: Vec4::ZERO,
         }
     }
 }
@@ -564,7 +582,7 @@ fn update_grade(
     (sim, aim, wheel, talk, creator): (Option<Res<nvf_play::sim::SimState>>, Option<Res<nvf_play::aim_zoom::AimZoom>>, Option<Res<nvf_play::weapon_wheel::WeaponWheel>>, Option<Res<nvf_play::dialogue_zoom::DialogueZoom>>, Option<Res<nvf_play::creator::CreatorMenu>>),
     mut mods: ResMut<ScreenModifiers>,
     mut grades: Query<(&mut ImageSpaceGrade, Has<LensGrade>)>,
-    sounds: Option<ResMut<Messages<nvf_play::sfx::PlaySound>>>,
+    (sounds, portal_source): (Option<ResMut<Messages<nvf_play::sfx::PlaySound>>>, Option<Res<PortalGradeSource>>),
 ) {
     let now = time.elapsed_secs();
     let (mut effect, forms, dof_source, motion_source) = match &world {
@@ -640,6 +658,8 @@ fn update_grade(
     };
     let base = sky.cinematic();
     let c = graded(&base, &effect);
+    // The place an open door shows, graded with the same modifiers.
+    let pc = graded(&portal_source.as_deref().and_then(|p| p.0).unwrap_or(base), &effect);
     mods.hdr = Some((base.hdr, c.hdr));
     if let Some(w) = &world {
         modifier_sounds(&mut mods, w, &forms, sounds);
@@ -671,6 +691,10 @@ fn update_grade(
         dof_mode: Vec4::new(if dof.use_target { 1.0 } else { 0.0 }, f32::from(dof.flags), near.unwrap_or(1.0), 0.0),
         motion: Vec4::new(motion, near.map_or(0.0, |n| n / MOTION_SHARP), MOTION_MAX_REACH, 0.0),
         reproject: Mat4::IDENTITY,
+        portal_grade: Vec4::new(pc.saturation, pc.contrast, pc.contrast_avg_lum, pc.brightness),
+        portal_tint: Vec4::new(pc.tint[0], pc.tint[1], pc.tint[2], pc.tint_amount),
+        portal_quad: Mat4::ZERO,
+        portal_on: Vec4::ZERO,
     };
     // A 3D scope's lens: a neutral grade with only the lens's modifiers on it.
     let lens = match &world {

@@ -237,8 +237,8 @@ pub struct SkyState {
     /// Interior mode: the cell's own image space (CELL XCIM) grades the picture.
     pub interior_grade: Option<Cinematic>,
     /// Seamless doors: the grade before a travel that kept the place left, and how far
-    /// (0..1) the grade has eased from it to the place's own ([`SkyState::cinematic`]), so
-    /// that walking through a door does not change the picture at once.
+    /// (0..1) its HDR part (the eye's adaptation) has eased from it to the place's own
+    /// ([`SkyState::cinematic`]), so that the exposure does not jump at a doorway.
     pub grade_ease: Option<(Cinematic, f32)>,
     /// The sun casts shadows (`--sun-shadows` with `--shadow-distance` above 0; the settings page:
     /// [`set_shadows`]).
@@ -841,11 +841,13 @@ impl SkyState {
     /// The image-space grade now: the base image space with the weather's adapters for
     /// the time of day, blended across a weather fade; none indoors yet [interim].
     pub fn cinematic(&self) -> Cinematic {
-        let target = self.cinematic_target();
-        match &self.grade_ease {
-            Some((from, t)) => from.lerp(&target, smoothstep(0.0, 1.0, *t)),
-            None => target,
+        let mut target = self.cinematic_target();
+        // Through a seamless door only the eye's part (HDR: Target LUM, adaptation) eases;
+        // the colour grade changes at the doorway (`door_portal.rs`, `imagespace.rs`).
+        if let Some((from, t)) = &self.grade_ease {
+            target.hdr = from.lerp(&target, smoothstep(0.0, 1.0, *t)).hdr;
         }
+        target
     }
 
     /// [`SkyState::cinematic`] without the ease from a door's travel.
@@ -855,6 +857,15 @@ impl SkyState {
         }
         if self.interior.is_some() {
             return self.interior_grade.unwrap_or_default();
+        }
+        self.exterior_cinematic()
+    }
+
+    /// The worldspace's grade now (the weather's, at this hour), indoors too: a door seen
+    /// from inside shows the outdoors graded so (`door_portal.rs`).
+    pub fn exterior_cinematic(&self) -> Cinematic {
+        if !self.grade {
+            return Cinematic::default();
         }
         let Some(base) = self.image_space else { return Cinematic::default() };
         let none = [None; 6];

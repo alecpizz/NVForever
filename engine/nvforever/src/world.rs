@@ -219,6 +219,11 @@ pub struct Streamer {
     pub prespawning: Option<(u32, CellSpawn)>,
 }
 
+/// On the body of an actor drawn in the place parked (`residents.rs`): a door showing
+/// that place draws it too (`door_portal.rs`).
+#[derive(Component)]
+pub struct ParkedActor;
+
 /// The cells of a place left through a door, kept spawned (seamless doors step 3,
 /// `nvf_play::seamless`). Hidden; still `RenderCell`s, so what nvf-play draws into them
 /// (dropped items, script-drawn references) stays in step with the simulation.
@@ -1064,7 +1069,7 @@ pub fn travel(
         }
     }
     if keep {
-        // Seamless doors: the grade eases from the place left's (`door_portal.rs`).
+        // Seamless doors: the eye's adaptation eases from the place left's (`SkyState::cinematic`).
         sky.grade_ease = Some((sky.cinematic(), 0.0));
     }
     sky.set_interior(t.interior.and_then(|id| fnv_world::lighting::cell_lighting(world.lo, world.schema, id)));

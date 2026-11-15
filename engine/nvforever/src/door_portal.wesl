@@ -16,7 +16,9 @@ import bevy_pbr::{
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let uv = (in.position.xy - view.main_pass_viewport.xy) / view.main_pass_viewport.zw;
     if portal_debug.x > 0.5 {
-        return vec4(1000.0, 0.0, 1000.0, 1.0);
+        // Marked (alpha 0.25, imagespace.wesl SCREEN_MARK): left ungraded, so the mask
+        // stays magenta whatever the place's grade.
+        return vec4(1000.0, 0.0, 1000.0, 0.25);
     }
     let c = textureSampleLevel(portal_texture, portal_sampler, uv, 0.0);
     return vec4(c.rgb, 1.0);

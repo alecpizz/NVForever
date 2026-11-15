@@ -359,6 +359,37 @@ pub struct OpenPortal {
     pub door: u32,
 }
 
+/// The player walked through an open load door (step 4, nvforever `door_portal.rs`, which
+/// has sent the `Travel`): the door's activation runs now, as through a loading screen
+/// it would have when the door was opened (the player enters the cell, teammates come
+/// along) ([`crossed`]).
+#[derive(Message, Clone, Copy, Debug, PartialEq)]
+pub struct Crossed {
+    pub door: u32,
+}
+
+/// Whether a door's base has a script of its own (its OnActivate decides what the door
+/// does, so it is not opened onto its other side).
+pub fn door_scripted(sim: &crate::sim::SimState, door: u32) -> bool {
+    sim.base_of(door).and_then(|b| sim.forms.get(b)).is_some_and(|b| b.script.is_some())
+}
+
+/// [`Crossed`]: the door's own activation, its travel left out (the portal's is under way).
+fn crossed(mut msgs: MessageReader<Crossed>, mut sim: ResMut<crate::sim::SimState>, script: Option<ResMut<crate::script::ScriptState>>) {
+    let Some(Crossed { door }) = msgs.read().last().copied() else { return };
+    // Where the portal put the player, kept: the activation moves it to the door's arrival.
+    let at = sim.world.peek(fnv_sim::FormId::PLAYER_REF).map(|p| (p.cell, p.pos, p.rot));
+    match crate::script::activate_by_hand(script.map(|s| s.into_inner()), &mut sim, door) {
+        Ok(_) => info!("seamless doors: door {door:08X} activated as the player walks through it"),
+        Err(e) => warn!("seamless doors: door {door:08X}: {e}"),
+    }
+    if let (Some((cell, pos, rot)), Ok(p)) = (at, sim.world.get(fnv_sim::FormId::PLAYER_REF)) {
+        if p.cell == cell {
+            (p.pos, p.rot) = (pos, rot);
+        }
+    }
+}
+
 pub struct SeamlessPlugin;
 
 impl Plugin for SeamlessPlugin {
@@ -367,6 +398,8 @@ impl Plugin for SeamlessPlugin {
             .init_resource::<DoorsAhead>()
             .init_resource::<PortalDoors>()
             .add_message::<OpenPortal>()
+            .add_message::<Crossed>()
+            .add_systems(Update, crossed.in_set(crate::PlaySet::Activation))
             .add_systems(Startup, list_doors)
             .add_systems(Update, (pick_doors, warm_physics).chain().in_set(crate::PlaySet::Sync))
             .add_systems(Last, report);
@@ -380,6 +413,18 @@ fn list_doors(mut commands: Commands, sim: Option<Res<crate::sim::SimState>>, d:
     }
     let doors = LoadDoors::build(sim.refs, d.index);
     info!("seamless doors: {} load doors listed", doors.0.len());
+    // Diagnostic `NVF_SEAMLESS_LIST_DOORS=<x>,<y>,<radius>`: the worldspace's load doors
+    // there, with where they lead.
+    if let Some(v) = std::env::var("NVF_SEAMLESS_LIST_DOORS").ok() {
+        let n: Vec<f32> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+        if let [x, y, r] = n[..] {
+            for door in doors.0.iter().filter(|door| matches!(door.from, Place::Exterior(_)) && Vec2::new(door.pos[0] - x, door.pos[1] - y).length() <= r) {
+                let edid = sim.refs.get(FormId(door.door)).and_then(|p| p.edid.clone()).unwrap_or_default();
+                let to = door.travel.interior.and_then(|c| d.index.cells.get(&c)).and_then(|c| c.edid.clone()).unwrap_or_else(|| "outdoors".into());
+                info!("seamless doors: door {:08X} {edid} at ({:.0}, {:.0}) -> {to}, back door {:08X}", door.door, door.pos[0], door.pos[1], door.to_door);
+            }
+        }
+    }
     commands.insert_resource(doors);
 }
 
