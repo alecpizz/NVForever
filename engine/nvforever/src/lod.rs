@@ -270,6 +270,9 @@ pub struct LodState {
     /// outdoors loaded, drawn again as it was on coming back out ([`LodState::park`]).
     /// Whether it was on before, when parked.
     pub parked: Option<bool>,
+    /// Seamless doors: built round this point (game space) instead of the camera: indoors
+    /// with the outdoors spawned ahead round a door's arrival (`door_ahead.rs`).
+    pub around: Option<Vec3>,
     /// Game terrain chunks drawn (and per level, finest first), generated terrain
     /// chunks and object blocks drawn.
     pub chunks: usize,
@@ -398,6 +401,7 @@ impl LodState {
             chosen: Vec::new(),
             squares: Vec::new(),
             parked: None,
+            around: None,
             terrain: HashMap::new(),
             outgoing: HashMap::new(),
             block_entities: HashMap::new(),
@@ -625,7 +629,7 @@ pub fn update_lod(
     }
     let (Ok(root), Ok(cam)) = (root.single(), camera.single()) else { return };
     let update_started = std::time::Instant::now();
-    let g = bevy_to_game(cam.translation());
+    let g = lod.around.unwrap_or_else(|| bevy_to_game(cam.translation()));
     let c = cell_of(g.x, g.y);
     // Square indices on the world's LOD grid (`origin`).
     let o = lod.origin;
@@ -672,10 +676,14 @@ pub fn update_lod(
             }
         }
     }
-    // Which cells are loaded, and which are fully drawn, per level-4 square.
-    let full: HashSet<Grid> = streamer.loaded.keys().filter(|c| !streamer.fades.contains_key(c)).copied().collect();
+    // Which cells are loaded, and which are fully drawn, per level-4 square. Built round a
+    // door's arrival from indoors (seamless doors): the outdoors spawned ahead there.
+    let parked_out: Option<Vec<Grid>> = lod.around.and_then(|_| streamer.parked.as_ref().filter(|p| p.interior.is_none()).map(|p| p.cells.keys().copied().collect()));
+    let cells_now: Vec<Grid> = parked_out.clone().unwrap_or_else(|| streamer.loaded.keys().copied().collect());
+    let full: HashSet<Grid> = cells_now.iter().filter(|c| parked_out.is_some() || !streamer.fades.contains_key(c)).copied().collect();
+    let level = |c: Grid| if parked_out.is_some() { if full.contains(&c) { 1.0 } else { 0.0 } } else { streamer.cell_level(c) };
     let mut masks: HashMap<Grid, (u16, u16)> = HashMap::new();
-    for c in streamer.loaded.keys() {
+    for c in &cells_now {
         let (ch, bit) = chunk_bit(*c, o);
         let m = masks.entry(ch).or_default();
         m.1 |= bit;
@@ -744,7 +752,7 @@ pub fn update_lod(
         let key = BlockKey { full: full_mask, present };
         let steps: [u8; CELLS] = match present {
             0 => [0; CELLS],
-            _ => std::array::from_fn(|i| fade::step(streamer.cell_level(chunk_cell(sq, i)))),
+            _ => std::array::from_fn(|i| fade::step(level(chunk_cell(sq, i)))),
         };
         match lod.block_entities.get_mut(&sq) {
             Some(b) if b.key == key => {

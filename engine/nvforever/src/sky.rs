@@ -1172,6 +1172,13 @@ fn find_weather(world: &WorldData, name: &str) -> Option<u32> {
 #[derive(Component)]
 pub struct SkyDome(Vec<[f32; 2]>);
 
+impl SkyDome {
+    /// Per vertex: elevation (degrees) and the sky-upper weight.
+    pub fn weights(&self) -> &[[f32; 2]] {
+        &self.0
+    }
+}
+
 /// One of the four cloud layers (WTHR layer index) in one of two sets: the set showing
 /// the current weather and the one fading out the previous weather.
 #[derive(Component)]
@@ -2029,6 +2036,25 @@ pub struct PlaceLook {
 }
 
 impl SkyState {
+    /// The dome's vertex colours (for `weights`, [`SkyDome::weights`]) and the sky
+    /// material's light as they are outdoors now, indoors too: a door seen from inside
+    /// shows the outdoors' sky (`door_portal.rs`).
+    pub fn exterior_dome(&mut self, weights: &[[f32; 2]]) -> (Vec<[f32; 4]>, SkyLight) {
+        let inside = self.interior.take();
+        let light = self.light();
+        let (upper, lower, horizon) = (self.color(ColorType::SkyUpper), self.color(ColorType::SkyLower), self.color(ColorType::Horizon));
+        let twilight = self.twilight();
+        self.interior = inside;
+        let cols = weights
+            .iter()
+            .map(|wt| {
+                let c = dome_color(wt[0], wt[1], twilight, lower, horizon, upper);
+                [c[0], c[1], c[2], 1.0]
+            })
+            .collect();
+        (cols, light)
+    }
+
     /// The outdoors' look now, as [`update_sky`] lights the outdoors (indoors too: a door
     /// seen from inside shows the outdoors so). Lightning flashes and image-space
     /// modifiers on the sun are left out.

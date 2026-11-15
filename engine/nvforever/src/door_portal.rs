@@ -289,7 +289,7 @@ impl Plugin for DoorPortalPlugin {
         embedded_asset!(app, "door_portal.wesl");
         app.add_plugins(MaterialPlugin::<PortalMaterial>::default())
             .insert_resource(Portal { probe: probe_from_env(), ..default() })
-            .add_systems(Update, (ready_doors, open_portal, probe, cross).chain().in_set(nvf_play::PlaySet::Input))
+            .add_systems(Update, (ready_doors, open_portal, indoor_sky, probe, cross).chain().in_set(nvf_play::PlaySet::Input))
             .add_systems(Update, (remember_outside, ease_grade).after(crate::world::stream))
             .add_systems(PostUpdate, (adopt_new, reassert).chain().before(bevy::camera::visibility::VisibilitySystems::CheckVisibility))
             .init_resource::<crate::imagespace::PortalGradeSource>()
@@ -595,9 +595,13 @@ fn open_portal(
     // Out of an interior: the distant land, kept hidden (`LodState::park`), and the sky.
     if to.interior.is_none() && streamer.interior.is_some() {
         let mut stack = lod.entities();
-        for &e in &stack {
-            portal.hidden.push((e, Visibility::Hidden));
-            commands.entity(e).insert(Visibility::Inherited);
+        // Parked, it is hidden: shown while the door is open (built round the door's
+        // arrival from indoors, it is shown already).
+        if lod.parked.is_some() {
+            for &e in &stack {
+                portal.hidden.push((e, Visibility::Hidden));
+                commands.entity(e).insert(Visibility::Inherited);
+            }
         }
         while let Some(e) = stack.pop() {
             let before = layers.get(e).ok().flatten().cloned();
@@ -1172,6 +1176,50 @@ fn ease_grade(time: Res<Time<Real>>, mut sky: ResMut<SkyState>) {
     if *t >= 1.0 {
         sky.grade_ease = None;
     }
+}
+
+/// A door seen from inside onto the outdoors when no sky was drawn outdoors yet (a game
+/// started indoors, as a new game in Doc Mitchell's house): a copy of the dome coloured
+/// as the outdoors now ([`SkyState::exterior_dome`]); no clouds.
+#[allow(clippy::too_many_arguments)]
+fn indoor_sky(
+    mut commands: Commands,
+    mut portal: ResMut<Portal>,
+    streamer: Res<Streamer>,
+    mut sky: ResMut<SkyState>,
+    dome: Query<(&Mesh3d, &MeshMaterial3d<crate::sky::SkyMaterial>, &crate::sky::SkyDome)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<crate::sky::SkyMaterial>>,
+    mut done: Local<Option<Entity>>,
+) {
+    let Some(o) = portal.open.as_ref() else {
+        *done = None;
+        return;
+    };
+    if *done == Some(o.camera) || streamer.interior.is_none() || o.door.travel.interior.is_some() || !portal.sky.is_empty() {
+        return;
+    }
+    *done = Some(o.camera);
+    let Ok((mesh, material, d)) = dome.single() else { return };
+    let (cols, light) = sky.exterior_dome(d.weights());
+    let (Some(mut m), Some(mut mat)) = (meshes.get(&mesh.0).cloned(), materials.get(&material.0).cloned()) else { return };
+    m.insert_attribute(Mesh::ATTRIBUTE_COLOR, cols);
+    let old = mat.extension.light;
+    mat.extension.light = crate::sky::SkyLight { params: light.params.with_y(old.params.y).with_z(old.params.z).with_w(old.params.w), ..light };
+    let copy = commands
+        .spawn((
+            Name::new("Door portal sky (outdoors now)"),
+            PortalSky,
+            Mesh3d(meshes.add(m)),
+            MeshMaterial3d(materials.add(mat)),
+            crate::sky::sky_transform(Vec3::ZERO),
+            RenderLayers::layer(PORTAL_LAYER),
+            bevy::light::NotShadowCaster,
+            bevy::light::NotShadowReceiver,
+        ))
+        .id();
+    portal.sky.push(copy);
+    info!("door portal: the sky through the door drawn as outdoors now (no sky drawn outdoors yet)");
 }
 
 /// Outdoors: remember how the outdoors is lit, for a view out from an interior.

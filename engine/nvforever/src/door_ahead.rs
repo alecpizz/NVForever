@@ -83,7 +83,9 @@ pub fn door_ahead(
     mut actors: ResMut<ActorAhead>,
     residents: Option<Res<crate::residents::Residents>>,
     mut state: ResMut<DoorAhead>,
+    (mut commands, mut lod, args): (Commands, Option<ResMut<crate::lod::LodState>>, Res<crate::Args>),
 ) {
+    let no_lod = args.no_lod;
     let (Some(s), Some(doors), Some(location)) = (seamless, doors, location) else { return };
     if !s.ahead {
         return;
@@ -179,6 +181,16 @@ pub fn door_ahead(
     });
     if streamer.prespawn_outdoors != want_out && (want_out.is_some() || streamer.outdoors_spawning.is_none()) {
         streamer.prespawn_outdoors = want_out;
+    }
+    // The outdoors spawned ahead from indoors: their distant land built round the door's
+    // arrival too, so walking out does not show it coming in.
+    if let (Some(p), Some(d), Some(lod)) = (streamer.parked.as_ref(), doors.doors.first(), lod.as_deref_mut()) {
+        if p.interior.is_none() && location.interior.is_some() && lod.parked.is_none() && !lod.enabled && !no_lod {
+            lod.around = Some(Vec3::from_array(d.travel.feet));
+            lod.set_enabled(&mut commands, true);
+            lod.around = Some(Vec3::from_array(d.travel.feet));
+            info!("door read-ahead: the distant land built round the door's arrival outdoors");
+        }
     }
     // Outdoors: the squares around the arrival, pinned in the cell read-ahead.
     if (now - state.last >= nvf_play::seamless::AHEAD_EVERY_SECS) || want_cells != state.cells {

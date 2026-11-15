@@ -1182,6 +1182,9 @@ pub fn travel(
     sky.set_interior(t.interior.and_then(|id| fnv_world::lighting::cell_lighting(world.lo, world.schema, id)));
     sky.interior_grade = t.interior.and_then(|id| crate::sky::SkyState::cell_grade(world.lo, world.schema, id));
     match (keep, t.interior.is_some(), lod.parked.is_some()) {
+        // Out to the outdoors spawned ahead from indoors: the distant land built round
+        // the arrival already (`door_ahead.rs`) is kept.
+        (_, false, false) if back_out && lod.around.is_some() && lod.enabled => lod.around = None,
         // Seamless doors (step 3): into an interior keeping the outdoors, the distant
         // land is hidden, not dropped; back out, it is drawn again as it was.
         (true, true, false) if streamer.parked.as_ref().is_some_and(|p| p.interior.is_none()) => lod.park(&mut commands, true),

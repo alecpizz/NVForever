@@ -103,9 +103,13 @@ out, the sky's frozen copy. Smoke: `seamless-doors-saloon`.
 - Doors still vanish when opened. A swing into the doorway with the view's depth set
   back is written and switched off (`SWING_DOORS`): the saloon's front doorway showed a
   dark surface and the door did not move.
-- The sky through a door seen from indoors is a copy frozen as last drawn outdoors
-  (started indoors: the sky's lower colour, no clouds); the distant land is missing until
-  the outdoors have been drawn once.
+- The sky through a door seen from indoors is a copy of the dome and clouds as last drawn
+  outdoors; started indoors (a new game in Doc Mitchell's house), a dome coloured as the
+  outdoors now (`SkyState::exterior_dome`) with no clouds. The distant land is built round
+  the door's arrival from indoors (`LodState::around`), so it does not come in on the
+  way out.
+- Opened doors dither away (0.3 s) once their view has been drawn (0.35 s, 10 frames:
+  before that its texture is empty while pipelines compile).
 - Exposure: indoors the eye's adaptation lifts the doorway's outdoors (it is blown out
   from a dark room); it settles as one walks out.
 - NPCs going through a door still fade out at it and in at the other side.
