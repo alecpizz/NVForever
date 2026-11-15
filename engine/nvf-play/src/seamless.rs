@@ -374,9 +374,25 @@ pub fn door_scripted(sim: &crate::sim::SimState, door: u32) -> bool {
     sim.base_of(door).and_then(|b| sim.forms.get(b)).is_some_and(|b| b.script.is_some())
 }
 
+/// Doors opened onto their other side by their own activation (a door with a script
+/// whose OnActivate let the player through: its travel opened the door instead,
+/// `loading::begin`): walking through them does not activate them again.
+#[derive(Resource, Default, Debug)]
+pub struct Activated(pub std::collections::HashSet<u32>);
+
+/// The portal-ready door near the player whose travel `t` is, if any (a travel a door's
+/// script sent by activating the door).
+pub fn door_of_travel(doors: &LoadDoors, portals: &PortalDoors, t: &Travel) -> Option<u32> {
+    portals.0.iter().copied().find(|d| doors.get(*d).is_some_and(|ld| ld.travel.interior == t.interior && Vec3::from_array(ld.travel.feet).distance(Vec3::from_array(t.feet)) < 1.0))
+}
+
 /// [`Crossed`]: the door's own activation, its travel left out (the portal's is under way).
-fn crossed(mut msgs: MessageReader<Crossed>, mut sim: ResMut<crate::sim::SimState>, script: Option<ResMut<crate::script::ScriptState>>) {
+fn crossed(mut msgs: MessageReader<Crossed>, mut sim: ResMut<crate::sim::SimState>, script: Option<ResMut<crate::script::ScriptState>>, mut activated: ResMut<Activated>) {
     let Some(Crossed { door }) = msgs.read().last().copied() else { return };
+    if activated.0.remove(&door) {
+        info!("seamless doors: door {door:08X} was activated when it opened (its script): not again");
+        return;
+    }
     // Where the portal put the player, kept: the activation moves it to the door's arrival.
     let at = sim.world.peek(fnv_sim::FormId::PLAYER_REF).map(|p| (p.cell, p.pos, p.rot));
     match crate::script::activate_by_hand(script.map(|s| s.into_inner()), &mut sim, door) {
@@ -390,6 +406,31 @@ fn crossed(mut msgs: MessageReader<Crossed>, mut sim: ResMut<crate::sim::SimStat
     }
 }
 
+/// A door opened onto its other side: that side's physics cells in now (kept), so its
+/// floor is there to measure and to walk onto (`PhysState::load_kept`).
+#[allow(clippy::too_many_arguments)]
+fn load_portal_cells(
+    mut opened: MessageReader<OpenPortal>,
+    doors: Option<Res<LoadDoors>>,
+    location: Res<Location>,
+    d: Res<crate::PlayWorld>,
+    sim: Res<crate::sim::SimState>,
+    data: Option<Res<nvf_assets::GameData>>,
+    mut phys: ResMut<crate::phys::PhysState>,
+) {
+    let Some(doors) = doors else { return };
+    for o in opened.read() {
+        let Some(door) = doors.get(o.door) else { continue };
+        let world = phys.worldspace;
+        let cells = phys_cells(&door.travel, *location, world);
+        let ctx = crate::phys::LoadCtx { d: &d, sim: &sim, data: data.as_deref() };
+        let n = phys.load_kept(&ctx, &cells);
+        if n > 0 {
+            info!("seamless doors: door {:08X}: {n} physics cell(s) of its other side loaded", o.door);
+        }
+    }
+}
+
 pub struct SeamlessPlugin;
 
 impl Plugin for SeamlessPlugin {
@@ -397,9 +438,11 @@ impl Plugin for SeamlessPlugin {
         app.init_resource::<TravelKeeps>()
             .init_resource::<DoorsAhead>()
             .init_resource::<PortalDoors>()
+            .init_resource::<Activated>()
             .add_message::<OpenPortal>()
             .add_message::<Crossed>()
             .add_systems(Update, crossed.in_set(crate::PlaySet::Activation))
+            .add_systems(Last, load_portal_cells)
             .add_systems(Startup, list_doors)
             .add_systems(Update, (pick_doors, warm_physics).chain().in_set(crate::PlaySet::Sync))
             .add_systems(Last, report);

@@ -166,6 +166,20 @@ pub fn door_ahead(
     if streamer.prespawn_want != want {
         streamer.prespawn_want = want;
     }
+    // Indoors with nothing outdoors kept: the squares around the nearest door's arrival
+    // outdoors, spawned ahead once read (`world::spawn_outdoors_ahead`).
+    let outdoors = doors.doors.first().filter(|_| here && s.keep && s.portal && location.interior.is_some() && !streamer.parked.as_ref().is_some_and(|p| p.interior.is_none()));
+    let want_out = outdoors.and_then(|d| match Place::arrival(&d.travel, *location) {
+        Place::Exterior(w) if w == world.world => {
+            let cells = arrival_cells(d.travel.feet, streamer.radius);
+            let (n, ready) = streamer.ahead.pinned_ready();
+            (n > 0 && ready == n).then_some(cells)
+        }
+        _ => None,
+    });
+    if streamer.prespawn_outdoors != want_out && (want_out.is_some() || streamer.outdoors_spawning.is_none()) {
+        streamer.prespawn_outdoors = want_out;
+    }
     // Outdoors: the squares around the arrival, pinned in the cell read-ahead.
     if (now - state.last >= nvf_play::seamless::AHEAD_EVERY_SECS) || want_cells != state.cells {
         state.last = now;

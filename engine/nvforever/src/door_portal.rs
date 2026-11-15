@@ -533,7 +533,7 @@ fn open_portal(
     };
     let look = match to.interior {
         Some(c) => fnv_world::lighting::cell_lighting(world.lo, world.schema, c).map(|l| SkyState::interior_look(&l)),
-        None => portal.outside.clone(),
+        None => Some(sky.exterior_look()),
     };
     // The doorway is graded as the place it shows (`doorway_grade`).
     grade_source.0 = Some(match to.interior {

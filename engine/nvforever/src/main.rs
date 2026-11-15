@@ -1567,6 +1567,8 @@ fn main() -> AppExit {
         model_overrides: Default::default(),
         parked: None,
         prespawn_want: None,
+        prespawn_outdoors: None,
+        outdoors_spawning: None,
         prespawning: None,
     })
     .insert_resource(world)

@@ -217,6 +217,21 @@ pub struct Streamer {
     pub prespawn_want: Option<u32>,
     /// That interior being spawned, a few references a frame.
     pub prespawning: Option<(u32, CellSpawn)>,
+    /// Seamless doors, indoors: the worldspace's squares around a door's arrival to spawn
+    /// ahead, hidden, as the place parked (a new game starts in Doc Mitchell's house with
+    /// nothing outdoors kept). `door_ahead.rs` asks once they are read ahead.
+    pub prespawn_outdoors: Option<Vec<(i32, i32)>>,
+    /// Those squares being spawned: done, the one under way, those still to start.
+    pub outdoors_spawning: Option<OutdoorsSpawn>,
+}
+
+/// The outdoors spawned ahead from indoors ([`Streamer::prespawn_outdoors`]).
+pub struct OutdoorsSpawn {
+    pub want: Vec<(i32, i32)>,
+    done: HashMap<(i32, i32), Entity>,
+    now: Option<((i32, i32), CellSpawn)>,
+    ms: f64,
+    frames: u32,
 }
 
 /// On the body of an actor drawn in the place parked (`residents.rs`): a door showing
@@ -369,6 +384,11 @@ pub fn stream(
             // The interior is its one cell: in once it is loaded (travellers in it wait
             // for this, nav.rs).
             streamer.settled = true;
+        }
+        if !behind_screen {
+            let tile = terrain.settings.tile;
+            let s = &mut *streamer;
+            spawn_outdoors_ahead(&mut commands, &world, s, root, tile, &mut models, &mut terrain, &mut water, &mut trees, &mut grass, &mut emittance, &mut actors);
         }
         crate::profile::actor_spawns(streamer.stats.actors.equipment_spawns - before.0, streamer.stats.actors.record_spawns - before.1);
         return;
@@ -535,6 +555,78 @@ pub fn stream(
         streamer.arrival = None;
     }
     crate::profile::actor_spawns(streamer.stats.actors.equipment_spawns - before.0, streamer.stats.actors.record_spawns - before.1);
+}
+
+/// Seamless doors, indoors: spawn the squares asked for ahead ([`Streamer::prespawn_outdoors`]),
+/// hidden, within [`PRESPAWN_BUDGET`] a frame; all in, they are the place parked.
+#[allow(clippy::too_many_arguments)]
+fn spawn_outdoors_ahead(
+    commands: &mut Commands,
+    world: &WorldData,
+    s: &mut Streamer,
+    root: Entity,
+    tile: f32,
+    models: &mut ModelCtx,
+    terrain: &mut TerrainMaterials,
+    water: &mut WaterCtx,
+    trees: &mut crate::tree::TreeCtx,
+    grass: &mut crate::grass::GrassCtx,
+    emittance: &mut crate::emittance::EmittanceState,
+    actors: &mut Option<ActorDraw<'_, '_>>,
+) {
+    let want = s.prespawn_outdoors.clone().filter(|_| !s.parked.as_ref().is_some_and(|p| p.interior.is_none()));
+    let stale = match (&s.outdoors_spawning, &want) {
+        (Some(o), Some(w)) => &o.want != w,
+        (Some(_), None) => true,
+        _ => false,
+    };
+    if stale {
+        if let Some(o) = s.outdoors_spawning.take() {
+            for e in o.done.into_values().chain(o.now.map(|(_, sp)| sp.entity)) {
+                retire(commands, &mut s.dying, e);
+            }
+        }
+    }
+    let Some(want) = want else { return };
+    if s.outdoors_spawning.is_none() {
+        info!("seamless doors: the outdoors around a door ({} squares) spawned ahead, hidden", want.len());
+        s.outdoors_spawning = Some(OutdoorsSpawn { want: want.clone(), done: HashMap::new(), now: None, ms: 0.0, frames: 0 });
+    }
+    let deadline = std::time::Instant::now() + PRESPAWN_BUDGET;
+    let t0 = std::time::Instant::now();
+    let mut o = s.outdoors_spawning.take().expect("outdoors");
+    o.frames += 1;
+    while std::time::Instant::now() < deadline {
+        if o.now.is_none() {
+            let Some(&c) = want.iter().find(|c| !o.done.contains_key(c)) else { break };
+            let prep = s.ahead.listed.get_mut(&c).and_then(|a| a.terrain.take());
+            let (e, refs, origin) = begin_cell(commands, world, CellKey::Exterior(c), prep, tile, models, terrain, water, grass, true, s);
+            commands.entity(root).add_child(e);
+            o.now = Some((c, CellSpawn { entity: e, refs, next: 0, origin, ms: 0.0, frames: 0 }));
+        }
+        let Some((c, mut sp)) = o.now.take() else { break };
+        while sp.next < sp.refs.len() && std::time::Instant::now() < deadline {
+            let r = sp.refs[sp.next];
+            sp.next += 1;
+            spawn_ref(commands, world, sp.entity, sp.origin, r, models, water, trees, emittance, actors, s);
+        }
+        if sp.next < sp.refs.len() {
+            o.now = Some((c, sp));
+            break;
+        }
+        o.done.insert(c, sp.entity);
+    }
+    o.ms += t0.elapsed().as_secs_f64() * 1000.0;
+    if o.done.len() == want.len() {
+        info!("seamless doors: the outdoors around a door is in, hidden ({} squares over {} frames, {:.1} ms): its door opens onto it", want.len(), o.frames, o.ms);
+        if let Some(old) = s.parked.take() {
+            old.cells.into_values().for_each(|e| retire(commands, &mut s.dying, e));
+        }
+        s.parked = Some(Parked { interior: None, world: world.world, cells: o.done });
+        s.prespawn_outdoors = None;
+    } else {
+        s.outdoors_spawning = Some(o);
+    }
 }
 
 /// Main-thread time a frame spends spawning an interior ahead for seamless doors
@@ -1026,6 +1118,13 @@ pub fn travel(
         retire(&mut commands, &mut s.dying, sp.entity);
     }
     streamer.prespawn_want = None;
+    streamer.prespawn_outdoors = None;
+    if let Some(o) = streamer.outdoors_spawning.take() {
+        let s = &mut *streamer;
+        for e in o.done.into_values().chain(o.now.map(|(_, sp)| sp.entity)) {
+            retire(&mut commands, &mut s.dying, e);
+        }
+    }
     let back = streamer.parked.take_if(|p| p.is(t.interior, world.world));
     for (_, sp) in streamer.spawning.drain() {
         commands.entity(sp.entity).despawn();

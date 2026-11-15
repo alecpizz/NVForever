@@ -272,6 +272,8 @@ impl Plugin for LoadingPlugin {
         app.init_resource::<Loading>()
             .init_resource::<Look>()
             .add_message::<TravelRequest>()
+            .add_message::<crate::seamless::OpenPortal>()
+            .init_resource::<crate::seamless::Activated>()
             .add_message::<CoverRequest>()
             .add_message::<Uncover>()
             .add_systems(Startup, read_screens)
@@ -390,8 +392,21 @@ fn begin(
     mut next: ResMut<NextState<PlayState>>,
     mut art: Art,
     (seamless, mut veil): (Option<Res<crate::seamless::Seamless>>, ResMut<VeilState>),
+    mut seamless_doors: (Option<Res<crate::seamless::LoadDoors>>, Option<Res<crate::seamless::PortalDoors>>, MessageWriter<crate::seamless::OpenPortal>, ResMut<crate::seamless::Activated>),
 ) {
     let Some(TravelRequest(travel)) = requests.read().last().copied() else { return };
+    // Seamless doors (step 4): a door's script that let the player through sends the
+    // door's own travel; the door opens onto its other side instead, already activated.
+    if let (Some(doors), Some(portals), false) = (seamless_doors.0.as_deref(), seamless_doors.1.as_deref(), loading.active()) {
+        if let Some(door) = crate::seamless::door_of_travel(doors, portals, &travel) {
+            info!("loading screen: none: door {door:08X} opens onto its other side (seamless doors; its activation ran)");
+            seamless_doors.2.write(crate::seamless::OpenPortal { door });
+            seamless_doors.3 .0.insert(door);
+            loading.generic_next = false;
+            loading.arriving = false;
+            return;
+        }
+    }
     if let Some(trip) = loading.trip.as_mut() {
         // Another travel under the screen that is up: it replaces the one waiting, or
         // goes out next frame.

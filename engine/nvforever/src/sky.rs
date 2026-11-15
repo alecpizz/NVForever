@@ -2029,6 +2029,34 @@ pub struct PlaceLook {
 }
 
 impl SkyState {
+    /// The outdoors' look now, as [`update_sky`] lights the outdoors (indoors too: a door
+    /// seen from inside shows the outdoors so). Lightning flashes and image-space
+    /// modifiers on the sun are left out.
+    pub fn exterior_look(&self) -> PlaceLook {
+        let unit = light_unit();
+        let to_bevy = game_to_bevy();
+        let sun_dir = to_bevy.rotation * Vec3::from_array(sun_direction(&self.climate, self.sun_light_hour(), SUN_SOUTH));
+        let from = if sun_dir.y >= 0.0 { sun_dir } else { -sun_dir };
+        let full = PI * unit * self.sun_scale();
+        let illuminance = full * (sun_dir.y.abs() / HORIZON_FADE.sin()).min(1.0) * if sun_dir.y >= 0.0 { SUN_SHARE } else { MOON_SHARE };
+        let sunlight = self.color(ColorType::Sunlight);
+        let amb = self.color(ColorType::Ambient);
+        let range = self.fog_override.map(|(n, f)| (n, f, 1.0)).or_else(|| self.fog());
+        let (near, far, strength) = range.unwrap_or((0.0, 0.0, 0.0));
+        let mut fog = initial_fog();
+        fog.color = to_color(self.fog_color()).with_alpha(strength);
+        fog.falloff = crate::fog::falloff(near.max(0.0), far, self.fog_power(), true, 1.0);
+        PlaceLook {
+            ambient: crate::lights::display_ambient(amb.map(crate::lights::linear_to_display)),
+            ambient_brightness: unit * AMBIENT_SHARE,
+            light: crate::lights::display_color(sunlight.map(crate::lights::linear_to_display)),
+            illuminance,
+            light_rotation: Transform::IDENTITY.looking_to(-from, to_bevy.rotation * Vec3::Y).rotation,
+            fog,
+            clear: to_color(self.color(ColorType::SkyLower)),
+        }
+    }
+
     /// An interior's look, as [`update_sky`] lights it when the player is inside.
     pub fn interior_look(l: &fnv_world::lighting::CellLighting) -> PlaceLook {
         let unit = light_unit();

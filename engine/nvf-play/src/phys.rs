@@ -1662,6 +1662,21 @@ impl PhysState {
         self.space = space;
     }
 
+    /// Load `cells` now (from the warm cache when prepared) and keep them: the other side
+    /// of a door opened onto it (seamless doors step 4), which lies apart from the
+    /// player's place. Its floor is measured and walked onto at once.
+    pub fn load_kept(&mut self, ctx: &LoadCtx, cells: &[PhysCell]) -> usize {
+        let mut n = 0;
+        for &c in cells {
+            if !self.cells.contains_key(&c) {
+                self.load(ctx, c);
+                n += 1;
+            }
+            self.kept.insert(c);
+        }
+        n
+    }
+
     /// Prepare `cells` ahead on the warm thread (seamless doors step 1), those not loaded
     /// and not prepared or being prepared already. Outdoors they are squares of the
     /// worldspace being played. Returns how many were asked for now.
