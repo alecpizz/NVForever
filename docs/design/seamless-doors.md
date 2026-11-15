@@ -98,6 +98,10 @@ packages [observed 2026-11-14]:
 Most of what is left is the player's walk between the two frames (parallax) and, walking
 out, the sky's frozen copy. Smoke: `seamless-doors-saloon`.
 
+Cost: standing at the saloon's front door, frames took 6.8 ms on average with the door
+open and 5.9 ms with none (the exit line `door portal frames: …`) [observed
+2026-11-14, release-quick build].
+
 ## 6. Not done
 
 - Doors still vanish when opened. A swing into the doorway with the view's depth set

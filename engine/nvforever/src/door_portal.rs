@@ -215,6 +215,9 @@ pub struct Portal {
     dissolving: Option<(Vec<Entity>, f64, bool)>,
     /// The doorway's quad, hidden until the view is drawn, since when and frames since.
     showing: Option<(Entity, f64, u32)>,
+    /// Frames and their real seconds with a door open and with none (the exit line).
+    frames_open: (u32, f64),
+    frames_shut: (u32, f64),
 }
 
 /// How long an opened door takes to dissolve (real seconds) [engineering choice: as an
@@ -294,7 +297,7 @@ impl Plugin for DoorPortalPlugin {
             .add_systems(PostUpdate, (adopt_new, reassert).chain().before(bevy::camera::visibility::VisibilitySystems::CheckVisibility))
             .init_resource::<crate::imagespace::PortalGradeSource>()
             .add_systems(PostUpdate, (drive, doorway_grade).chain().after(bevy::transform::TransformSystems::Propagate))
-            .add_systems(Last, (report, debug_refs))
+            .add_systems(Last, (report, debug_refs, count_frames))
             .add_systems(Update, (give_back.after(cross), swing.after(cross), (show_when_drawn, dissolve).chain().after(cross)));
     }
 }
@@ -1357,10 +1360,23 @@ fn debug_refs(
     }
 }
 
+/// Frame times with a door open and with none, for the exit line.
+fn count_frames(time: Res<Time<Real>>, mut portal: ResMut<Portal>, loading: Option<Res<nvf_play::loading::Loading>>) {
+    if loading.is_some_and(|l| l.active()) {
+        return;
+    }
+    let dt = time.delta_secs_f64();
+    let slot = if portal.open.is_some() { &mut portal.frames_open } else { &mut portal.frames_shut };
+    slot.0 += 1;
+    slot.1 += dt;
+}
+
 fn report(mut exit: MessageReader<AppExit>, seamless: Option<Res<Seamless>>, portal: Res<Portal>) {
     if exit.read().next().is_none() || !seamless.is_some_and(|s| s.portal) {
         return;
     }
+    let ms = |(n, s): (u32, f64)| if n > 0 { format!("{:.1} ms over {n} frames", s * 1000.0 / f64::from(n)) } else { "none".to_string() };
+    info!("door portal frames: with a door open {}, with none {}", ms(portal.frames_open), ms(portal.frames_shut));
     info!("door portal summary: {} door(s) opened onto their other side, {} walked through", portal.opened, portal.crossings);
 }
 
