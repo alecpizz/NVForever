@@ -245,6 +245,12 @@ struct Swing {
 /// posing the door's meshes is to be found].
 const SWING_DOORS: bool = false;
 
+/// The far door swings open into its room in the door's view, instead of being hidden.
+/// Off: through the saloon's front door it showed nothing different from hiding it (a door
+/// swung open lies against the wall beside the opening, out of the doorway's view) and the
+/// turn of its meshes was not seen to apply [observed 2026-11-14].
+const SWING_FAR_DOOR: bool = false;
+
 /// How long a door takes to swing open (real seconds) and how far (radians)
 /// [engineering choice: a door the player pushed open].
 const SWING_SECS: f64 = 0.45;
@@ -537,8 +543,13 @@ fn open_portal(
     // The far door's model is hidden; this one swings open into its doorway (or is hidden).
     let mut swinging = Vec::new();
     let mut dissolving = Vec::new();
+    let mut far_swing = Vec::new();
     for (e, v, vis, _, _) in &visuals {
-        if v.0 == back.door {
+        if v.0 == back.door && SWING_FAR_DOOR {
+            // Swings open into its own room (drawn by the door's view): seen through the
+            // doorway, the door has opened inward; walked through, it stands open behind.
+            far_swing.push(e);
+        } else if v.0 == back.door {
             portal.hidden.push((e, *vis));
             commands.entity(e).insert(Visibility::Hidden);
         } else if v.0 == door && !room {
@@ -552,6 +563,18 @@ fn open_portal(
     if !dissolving.is_empty() {
         // Starts once the doorway is shown ([`show_when_drawn`]).
         portal.dissolving = Some((dissolving, f64::INFINITY, false));
+    }
+    if !far_swing.is_empty() {
+        let theirs = drawn(back.door);
+        let (fx0, fx1, _, _) = doorway(&to_frame, &theirs);
+        let meshes: Vec<(Entity, Transform)> = far_swing.iter().filter_map(|&e| local.get(e).ok().map(|t| (e, *t))).collect();
+        let hinge = to_frame.origin + to_frame.right() * fx0;
+        let free = to_frame.right() * (fx1 - fx0);
+        // Into its room, away from the doorway seen from this side.
+        let sign = if Quat::from_rotation_z(0.5).mul_vec3(free).dot(to_frame.out) > 0.0 { 1.0 } else { -1.0 };
+        debug!("door portal: {:08X} swings open into its room about ({:.0}, {:.0}); {} meshes", back.door, hinge.x, hinge.y, meshes.len());
+        // Starts once the doorway is shown ([`show_when_drawn`]).
+        portal.swing = Some(Swing { meshes, hinge: hinge.with_z(0.0), sign, since: f64::INFINITY });
     }
     if !swinging.is_empty() {
         let meshes: Vec<(Entity, Transform)> = swinging.iter().filter_map(|&e| local.get(e).ok().map(|t| (e, *t))).collect();
@@ -1001,6 +1024,9 @@ fn show_when_drawn(mut commands: Commands, mut portal: ResMut<Portal>, mut phys:
     if let Some(d) = portal.dissolving.as_mut() {
         d.1 = now;
     }
+    if let Some(sw) = portal.swing.as_mut().filter(|sw| !sw.since.is_finite()) {
+        sw.since = now;
+    }
 }
 
 /// The opened door dithers away (as an actor at a door, `door_fade.rs`), then is hidden.
@@ -1033,6 +1059,9 @@ fn dissolve(mut commands: Commands, mut portal: ResMut<Portal>, mut meshes: Quer
 /// The door swinging open about its hinge, in its meshes' own parents' space.
 fn swing(portal: Res<Portal>, mut q: Query<(&mut Transform, &ChildOf)>, parents: Query<&GlobalTransform>) {
     let Some(sw) = portal.swing.as_ref() else { return };
+    if !sw.since.is_finite() {
+        return;
+    }
     let t = ((nvf_play::seamless::now_secs() - sw.since) / SWING_SECS).clamp(0.0, 1.0) as f32;
     let angle = sw.sign * SWING_ANGLE * (1.0 - (1.0 - t) * (1.0 - t));
     for &(e, closed) in &sw.meshes {
