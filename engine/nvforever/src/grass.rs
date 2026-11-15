@@ -269,13 +269,17 @@ fn cull(
     mut cache: ResMut<GrassCache>,
     camera: Query<&GlobalTransform, crate::fly::WorldCamera>,
     mut chunks: Query<(&GrassChunk, &mut Visibility)>,
+    portal: Query<&GlobalTransform, With<crate::door_portal::PortalCamera>>,
 ) {
     let Ok(cam) = camera.single() else { return };
     let eye = bevy_to_game(cam.translation());
+    // Seamless doors: the grass a door shows of the place behind it, near its camera.
+    let door_eye = portal.iter().next().map(|g| bevy_to_game(g.translation()));
     let reach = config.fade_start + config.fade_range;
     let (mut plants, mut near) = (0, 0);
     for (c, mut v) in &mut chunks {
-        let show = config.enabled && eye.distance(c.centre) - c.radius <= reach;
+        let within = |e: Vec3| e.distance(c.centre) - c.radius <= reach;
+        let show = config.enabled && (within(eye) || door_eye.is_some_and(within));
         plants += c.plants as usize;
         near += if show { c.plants as usize } else { 0 };
         v.set_if_neq(if show { Visibility::Inherited } else { Visibility::Hidden });

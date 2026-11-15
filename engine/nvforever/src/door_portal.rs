@@ -88,6 +88,10 @@ pub struct PortalMaterial {
     /// x = 1: drawn flat magenta (the probe test aid's mask of the doorway).
     #[uniform(2)]
     pub debug: Vec4,
+    /// Into the doorway (Bevy space, xyz) and how far back (w) the view's depth is set:
+    /// the door swinging open in front of it, what lies deeper behind the door hidden.
+    #[uniform(3)]
+    pub recess: Vec4,
 }
 
 impl Material for PortalMaterial {
@@ -204,7 +208,30 @@ pub struct Portal {
     probe: Probe,
     /// Doors whose collision is to be given back (`RefChanged`, [`give_back`]).
     give_back: Vec<u32>,
+    /// The door swinging open ([`swing`]): its meshes with their transforms closed, the
+    /// hinge and the turn's sign, and since when (real seconds).
+    swing: Option<Swing>,
 }
+
+struct Swing {
+    meshes: Vec<(Entity, Transform)>,
+    /// The hinge (game space) and which way the slab turns about the vertical (+1/-1).
+    hinge: Vec3,
+    sign: f32,
+    since: f64,
+}
+
+/// Doors swing open into their doorway, the view's depth set back behind them, instead
+/// of their models being hidden. Off: not working yet [observed 2026-11-14: the
+/// Prospector Saloon's front door showed a dark surface in its doorway and did not
+/// move; something behind the door (beyond the backing card hidden) or a system
+/// posing the door's meshes is to be found].
+const SWING_DOORS: bool = false;
+
+/// How long a door takes to swing open (real seconds) and how far (radians)
+/// [engineering choice: a door the player pushed open].
+const SWING_SECS: f64 = 0.45;
+const SWING_ANGLE: f32 = 1.75;
 
 /// Test aid `NVF_PLAY_TEST_PORTAL_PROBE=<dir>[:<count>]`: for the first `count` (1)
 /// doors the player opens and walks up to, a screenshot through the doorway once the
@@ -254,7 +281,7 @@ impl Plugin for DoorPortalPlugin {
             .init_resource::<crate::imagespace::PortalGradeSource>()
             .add_systems(PostUpdate, (drive, doorway_grade).chain().after(bevy::transform::TransformSystems::Propagate))
             .add_systems(Last, (report, debug_refs))
-            .add_systems(Update, give_back.after(cross));
+            .add_systems(Update, (give_back.after(cross), swing.after(cross)));
     }
 }
 
@@ -389,7 +416,7 @@ fn open_portal(
     visuals: Query<(Entity, &RefVisual, &Visibility, &GlobalTransform, Option<&bevy::camera::primitives::Aabb>)>,
     children: Query<&Children>,
     layers: Query<Option<&RenderLayers>>,
-    (room_hidden, parked_actors): (Query<(), With<crate::rooms::RoomHidden>>, Query<Entity, With<crate::world::ParkedActor>>),
+    (room_hidden, parked_actors, local): (Query<(), With<crate::rooms::RoomHidden>>, Query<Entity, With<crate::world::ParkedActor>>, Query<&Transform>),
     bounds: Query<(&GlobalTransform, &bevy::camera::primitives::Aabb)>,
     (lod, sky_parts, mut grade_source): (Res<crate::lod::LodState>, Query<(&Mesh3d, &MeshMaterial3d<crate::sky::SkyMaterial>, &Transform), Without<PortalSky>>, ResMut<crate::imagespace::PortalGradeSource>),
     (mut images, mut meshes, mut materials, window): (ResMut<Assets<Image>>, ResMut<Assets<Mesh>>, ResMut<Assets<PortalMaterial>>, Query<&Window, With<PrimaryWindow>>),
@@ -455,12 +482,66 @@ fn open_portal(
         p.world.remove_ref(door);
         p.world.remove_ref(back.door);
     }
-    // Hide both doors' models.
+    // Room behind the doorway for the door to swing into and the view to sit back in:
+    // nothing within a door's width behind it (a door set on a wall with no opening has
+    // none: its model is hidden and the view drawn on its face).
+    let width = x1 - x0;
+    let mid = from.origin + from.right() * ((x0 + x1) / 2.0) + Vec3::Z * ((z0 + z1) / 2.0);
+    let room = SWING_DOORS && phys.as_deref_mut().is_some_and(|p| p.ray((mid - from.out * 4.0).to_array(), (-from.out).to_array(), width + 24.0, fnv_phys::Filter::default()).is_none());
+    let recess = if room { width + 8.0 } else { 0.0 };
+    // What fills the doorway behind a closed door (a backing card hiding the void, often
+    // without collision): hidden while open, so the view behind the doorway shows. Small
+    // meshes only, wholly in the doorway's box behind the door; the building round it
+    // stays.
+    if recess > 0.0 {
+        let mut backed = 0;
+        for (e, v, vis, gt, aabb) in &visuals {
+            let Some(aabb) = aabb else { continue };
+            if v.0 == door || v.0 == back.door {
+                continue;
+            }
+            let (c, hh) = (Vec3::from(aabb.center), Vec3::from(aabb.half_extents));
+            let mut lo = Vec3::splat(f32::MAX);
+            let mut hi = Vec3::splat(f32::MIN);
+            for i in 0..8 {
+                let sg = Vec3::new(if i & 1 == 0 { -1.0 } else { 1.0 }, if i & 2 == 0 { -1.0 } else { 1.0 }, if i & 4 == 0 { -1.0 } else { 1.0 });
+                let l = from.local(bevy_to_game(gt.transform_point(c + hh * sg)));
+                lo = lo.min(l);
+                hi = hi.max(l);
+            }
+            let inside = lo.x >= x0 - 32.0 && hi.x <= x1 + 32.0 && lo.z >= z0 - 32.0 && hi.z <= z1 + 48.0 && hi.y <= 6.0 && lo.y >= -(recess + 24.0);
+            if inside {
+                portal.hidden.push((e, *vis));
+                commands.entity(e).insert(Visibility::Hidden);
+                backed += 1;
+            }
+        }
+        if backed > 0 {
+            info!("door portal: {door:08X}: {backed} mesh(es) behind the closed door hidden while it is open");
+        }
+    }
+    // The far door's model is hidden; this one swings open into its doorway (or is hidden).
+    let mut swinging = Vec::new();
     for (e, v, vis, _, _) in &visuals {
-        if v.0 == door || v.0 == back.door {
+        if v.0 == back.door || (v.0 == door && !room) {
             portal.hidden.push((e, *vis));
             commands.entity(e).insert(Visibility::Hidden);
+        } else if v.0 == door {
+            swinging.push(e);
         }
+    }
+    if !swinging.is_empty() {
+        let meshes: Vec<(Entity, Transform)> = swinging.iter().filter_map(|&e| local.get(e).ok().map(|t| (e, *t))).collect();
+        // Hinged on the side away from the player, turning into the doorway.
+        let hinge = from.origin + from.right() * x0;
+        let free = from.right() * width;
+        let sign = if Quat::from_rotation_z(0.5).mul_vec3(free).dot(-from.out) > 0.0 { 1.0 } else { -1.0 };
+        let end = Quat::from_rotation_z(sign * SWING_ANGLE).mul_vec3(free);
+        info!(
+            "door portal: {door:08X} swings open about ({:.0}, {:.0}), its free edge from ({:.0}, {:.0}) to ({:.0}, {:.0}) (out of the door ({:.2}, {:.2})); {} meshes, the view {recess:.0} back",
+            hinge.x, hinge.y, (hinge + free).x, (hinge + free).y, (hinge + end).x, (hinge + end).y, from.out.x, from.out.y, meshes.len()
+        );
+        portal.swing = Some(Swing { meshes, hinge: hinge.with_z(0.0), sign, since: nvf_play::seamless::now_secs() });
     }
     // The parked place on the portal's layer, shown.
     let roots: Vec<Entity> = streamer.parked.as_ref().map(|p| p.cells.values().copied().collect()).unwrap_or_default();
@@ -603,6 +684,7 @@ fn open_portal(
         ))
         .id();
     // The doorway: a quad on the door's front, facing out.
+    // In the doorway, its depth set back by `recess` (door_portal.wesl).
     let (w, h) = (x1 - x0, z1 - z0);
     let centre = from.origin + from.right() * ((x0 + x1) / 2.0) + Vec3::Z * ((z0 + z1) / 2.0) + from.out * 1.0;
     let rot = game_to_bevy().rotation;
@@ -612,7 +694,7 @@ fn open_portal(
         .spawn((
             Name::new("Door portal"),
             Mesh3d(meshes.add(Rectangle::new(w, h))),
-            MeshMaterial3d(materials.add(PortalMaterial { image, debug: Vec4::ZERO })),
+            MeshMaterial3d(materials.add(PortalMaterial { image, debug: Vec4::ZERO, recess: (game_to_bevy().rotation * -from.out).extend(recess) })),
             Transform { translation: game_to_bevy().transform_point(centre), rotation: Quat::from_mat3(&Mat3::from_cols(bx, by, bz)), ..default() },
         ))
         .id();
@@ -627,7 +709,7 @@ fn open_portal(
         portal.saved.len()
     );
     portal.opened += 1;
-    portal.open = Some(Open { door: d, back, from, to: to_frame, map, half_width: (x1 - x0) / 2.0, half_height: (z1 - z0) / 2.0, quad_centre: centre, camera, sun, quad });
+    portal.open = Some(Open { door: d, back, from, to: to_frame, map, half_width: (x1 - x0) / 2.0, half_height: (z1 - z0) / 2.0, quad_centre: mid, camera, sun, quad });
 }
 
 /// While a door is open, meshes and lights spawned into the parked place since (an
@@ -751,6 +833,13 @@ fn restore(commands: &mut Commands, portal: &mut Portal) {
     for e in portal.sky.drain(..) {
         commands.entity(e).despawn();
     }
+    if let Some(sw) = portal.swing.take() {
+        for (e, t) in sw.meshes {
+            if let Ok(mut ec) = commands.get_entity(e) {
+                ec.insert(t);
+            }
+        }
+    }
     for (e, v) in portal.hidden.drain(..) {
         if let Ok(mut ec) = commands.get_entity(e) {
             ec.insert(v);
@@ -849,6 +938,27 @@ fn cross(
 fn give_back(mut portal: ResMut<Portal>, mut changed: MessageWriter<nvf_play::RefChanged>) {
     for d in portal.give_back.drain(..) {
         changed.write(nvf_play::RefChanged::new(d));
+    }
+}
+
+/// The door swinging open about its hinge, in its meshes' own parents' space.
+fn swing(portal: Res<Portal>, mut q: Query<(&mut Transform, &ChildOf)>, parents: Query<&GlobalTransform>) {
+    let Some(sw) = portal.swing.as_ref() else { return };
+    let t = ((nvf_play::seamless::now_secs() - sw.since) / SWING_SECS).clamp(0.0, 1.0) as f32;
+    let angle = sw.sign * SWING_ANGLE * (1.0 - (1.0 - t) * (1.0 - t));
+    for &(e, closed) in &sw.meshes {
+        let Ok((mut tr, parent)) = q.get_mut(e) else { continue };
+        let Ok(pg) = parents.get(parent.parent()) else { continue };
+        // The hinge line (game vertical through `hinge`) in the parent's space.
+        let inv = pg.affine().inverse();
+        let hinge_world = game_to_bevy().transform_point(sw.hinge);
+        let h = inv.transform_point3(hinge_world);
+        let axis = inv.transform_vector3(game_to_bevy().rotation * Vec3::Z).normalize();
+        let turn = Transform::from_translation(h) * Transform::from_rotation(Quat::from_axis_angle(axis, angle)) * Transform::from_translation(-h);
+        let want = turn * closed;
+        if *tr != want {
+            *tr = want;
+        }
     }
 }
 

@@ -1024,11 +1024,19 @@ pub fn loading_gate(
 pub fn face_billboards(
     camera: Query<&GlobalTransform, crate::fly::WorldCamera>,
     mut trees: Query<(&mut Transform, &GlobalTransform), With<TreeBillboard>>,
+    portal: Query<&GlobalTransform, (With<crate::door_portal::PortalCamera>, Without<TreeBillboard>)>,
 ) {
     let Ok(cam) = camera.single() else { return };
     let eye = bevy_to_game(cam.translation());
+    // Seamless doors: a billboard of the place a door shows faces the door's camera.
+    let door_eye = portal.iter().next().map(|g| bevy_to_game(g.translation()));
     for (mut t, g) in &mut trees {
-        let d = eye - bevy_to_game(g.translation());
+        let at = bevy_to_game(g.translation());
+        let eye = match door_eye {
+            Some(d) if d.distance_squared(at) < eye.distance_squared(at) => d,
+            _ => eye,
+        };
+        let d = eye - at;
         if d.x * d.x + d.y * d.y > 1e-6 {
             t.rotation = Quat::from_rotation_z(d.y.atan2(d.x));
         }
