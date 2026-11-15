@@ -344,7 +344,7 @@ fn open_portal(
     bounds: Query<(&GlobalTransform, &bevy::camera::primitives::Aabb)>,
     (lod, sky_parts): (Res<crate::lod::LodState>, Query<(&Mesh3d, &MeshMaterial3d<crate::sky::SkyMaterial>, &Transform), Without<PortalSky>>),
     (mut images, mut meshes, mut materials, window): (ResMut<Assets<Image>>, ResMut<Assets<Mesh>>, ResMut<Assets<PortalMaterial>>, Query<&Window, With<PrimaryWindow>>),
-    (sky, main): (Res<SkyState>, Query<(Option<&crate::ssao::AmbientOcclusion>, Option<&bevy::light::ShadowFilteringMethod>), crate::fly::WorldCamera>),
+    (sky, main): (Res<SkyState>, Query<(Option<&bevy::light::ShadowFilteringMethod>, &Msaa, Has<bevy::core_pipeline::prepass::DepthPrepass>, Has<bevy::core_pipeline::prepass::NormalPrepass>, Has<bevy::core_pipeline::prepass::MotionVectorPrepass>), crate::fly::WorldCamera>),
 ) {
     let mut wanted = asked.read().last().map(|o| o.door);
     if wanted.is_none() {
@@ -471,7 +471,6 @@ fn open_portal(
             RenderTarget::Image(image.clone().into()),
             Hdr,
             Tonemapping::None,
-            Msaa::Off,
             Projection::Perspective(PerspectiveProjection::default()),
             look.fog.clone(),
             AmbientLight { color: look.ambient, brightness: look.ambient_brightness, ..default() },
@@ -479,9 +478,26 @@ fn open_portal(
             PortalCamera,
         ))
         .id();
-    // The main view's shadow filter, so its shadows look the same (`graphics.rs`).
-    if let Ok((_, Some(f))) = main.single() {
-        commands.entity(camera).insert(*f);
+    // As the main view (`graphics.rs`): its shadow filter, so its shadows look the same,
+    // and its multisampling and prepasses, so the pipelines the door's view compiles for
+    // the place behind it are the ones the main view needs once the player is through
+    // (a pipeline's key holds them): otherwise the place is drawn without most of its
+    // meshes until theirs are compiled, seconds after the crossing.
+    if let Ok((filter, msaa, depth, normal, motion)) = main.single() {
+        let mut e = commands.entity(camera);
+        e.insert(*msaa);
+        if let Some(f) = filter {
+            e.insert(*f);
+        }
+        if depth {
+            e.insert(bevy::core_pipeline::prepass::DepthPrepass);
+        }
+        if normal {
+            e.insert(bevy::core_pipeline::prepass::NormalPrepass);
+        }
+        if motion {
+            e.insert(bevy::core_pipeline::prepass::MotionVectorPrepass);
+        }
     }
     let sun = commands
         .spawn((

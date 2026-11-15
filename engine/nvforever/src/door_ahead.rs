@@ -156,6 +156,16 @@ pub fn door_ahead(
             }
         }
     }
+    // Seamless doors' keep and portal: outdoors, the interior behind the nearest door is
+    // spawned ahead, hidden, once its models are prepared, so its door opens onto it.
+    let nearest = doors.doors.first().filter(|_| here && s.keep && s.portal && location.interior.is_none());
+    let want = nearest.and_then(|d| match Place::arrival(&d.travel, *location) {
+        Place::Interior(c) if state.interiors.get(&c).is_some_and(|a| a.ready) => Some(c),
+        _ => None,
+    });
+    if streamer.prespawn_want != want {
+        streamer.prespawn_want = want;
+    }
     // Outdoors: the squares around the arrival, pinned in the cell read-ahead.
     if (now - state.last >= nvf_play::seamless::AHEAD_EVERY_SECS) || want_cells != state.cells {
         state.last = now;

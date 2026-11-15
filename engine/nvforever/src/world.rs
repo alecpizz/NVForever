@@ -211,6 +211,12 @@ pub struct Streamer {
     /// Seamless doors (step 3): the place the player left through a door, its cells kept
     /// spawned and hidden ([`travel`]); going back draws them again at once.
     pub parked: Option<Parked>,
+    /// Seamless doors: an interior to spawn ahead, hidden, as the place parked, so that its
+    /// door opens onto it the first time too (`door_ahead.rs` asks for it outdoors near
+    /// its door, once its models are prepared).
+    pub prespawn_want: Option<u32>,
+    /// That interior being spawned, a few references a frame.
+    pub prespawning: Option<(u32, CellSpawn)>,
 }
 
 /// The cells of a place left through a door, kept spawned (seamless doors step 3,
@@ -482,12 +488,54 @@ pub fn stream(
             finish_cell(&mut commands, &mut streamer, c, sp, fading);
         }
     }
+    // Seamless doors: the interior asked for ahead, spawned hidden within what is left of
+    // the frame's budget, becomes the place parked once all its references are in.
+    if budgeted {
+        let s = &mut *streamer;
+        let want_id = s.prespawn_want.filter(|id| !s.parked.as_ref().is_some_and(|p| p.interior == Some(*id)));
+        if s.prespawning.as_ref().is_some_and(|(id, _)| Some(*id) != want_id) {
+            if let Some((_, sp)) = s.prespawning.take() {
+                retire(&mut commands, &mut s.dying, sp.entity);
+            }
+        }
+        if let (Some(id), None) = (want_id, s.prespawning.as_ref()) {
+            let (e, refs, origin) = begin_cell(&mut commands, &world, CellKey::Interior(id), None, tile, &mut models, &mut terrain, &mut water, &mut grass, true, s);
+            commands.entity(root).add_child(e);
+            s.prespawning = Some((id, CellSpawn { entity: e, refs, next: 0, origin, ms: 0.0, frames: 0 }));
+            info!("seamless doors: interior {id:08X} spawned ahead, hidden");
+        }
+        let prespawn_deadline = std::time::Instant::now() + PRESPAWN_BUDGET;
+        if let Some((id, mut sp)) = s.prespawning.take() {
+            let t0 = std::time::Instant::now();
+            while sp.next < sp.refs.len() && std::time::Instant::now() < prespawn_deadline {
+                let r = sp.refs[sp.next];
+                sp.next += 1;
+                spawn_ref(&mut commands, &world, sp.entity, sp.origin, r, &mut models, &mut water, &mut trees, &mut emittance, &mut actors, s);
+            }
+            sp.ms += t0.elapsed().as_secs_f64() * 1000.0;
+            sp.frames += 1;
+            if sp.next < sp.refs.len() {
+                s.prespawning = Some((id, sp));
+            } else {
+                if let Some(old) = s.parked.take() {
+                    old.cells.into_values().for_each(|e| retire(&mut commands, &mut s.dying, e));
+                }
+                info!("seamless doors: interior {id:08X} is in, hidden ({} references over {} frames, {:.1} ms): its door opens onto it", sp.refs.len(), sp.frames, sp.ms);
+                s.parked = Some(Parked { interior: Some(id), world: world.world, cells: HashMap::from([((i32::MIN, i32::MIN), sp.entity)]) });
+            }
+        }
+    }
     if !streamer.settled && want.iter().all(|c| streamer.loaded.contains_key(c)) {
         streamer.settled = true;
         streamer.arrival = None;
     }
     crate::profile::actor_spawns(streamer.stats.actors.equipment_spawns - before.0, streamer.stats.actors.record_spawns - before.1);
 }
+
+/// Main-thread time a frame spends spawning an interior ahead for seamless doors
+/// [engineering choice: beside [`SPAWN_BUDGET`], a saloon's few hundred references take a
+/// second or so].
+const PRESPAWN_BUDGET: std::time::Duration = std::time::Duration::from_millis(2);
 
 /// Main-thread time a frame spends spawning cells once the start square is in
 /// [engineering choice: about a fifth of a 60 fps frame; a town cell's few thousand
@@ -967,6 +1015,12 @@ pub fn travel(
     let Some(t) = msgs.read().last().copied() else { return };
     // `worldspace::switch` has run before: `world.world` is the destination's.
     let keep = keeps.is_some_and(|k| k.keeps(&t));
+    if let Some((_, sp)) = streamer.prespawning.take() {
+        // Not finished before the travel: spawned again if still wanted.
+        let s = &mut *streamer;
+        retire(&mut commands, &mut s.dying, sp.entity);
+    }
+    streamer.prespawn_want = None;
     let back = streamer.parked.take_if(|p| p.is(t.interior, world.world));
     for (_, sp) in streamer.spawning.drain() {
         commands.entity(sp.entity).despawn();
