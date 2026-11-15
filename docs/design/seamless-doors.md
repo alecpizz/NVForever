@@ -108,10 +108,17 @@ open and 5.9 ms with none (the exit line `door portal frames: …`) [observed
   back is written and switched off (`SWING_DOORS`): the saloon's front doorway showed a
   dark surface and the door did not move.
 - The sky through a door seen from indoors is a copy of the dome and clouds as last drawn
-  outdoors; started indoors (a new game in Doc Mitchell's house), a dome coloured as the
-  outdoors now (`SkyState::exterior_dome`) with no clouds. The distant land is built round
-  the door's arrival from indoors (`LodState::around`), so it does not come in on the
-  way out.
+  outdoors. Started indoors (a new game in Doc Mitchell's house), it is a dome coloured as
+  the outdoors are now (`SkyState::exterior_dome`) plus the current weather's cloud layers,
+  textured, tinted, lit and scrolling as outdoors (`SkyState::exterior_cloud`) while the
+  door is open. Doc's front door, walking out: 19.7 [observed 2026-11-15; 25.9 with the
+  clouds lit as indoors]. The distant land is built round the door's arrival from indoors
+  (`LodState::around`), so it does not come in on the way out.
+- A weather a script forces within 2 s of a crossing fades in at the weather's own pace
+  instead of at once (`main.rs` `script_weather`). Goodsprings forces NVWastelandClearWindy
+  on arrival [observed: log `weather: NVWastelandClearWindy by a script (at once, …)`].
+  Behind the original's loading screen that swap is not seen; walked through, it was
+  [design].
 - Opened doors dither away (0.3 s) once their view has been drawn (0.35 s, 10 frames:
   before that its texture is empty while pipelines compile).
 - Exposure: indoors the eye's adaptation lifts the doorway's outdoors (it is blown out

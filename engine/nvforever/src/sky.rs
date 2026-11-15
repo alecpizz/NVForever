@@ -1172,6 +1172,13 @@ fn find_weather(world: &WorldData, name: &str) -> Option<u32> {
 #[derive(Component)]
 pub struct SkyDome(Vec<[f32; 2]>);
 
+impl CloudLayer {
+    /// The WTHR cloud layer (0..4) and the set (0 the current weather).
+    pub fn layer_set(&self) -> (usize, usize) {
+        (self.layer, self.set)
+    }
+}
+
 impl SkyDome {
     /// Per vertex: elevation (degrees) and the sky-upper weight.
     pub fn weights(&self) -> &[[f32; 2]] {
@@ -2053,6 +2060,16 @@ impl SkyState {
             })
             .collect();
         (cols, light)
+    }
+
+    /// The current weather's cloud layer `layer` as it is drawn outdoors now (indoors too,
+    /// for a door seen from inside): its texture, tint and scroll.
+    pub fn exterior_cloud(&mut self, layer: usize, secs: f64) -> (Option<String>, LinearRgba, f32, SkyLight) {
+        let inside = self.interior.take();
+        let c = self.cloud_tint(self.weather.cloud_color(&self.climate, layer, self.hour));
+        let light = self.light();
+        self.interior = inside;
+        (self.weather.cloud_textures[layer].clone(), LinearRgba::new(c[0], c[1], c[2], 1.0), self.weather.cloud_offset(layer, secs), light)
     }
 
     /// The outdoors' look now, as [`update_sky`] lights the outdoors (indoors too: a door

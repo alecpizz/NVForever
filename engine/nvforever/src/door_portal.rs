@@ -1215,7 +1215,11 @@ fn ease_grade(time: Res<Time<Real>>, mut sky: ResMut<SkyState>) {
 
 /// A door seen from inside onto the outdoors when no sky was drawn outdoors yet (a game
 /// started indoors, as a new game in Doc Mitchell's house): a copy of the dome coloured
-/// as the outdoors now ([`SkyState::exterior_dome`]); no clouds.
+/// as the outdoors now ([`SkyState::exterior_dome`]) and the current weather's cloud
+/// layers, kept as outdoors while the door is open.
+/// The sky's own cloud layers.
+type CloudsOutdoors<'w, 's> = Query<'w, 's, (&'static Mesh3d, &'static MeshMaterial3d<crate::sky::SkyMaterial>, &'static Transform, &'static crate::sky::CloudLayer)>;
+
 #[allow(clippy::too_many_arguments)]
 fn indoor_sky(
     mut commands: Commands,
@@ -1226,12 +1230,31 @@ fn indoor_sky(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<crate::sky::SkyMaterial>>,
     mut done: Local<Option<Entity>>,
+    (clouds, copies): (CloudsOutdoors, Query<(&PortalCloud, &MeshMaterial3d<crate::sky::SkyMaterial>)>),
+    (data, mut textures, mut images, time): (Res<nvf_assets::GameData>, ResMut<nvf_assets::TextureCache>, ResMut<Assets<Image>>, Res<Time>),
 ) {
     let Some(o) = portal.open.as_ref() else {
         *done = None;
         return;
     };
-    if *done == Some(o.camera) || streamer.interior.is_none() || o.door.travel.interior.is_some() || !portal.sky.is_empty() {
+    if *done == Some(o.camera) {
+        // The clouds' copies kept as outdoors now: they scroll, and a script may change
+        // the weather (Goodsprings' arrival sets the windy clear one).
+        for (pc, mat) in &copies {
+            let (tex, color, offset, light) = sky.exterior_cloud(pc.0, time.elapsed_secs_f64());
+            let texture = tex.as_deref().and_then(|p| textures.get(p, true, &data, &mut images, None));
+            let Some(mut m) = materials.get_mut(&mat.0) else { continue };
+            let old = m.extension.light;
+            m.extension.light = crate::sky::SkyLight { params: light.params.with_y(old.params.y).with_z(old.params.z).with_w(old.params.w), ..light };
+            if texture.is_some() && m.base.base_color_texture != texture {
+                m.base.base_color_texture = texture;
+            }
+            m.base.base_color = Color::LinearRgba(color);
+            m.base.uv_transform = bevy::math::Affine2::from_translation(Vec2::new(offset, 0.0));
+        }
+        return;
+    }
+    if streamer.interior.is_none() || o.door.travel.interior.is_some() || !portal.sky.is_empty() {
         return;
     }
     *done = Some(o.camera);
@@ -1254,7 +1277,32 @@ fn indoor_sky(
         ))
         .id();
     portal.sky.push(copy);
-    info!("door portal: the sky through the door drawn as outdoors now (no sky drawn outdoors yet)");
+    // The current weather's cloud layers (set 0), textured and tinted as outdoors.
+    let mut layers = 0;
+    for (cm, cmat, ct, cl) in &clouds {
+        let (layer, set) = cl.layer_set();
+        if set != 0 {
+            continue;
+        }
+        let (tex, color, offset, light) = sky.exterior_cloud(layer, time.elapsed_secs_f64());
+        let Some(texture) = tex.as_deref().and_then(|p| textures.get(p, true, &data, &mut images, None)) else { continue };
+        let Some(mut mat) = materials.get(&cmat.0).cloned() else { continue };
+        mat.base.base_color_texture = Some(texture);
+        mat.base.base_color = Color::LinearRgba(color);
+        mat.base.uv_transform = bevy::math::Affine2::from_translation(Vec2::new(offset, 0.0));
+        let old = mat.extension.light;
+        mat.extension.light = crate::sky::SkyLight { params: light.params.with_y(old.params.y).with_z(old.params.z).with_w(old.params.w), ..light };
+        let mut t = *ct;
+        if t.scale.x <= 0.0 {
+            t = crate::sky::sky_transform(t.translation);
+        }
+        let copy = commands
+            .spawn((Name::new("Door portal cloud layer"), PortalSky, PortalCloud(layer), Mesh3d(cm.0.clone()), MeshMaterial3d(materials.add(mat)), t, RenderLayers::layer(PORTAL_LAYER), bevy::light::NotShadowCaster, bevy::light::NotShadowReceiver))
+            .id();
+        portal.sky.push(copy);
+        layers += 1;
+    }
+    info!("door portal: the sky through the door drawn as outdoors now ({layers} cloud layers; no sky drawn outdoors yet)");
 }
 
 /// Outdoors: remember how the outdoors is lit, for a view out from an interior.
@@ -1324,6 +1372,17 @@ fn drive(
 /// seen outdoors [design: the sky's material is updated only outdoors].
 #[derive(Component)]
 pub struct PortalSky;
+
+impl Portal {
+    /// Whether a door was walked through in the last `secs` real seconds.
+    pub fn crossed_within(&self, secs: f64) -> bool {
+        self.last_cross > 0.0 && nvf_play::seamless::now_secs() - self.last_cross < secs
+    }
+}
+
+/// A copy of the current weather's cloud layer (its index) in the door's view from indoors.
+#[derive(Component)]
+pub struct PortalCloud(usize);
 
 /// The doorway's outline on screen for the image-space grade, which grades what the door
 /// shows as its own place (`imagespace.rs`, `ImageSpaceGrade::portal_quad`): crossing,

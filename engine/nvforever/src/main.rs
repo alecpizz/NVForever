@@ -2252,17 +2252,33 @@ fn keys(
 /// TimeScale global. An hour set by hand (the `[` and `]` keys) becomes the game's. The
 /// time-lapse test aid (`--time-scale`) keeps the sky's own clock, and so does
 /// `--still-sky` (the settings page switches it while the game runs).
+/// Real seconds after a seamless door's crossing in which a script's forced weather fades
+/// in instead (the arrival's scripts run within a few frames) [engineering choice].
+const WEATHER_EASE_AFTER_CROSSING_SECS: f64 = 2.0;
+
 /// The weather scripts ask for (SetWeather, ForceWeather, ReleaseWeatherOverride;
 /// `fnv_game::weather`), and back to the scripts the weather shown (IsRaining,
 /// GetIsCurrentWeather).
-fn script_weather(mut script: Option<ResMut<nvf_play::script::ScriptState>>, world: Option<Res<nvf_play::PlayWorld>>, mut sky: ResMut<sky::SkyState>) {
+fn script_weather(
+    mut script: Option<ResMut<nvf_play::script::ScriptState>>,
+    world: Option<Res<nvf_play::PlayWorld>>,
+    mut sky: ResMut<sky::SkyState>,
+    portal: Option<Res<door_portal::Portal>>,
+) {
     let Some(rt) = script.as_deref_mut().and_then(|s| s.rt.as_mut()) else { return };
     let g = &mut rt.game;
     if let Some(r) = g.take_weather_request() {
         match world.as_deref().and_then(|w| fnv_world::sky::weather(w.lo, w.schema, r.weather.0).map(|wt| (w, wt))) {
             Some((w, wt)) => {
                 let adapters = fnv_world::imagespace::weather_adapters(w.lo, w.schema, &wt).map(|id| id.and_then(|id| fnv_world::imagespace::adapter(w.lo, w.schema, id)));
-                sky.script_weather(wt, adapters, r.instant, r.hold);
+                // Seamless doors: a weather forced on arriving (Goodsprings' windy clear) is
+                // hidden by the loading screen in the original; walked through, it fades
+                // in at the weather's own pace instead of swapping the sky at once [design].
+                let eased = r.instant && portal.as_deref().is_some_and(|p| p.crossed_within(WEATHER_EASE_AFTER_CROSSING_SECS));
+                if eased {
+                    info!("weather: forced just after a door was walked through: faded in instead");
+                }
+                sky.script_weather(wt, adapters, r.instant && !eased, r.hold);
             }
             None => warn!("weather: a script asked for {}, which is not a weather", g.data.name(r.weather)),
         }
