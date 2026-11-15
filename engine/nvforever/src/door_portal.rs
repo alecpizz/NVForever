@@ -484,7 +484,7 @@ fn open_portal(
     let map = door_map(&from, &to_frame);
     let mine = drawn(door);
     for (x, arriving, f) in [(&d, &back, &from), (&back, &d, &to_frame)] {
-        info!(
+        debug!(
             "door portal: door {:08X} at ({:.0}, {:.0}) turned {:.0}°, arrival at it ({:.0}, {:.0}) facing {:.0}°, slab axis {:?}: out ({:.2}, {:.2})",
             x.door, x.pos[0], x.pos[1], x.rot[2].to_degrees(), arriving.travel.feet[0], arriving.travel.feet[1], arriving.travel.heading_deg,
             slab_normal(x.rot[2], &drawn(x.door)).map(|n| (n.x * 100.0).round() / 100.0), f.out.x, f.out.y
@@ -658,7 +658,6 @@ fn open_portal(
         "door portal: the view's light: ambient {:?} x{:.0}, light {:?} {:.0}, fog {:?} {:?}",
         look.ambient.to_linear(), look.ambient_brightness, look.light.to_linear(), look.illuminance, look.fog.color.to_linear(), look.fog.falloff
     );
-    info!("door portal: the view's light: ambient x{:.0}, light {:.0}", look.ambient_brightness, look.illuminance);
     let camera = commands
         .spawn((
             Name::new("Door portal camera"),
@@ -667,6 +666,7 @@ fn open_portal(
             RenderTarget::Image(image.clone().into()),
             Hdr,
             Tonemapping::None,
+            bevy::core_pipeline::tonemapping::DebandDither::Disabled,
             Projection::Perspective(PerspectiveProjection::default()),
             look.fog.clone(),
             AmbientLight { color: look.ambient, brightness: look.ambient_brightness, ..default() },
