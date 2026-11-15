@@ -494,11 +494,8 @@ fn open_portal(
         );
     }
     let (x0, x1, z0, z1) = doorway(&from, &mine);
-    // Both doors' collision goes while open (given back on closing: `RefChanged`).
-    if let Some(p) = phys.as_deref_mut() {
-        p.world.remove_ref(door);
-        p.world.remove_ref(back.door);
-    }
+    // Both doors' collision goes once the doorway is shown ([`show_when_drawn`]; given
+    // back on closing: `RefChanged`).
     // Room behind the doorway for the door to swing into and the view to sit back in:
     // nothing within a door's width behind it (a door set on a wall with no opening has
     // none: its model is hidden and the view drawn on its face).
@@ -930,7 +927,7 @@ fn cross(
     let into = look.truncate().normalize_or_zero().dot((-o.from.out).truncate()) > 0.3;
     let half_width = o.half_width;
     let forced = std::mem::take(&mut portal.probe.force);
-    if !forced && (portal.probe.hold || !playing || now - portal.last_cross < CROSS_COOLDOWN || l.y > CROSS_DISTANCE || l.y < -CROSS_DISTANCE || l.x.abs() > half_width || !into) {
+    if !forced && (portal.probe.hold || !playing || now - portal.last_cross < CROSS_COOLDOWN || l.y > CROSS_DISTANCE || l.y < -3.0 * CROSS_DISTANCE || l.x.abs() > half_width || !into || portal.showing.is_some()) {
         return;
     }
     let o = portal.open.as_ref().expect("open");
@@ -983,7 +980,7 @@ fn give_back(mut portal: ResMut<Portal>, mut changed: MessageWriter<nvf_play::Re
 
 /// The doorway is shown once the door's view has been drawn ([`SHOW_AFTER_SECS`]); the
 /// door then dissolves.
-fn show_when_drawn(mut commands: Commands, mut portal: ResMut<Portal>) {
+fn show_when_drawn(mut commands: Commands, mut portal: ResMut<Portal>, mut phys: Option<ResMut<nvf_play::phys::PhysState>>) {
     let Some((quad, since, frames)) = portal.showing.as_mut() else { return };
     *frames += 1;
     let now = nvf_play::seamless::now_secs();
@@ -994,6 +991,12 @@ fn show_when_drawn(mut commands: Commands, mut portal: ResMut<Portal>) {
     portal.showing = None;
     if let Ok(mut ec) = commands.get_entity(quad) {
         ec.insert(Visibility::Inherited);
+    }
+    // The way through is open now, not before: the player cannot walk into a doorway
+    // that still shows the closed door.
+    if let (Some(p), Some(o)) = (phys.as_deref_mut(), portal.open.as_ref()) {
+        p.world.remove_ref(o.door.door);
+        p.world.remove_ref(o.back.door);
     }
     if let Some(d) = portal.dissolving.as_mut() {
         d.1 = now;
