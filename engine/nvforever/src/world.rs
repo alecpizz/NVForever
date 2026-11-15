@@ -1102,6 +1102,11 @@ pub fn note_other_cameras(
     }
 }
 
+/// Seamless doors' portal (`--seamless-doors`): load doors whose models have Open and
+/// Close sequences are drawn with their node hierarchy, as doors that open in place, so
+/// the portal plays the model's own Open (door_portal.rs). Set once at the start.
+pub static ANIMATED_LOAD_DOORS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// `nvf_play::Travel` (door teleports): drop the loaded cells, switch between the
 /// worldspace and an interior; streaming reloads around the camera, which the player
 /// systems have moved to the destination. With `--play` this happens behind a loading
@@ -1520,7 +1525,10 @@ pub fn spawn_model(
     // whose model has them (a locker, a safe) is drawn and timed the same way
     // (`nvf_play::container_anim`), and so is a terminal whose keyboard and screen come
     // out (`nvf_play::terminal`, #1532).
-    let door = model.rig.as_ref().filter(|rig| rig.door.is_some() && ((&base.sig == b"DOOR" && !p.teleport) || &base.sig == b"CONT" || &base.sig == b"TERM"));
+    // With seamless doors' portal, a load door with them is posed too: it swings open as
+    // its doorway shows the place behind (door_portal.rs).
+    let load_door = p.teleport && ANIMATED_LOAD_DOORS.load(std::sync::atomic::Ordering::Relaxed);
+    let door = model.rig.as_ref().filter(|rig| rig.door.is_some() && ((&base.sig == b"DOOR" && (!p.teleport || load_door)) || &base.sig == b"CONT" || &base.sig == b"TERM"));
     // An activator with Open/Close or an idle (a radio, a jukebox): its on and off
     // looks follow its state (activators.rs).
     let activator = model.rig.as_ref().filter(|rig| (rig.door.is_some() || rig.idle.is_some()) && &base.sig == b"ACTI");

@@ -98,6 +98,14 @@ impl Doors {
         started
     }
 
+    /// Door `id` at rest open (`true`) or closed, at once, as the simulation will have it
+    /// (seamless doors: the door just walked out of stands open behind the player).
+    pub fn set_at_rest(&mut self, id: u32, open: bool) {
+        let Some(d) = self.map.get_mut(&id) else { return };
+        d.motion = DoorMotion::new(open, d.timing.open_end, d.timing.close_end);
+        d.to_sim = Some(open);
+    }
+
     /// Whether door `id` is fully open (its "Open" sequence has ended); `None` for a door
     /// not known here.
     pub fn is_open(&self, id: u32) -> Option<bool> {

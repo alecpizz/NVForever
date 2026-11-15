@@ -201,6 +201,22 @@ pub struct Portal {
     sky: Vec<Entity>,
     /// Open this door (the one just come out of) once the travel is in.
     reopen: Option<u32>,
+    /// The door just come out of: it stands open at rest when opened again.
+    came_out: Option<u32>,
+    /// A door whose model has its own Open and Close sequences (`doors.rs`), playing them
+    /// instead of dissolving: the open one, and what to ask of `Doors` ([`animate_doors`]).
+    animated: Option<u32>,
+    door_asks: Vec<(u32, DoorAsk)>,
+    /// The animated door's meshes and their copies drawn in the door's view, through the
+    /// map ([`mirror_door`]): a door swinging in is seen through its own doorway.
+    door_copies: Vec<(Entity, Option<Entity>)>,
+    /// The copies are of the far door, drawn in the main view at this doorway (this door
+    /// has no animation of its own; the far one has).
+    mirror_to_main: bool,
+    copies_logged: bool,
+    /// This door's meshes, hidden at once when the doorway shows (the far door's copy
+    /// stands in for it).
+    hide_at_show: Vec<Entity>,
     last_cross: f64,
     opened: usize,
     crossings: usize,
@@ -229,6 +245,87 @@ const DISSOLVE_SECS: f64 = 0.3;
 /// [engineering choice: about what the saloon's first open took].
 const SHOW_AFTER_SECS: f64 = 0.35;
 const SHOW_AFTER_FRAMES: u32 = 10;
+
+/// The animated door's meshes drawn again in the door's view at the matching place behind
+/// the far door: a door that swings in (behind the doorway, where the view is) is seen
+/// through its own doorway as it would stand [design].
+#[allow(clippy::type_complexity)]
+fn mirror_door(
+    mut commands: Commands,
+    mut portal: ResMut<Portal>,
+    sources: Query<(&GlobalTransform, Option<&Mesh3d>, Option<&MeshMaterial3d<nvf_assets::NifMaterial>>, &InheritedVisibility), Without<PortalDoorCopy>>,
+    mut copies: Query<(&mut Transform, &mut GlobalTransform, &mut Visibility), With<PortalDoorCopy>>,
+) {
+    let Some(o) = portal.open.as_ref() else { return };
+    // Into the main view at this doorway (the far door's copy) only once the doorway shows
+    // and this door is hidden; into the door's view through the map otherwise.
+    let to_main = portal.mirror_to_main;
+    if to_main && !portal.hide_at_show.is_empty() {
+        return;
+    }
+    let m = if to_main { to_bevy(&o.map).inverse() } else { to_bevy(&o.map) };
+    let layer = RenderLayers::layer(if to_main { 0 } else { PORTAL_LAYER });
+    let mut list = std::mem::take(&mut portal.door_copies);
+    for (src, copy) in list.iter_mut() {
+        let Ok((gt, mesh, material, shown)) = sources.get(*src) else { continue };
+        let shown = shown.get() || to_main;
+        let at = Transform::from_matrix(m * gt.to_matrix());
+        match *copy {
+            Some(c) => {
+                if let Ok((mut t, mut g, mut vis)) = copies.get_mut(c) {
+                    *t = at;
+                    *g = GlobalTransform::from(at);
+                    *vis = if shown { Visibility::Visible } else { Visibility::Hidden };
+                }
+            }
+            None => {
+                let (Some(mesh), Some(material)) = (mesh, material) else { continue };
+                *copy = Some(
+                    commands
+                        .spawn((Name::new("Door portal door copy"), PortalDoorCopy, mesh.clone(), material.clone(), at, GlobalTransform::from(at), layer.clone(), bevy::light::NotShadowCaster))
+                        .id(),
+                );
+            }
+        }
+    }
+    let made = list.iter().filter(|(_, c)| c.is_some()).count();
+    if made > 0 && !portal.copies_logged {
+        portal.copies_logged = true;
+        info!("door portal: {made} mesh(es) of the swinging door drawn {}", if to_main { "at this doorway" } else { "in the door's view" });
+    }
+    portal.door_copies = list;
+}
+
+/// A copy of the animated door drawn in its doorway's view ([`mirror_door`]).
+#[derive(Component)]
+pub struct PortalDoorCopy;
+
+/// What the portal asks of a door with its own animation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum DoorAsk {
+    Open,
+    OpenAtRest,
+    Close,
+}
+
+/// The portal's asks of animated doors, played by `nvf_play::doors::Doors`.
+fn animate_doors(mut portal: ResMut<Portal>, doors: Option<ResMut<nvf_play::doors::Doors>>) {
+    let Some(mut doors) = doors else {
+        portal.door_asks.clear();
+        return;
+    };
+    for (d, ask) in std::mem::take(&mut portal.door_asks) {
+        match ask {
+            DoorAsk::Open => {
+                doors.set_open(d, true);
+            }
+            DoorAsk::OpenAtRest => doors.set_at_rest(d, true),
+            DoorAsk::Close => {
+                doors.set_open(d, false);
+            }
+        }
+    }
+}
 
 struct Swing {
     meshes: Vec<(Entity, Transform)>,
@@ -302,9 +399,9 @@ impl Plugin for DoorPortalPlugin {
             .add_systems(Update, (remember_outside, ease_grade).after(crate::world::stream))
             .add_systems(PostUpdate, (adopt_new, reassert).chain().before(bevy::camera::visibility::VisibilitySystems::CheckVisibility))
             .init_resource::<crate::imagespace::PortalGradeSource>()
-            .add_systems(PostUpdate, (drive, doorway_grade).chain().after(bevy::transform::TransformSystems::Propagate))
+            .add_systems(PostUpdate, (drive, doorway_grade, mirror_door).chain().after(bevy::transform::TransformSystems::Propagate))
             .add_systems(Last, (report, debug_refs, count_frames))
-            .add_systems(Update, (give_back.after(cross), swing.after(cross), (show_when_drawn, dissolve).chain().after(cross)));
+            .add_systems(Update, (give_back.after(cross), swing.after(cross), (show_when_drawn, dissolve).chain().after(cross), animate_doors.after(show_when_drawn).after(open_portal)));
     }
 }
 
@@ -440,7 +537,7 @@ fn open_portal(
     children: Query<&Children>,
     layers: Query<Option<&RenderLayers>>,
     (room_hidden, parked_actors, local): (Query<(), With<crate::rooms::RoomHidden>>, Query<Entity, With<crate::world::ParkedActor>>, Query<&Transform>),
-    bounds: Query<(&GlobalTransform, &bevy::camera::primitives::Aabb)>,
+    (bounds, rigs): (Query<(&GlobalTransform, &bevy::camera::primitives::Aabb)>, Query<&crate::doors::DoorRig>),
     (lod, sky_parts, mut grade_source): (Res<crate::lod::LodState>, Query<(&Mesh3d, &MeshMaterial3d<crate::sky::SkyMaterial>, &Transform), Without<PortalSky>>, ResMut<crate::imagespace::PortalGradeSource>),
     (mut images, mut meshes, mut materials, window): (ResMut<Assets<Image>>, ResMut<Assets<Mesh>>, ResMut<Assets<PortalMaterial>>, Query<&Window, With<PrimaryWindow>>),
     (mut phys, sky, main): (Option<ResMut<nvf_play::phys::PhysState>>, Res<SkyState>, Query<(Option<&bevy::light::ShadowFilteringMethod>, &Msaa, Has<bevy::core_pipeline::prepass::DepthPrepass>, Has<bevy::core_pipeline::prepass::NormalPrepass>, Has<bevy::core_pipeline::prepass::MotionVectorPrepass>), crate::fly::WorldCamera>),
@@ -507,7 +604,21 @@ fn open_portal(
     // none: its model is hidden and the view drawn on its face).
     let width = x1 - x0;
     let mid = from.origin + from.right() * ((x0 + x1) / 2.0) + Vec3::Z * ((z0 + z1) / 2.0);
-    let room = SWING_DOORS && phys.as_deref_mut().is_some_and(|p| p.ray((mid - from.out * 4.0).to_array(), (-from.out).to_array(), width + 24.0, fnv_phys::Filter::default()).is_none());
+    // A door with its own Open sequence plays it ([`animate_doors`]).
+    // The two sides of a doorway are two doors, each swinging away from its own side
+    // [observed: the Prospector Saloon's outdoor door swings into the building, its indoor
+    // door out]; one of them is the door that moves: the outdoor one where it has its
+    // own Open, else either. The other is hidden, and a far door that moves is drawn
+    // here through the map ([`mirror_door`]).
+    let rigged = |id: u32| rigs.iter().any(|r| r.form_id == id);
+    let near_outdoors = location.interior.is_none();
+    let far_outdoors = d.travel.interior.is_none();
+    let animated = rigged(door) && (near_outdoors || !(far_outdoors && rigged(back.door)));
+    let far_animated = !animated && rigged(back.door);
+    // (Goodsprings' two animated door models swing out, -105 degrees about their hinge
+    // [observed: their Open sequences' rotation keys], so the view stays at the doorway:
+    // set back, the building's own walls behind the doorway showed in front of it.)
+    let room = SWING_DOORS && !animated && phys.as_deref_mut().is_some_and(|p| p.ray((mid - from.out * 4.0).to_array(), (-from.out).to_array(), width + 24.0, fnv_phys::Filter::default()).is_none());
     let recess = if room { width + 8.0 } else { 0.0 };
     // What fills the doorway behind a closed door (a backing card hiding the void, often
     // without collision): hidden while open, so the view behind the doorway shows. Small
@@ -552,6 +663,16 @@ fn open_portal(
         } else if v.0 == back.door {
             portal.hidden.push((e, *vis));
             commands.entity(e).insert(Visibility::Hidden);
+        } else if v.0 == door && animated {
+            // Its own Open sequence moves it.
+        } else if v.0 == door && far_animated {
+            portal.hidden.push((e, *vis));
+            if portal.came_out == Some(door) {
+                // Just walked out of: the far door's copy stands open in its place at once.
+                commands.entity(e).insert(Visibility::Hidden);
+            } else {
+                portal.hide_at_show.push(e);
+            }
         } else if v.0 == door && !room {
             // Dissolves, then hidden ([`dissolve`]).
             portal.hidden.push((e, *vis));
@@ -761,6 +882,18 @@ fn open_portal(
         portal.saved.len()
     );
     portal.opened += 1;
+    if animated || far_animated {
+        let moving = if animated { door } else { back.door };
+        portal.animated = Some(moving);
+        portal.mirror_to_main = far_animated;
+        portal.door_copies = visuals.iter().filter(|(_, v, _, _, _)| v.0 == moving).map(|(e, ..)| (e, None)).collect();
+        if portal.came_out == Some(door) {
+            // Just walked out of: it stands open behind the player.
+            portal.door_asks.push((moving, DoorAsk::OpenAtRest));
+        }
+        info!("door portal: {door:08X} swings open with {moving:08X}'s own Open (the view {recess:.0} back)");
+    }
+    portal.came_out = None;
     portal.open = Some(Open { door: d, back, from, to: to_frame, map, half_width: (x1 - x0) / 2.0, half_height: (z1 - z0) / 2.0, quad_centre: mid, camera, sun, quad });
 }
 
@@ -883,6 +1016,16 @@ fn close(commands: &mut Commands, portal: &mut Portal, streamer: &Streamer) {
 /// The door models and the parked place's layers as they were; the sky's copies go.
 fn restore(commands: &mut Commands, portal: &mut Portal) {
     portal.showing = None;
+    if let Some(a) = portal.animated.take() {
+        portal.door_asks.push((a, DoorAsk::Close));
+    }
+    portal.hide_at_show.clear();
+    portal.copies_logged = false;
+    for (_, copy) in portal.door_copies.drain(..) {
+        if let Some(c) = copy {
+            commands.entity(c).despawn();
+        }
+    }
     for e in portal.sky.drain(..) {
         commands.entity(e).despawn();
     }
@@ -940,7 +1083,7 @@ fn cross(
     let feet = Vec3::from_array(player.feet);
     let l = o.from.local(feet);
     if l.y.abs() > CLOSE_DISTANCE || l.x.abs() > CLOSE_DISTANCE {
-        info!("door portal: {:08X} closes (the player walked off)", o.door.door);
+        info!("door portal: {:08X} closes (the player walked off: {:.0} across, {:.0} out, {:.0} up of it)", o.door.door, l.x, l.y, l.z);
         close(&mut commands, &mut portal, &streamer);
         return;
     }
@@ -992,6 +1135,7 @@ fn cross(
     portal.last_cross = now;
     portal.crossings += 1;
     portal.reopen = Some(back);
+    portal.came_out = Some(back);
 }
 
 /// Doors closed or gone through: their collision back (`nvf_play::phys`'s `RefChanged`).
@@ -1020,9 +1164,21 @@ fn show_when_drawn(mut commands: Commands, mut portal: ResMut<Portal>, mut phys:
     if let (Some(p), Some(o)) = (phys.as_deref_mut(), portal.open.as_ref()) {
         p.world.remove_ref(o.door.door);
         p.world.remove_ref(o.back.door);
+        // A door with moving parts: its posed bodies went with it (their handles would
+        // move whatever bodies come next in their slots); `RefChanged` builds them again.
+        p.doors.remove(&o.door.door);
+        p.doors.remove(&o.back.door);
     }
     if let Some(d) = portal.dissolving.as_mut() {
         d.1 = now;
+    }
+    if let Some(a) = portal.animated {
+        portal.door_asks.push((a, DoorAsk::Open));
+    }
+    for e in std::mem::take(&mut portal.hide_at_show) {
+        if let Ok(mut ec) = commands.get_entity(e) {
+            ec.insert(Visibility::Hidden);
+        }
     }
     if let Some(sw) = portal.swing.as_mut().filter(|sw| !sw.since.is_finite()) {
         sw.since = now;
@@ -1162,7 +1318,7 @@ fn probe(
         }
         player.heading = into.x.atan2(into.y);
         player.pitch = 0.0;
-        info!("test aid: portal probe {n}: the player stands 90 units out from door {:08X}, facing it", o.door.door);
+        info!("test aid: portal probe {n}: the player stands 90 units out from door {:08X}, facing it (feet {:?}, asked {at})", o.door.door, player.feet);
         let camera = o.camera;
         portal.probe.placed_for = Some(camera);
         return;
@@ -1171,6 +1327,9 @@ fn probe(
     let look = Vec3::from_array(player.look_dir());
     let into = look.truncate().normalize_or_zero().dot((-o.from.out).truncate()) > 0.5;
     if l.y > PROBE_DISTANCE || l.y < 0.0 || l.x.abs() > o.half_width || !into {
+        if frame.is_multiple_of(60) {
+            debug!("test aid: portal probe {n}: waiting: the player {:.0} across, {:.0} out (half width {:.0}), looking in {into}", l.x, l.y, o.half_width);
+        }
         return;
     }
     if opening {

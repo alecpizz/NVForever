@@ -1672,6 +1672,7 @@ fn main() -> AppExit {
         match nvf_play::seamless::Seamless::parse(parts) {
             Ok(s) => {
                 info!("seamless doors: {}", s.describe());
+                world::ANIMATED_LOAD_DOORS.store(s.portal, std::sync::atomic::Ordering::Relaxed);
                 app.insert_resource(s);
             }
             Err(e) => return fail(format!("--seamless-doors: {e}")),

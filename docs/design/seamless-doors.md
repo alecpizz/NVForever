@@ -72,7 +72,20 @@ Activating a door whose other side is parked opens it (`door_portal.rs`):
   place's grade; only the eye's HDR part eases across the crossing (1.5 s).
 - **Room culling** keeps to the interior's own meshes; the portal re-asserts its layers
   while open.
-- **Collision** of both doors goes while open (given back on closing).
+- **Doors swing** where the model has its own "Open" and "Close" sequences: the Prospector
+  Saloon's front door and the craftsman houses' doors (Doc Mitchell's outside, two houses)
+  turn −105° about their hinge [observed: the sequences' rotation keys]. With the portal on,
+  load doors with them get their node hierarchy (`world::ANIMATED_LOAD_DOORS`) and are
+  played through `nvf_play::doors::Doors`. Each side of a doorway is its own door,
+  swinging away from its own side (the saloon's outdoor door into the building, its indoor
+  door out), so one is the door that moves: the outdoor one. Seen from outside, it swings
+  in and is drawn again in the door's view through the map (`mirror_door`), standing in
+  the room behind the doorway. From inside, the indoor door is hidden and the outdoor
+  door's copy swings into the room. The door just walked out of stands open at once. The
+  other models (the ranch and Goodsprings house doors, the scrap door, Doc's indoor door)
+  have no sequences; their doors still dissolve.
+- **Collision** of both doors goes while open (given back on closing; a door's moving
+  bodies go with it).
 - **Actors** standing in the parked place are drawn (`ParkedActor`), so a door shows them
   (Sunny Smiles through the saloon's door); a door's activation (the player entering the
   cell, teammates coming along) runs at the crossing, not when it is opened; a door with
@@ -104,9 +117,10 @@ open and 5.9 ms with none (the exit line `door portal frames: …`) [observed
 
 ## 6. Not done
 
-- Doors still vanish when opened. A swing into the doorway with the view's depth set
-  back is written and switched off (`SWING_DOORS`): the saloon's front doorway showed a
-  dark surface and the door did not move.
+- Doors whose models have no Open sequence still dissolve: the ranch and Goodsprings house
+  doors, the scrap door. Animating them needs a hinge per model (authoring), or the swing
+  written without one (`SWING_DOORS`, off: with the view set back behind the doorway, the
+  building's own walls behind it showed in front of the view).
 - The sky through a door seen from indoors is a copy of the dome and clouds as last drawn
   outdoors. Started indoors (a new game in Doc Mitchell's house), it is a dome coloured as
   the outdoors are now (`SkyState::exterior_dome`) plus the current weather's cloud layers,
