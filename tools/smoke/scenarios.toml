@@ -28393,3 +28393,23 @@ expect = [
   { text = 'script: print "nvf physical wheel edge 265"', min = 1, label = "actual physical down reaches its public script handler" },
 ]
 manual = "Keep the primary game window focused; scroll up and down after loading. This manual scenario has no selection or scroll-offset expectation and provides no GPU/native visual comparison."
+
+[[scenario]]
+name = "seamless-doors-saloon"
+source = "seamless doors (docs/design/seamless-doors.md; --seamless-doors, NVForever's own): the Prospector Saloon's front door opens onto the saloon spawned ahead, the player walks in and back out with no fade or loading screen"
+note = "Goodsprings at noon, no NPC packages (Sunny Smiles' greeting would hold the player). The saloon is spawned ahead as the player stands by its door; the door behind opens as the player comes out of it"
+areas = ["loading", "seamless-doors"]
+paths = ["engine/nvforever/src/door_portal.rs", "engine/nvforever/src/door_portal.wesl", "engine/nvforever/src/door_ahead.rs", "engine/nvf-play/src/seamless.rs", "engine/nvf-play/src/phys/warm.rs"]
+env = { NVF_PLAY_TEST_SCRIPT_MENUS = "1", NVF_PLAY_TEST_FACE = "3:0010636F,15:0010618E", NVF_PLAY_TEST_ACTIVATE = "8", NVF_PLAY_TEST_MOVE = "9:1:0:walk,12:0:0,16:1:0:walk,19:0:0" }
+args = ["--cell", "Goodsprings", "--play", "--no-voice", "--no-messages", "--no-npc-packages", "--seamless-doors", "--hour", "12"]
+run_seconds = 22
+expect = [
+  { text = "loading screen up", count = 1, label = "only the start's loading screen" },
+  { re = 'loading screen: a fade through black', count = 0, label = "no fade at either door" },
+  { re = 'door portal summary: [2-9] door\(s\) opened onto their other side, 2 walked through', label = "both doors walked through" },
+]
+order = [[
+  { re = 'seamless doors: interior 00106185 is in, hidden', label = "the saloon spawned ahead" },
+  { re = 'door portal: through 0010636F to interior 00106185 .*no fade, no loading screen', label = "in through the front door" },
+  { re = 'door portal: through 0010618E to the worldspace .*no fade, no loading screen', label = "out through the back door" },
+]]
