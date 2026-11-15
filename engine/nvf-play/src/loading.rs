@@ -380,6 +380,9 @@ fn begin_start(
     loading.picture_hold = Some(std::time::Instant::now());
 }
 
+/// What [`begin`] needs to open a door onto its other side (seamless doors).
+type SeamlessDoors<'w> = (Option<Res<'w, crate::seamless::LoadDoors>>, Option<Res<'w, crate::seamless::PortalDoors>>, MessageWriter<'w, crate::seamless::OpenPortal>, ResMut<'w, crate::seamless::Activated>);
+
 /// A travel was asked for: bring the screen up and hold the game.
 #[allow(clippy::too_many_arguments)]
 fn begin(
@@ -392,7 +395,7 @@ fn begin(
     mut next: ResMut<NextState<PlayState>>,
     mut art: Art,
     (seamless, mut veil): (Option<Res<crate::seamless::Seamless>>, ResMut<VeilState>),
-    mut seamless_doors: (Option<Res<crate::seamless::LoadDoors>>, Option<Res<crate::seamless::PortalDoors>>, MessageWriter<crate::seamless::OpenPortal>, ResMut<crate::seamless::Activated>),
+    mut seamless_doors: SeamlessDoors,
 ) {
     let Some(TravelRequest(travel)) = requests.read().last().copied() else { return };
     // Seamless doors (step 4): a door's script that let the player through sends the

@@ -754,11 +754,11 @@ fn adopt_new(
     // Actors come to stand in the place behind since the door opened: their bodies too.
     let mut stack: Vec<Entity> = marked.iter().collect();
     while let Some(e) = stack.pop() {
-        if !portal.saved.contains_key(&e) {
+        if let std::collections::hash_map::Entry::Vacant(slot) = portal.saved.entry(e) {
             let before = layers.get(e).ok().flatten().cloned();
             if world_drawn(before.as_ref()) {
                 let new = portal_layers(before.as_ref(), false);
-                portal.saved.insert(e, (before, new.clone()));
+                slot.insert((before, new.clone()));
                 commands.entity(e).insert(new);
             }
         }
@@ -1042,7 +1042,7 @@ fn swing(portal: Res<Portal>, mut q: Query<(&mut Transform, &ChildOf)>, parents:
 }
 
 /// The probe test aid ([`Probe`]).
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn probe(
     mut commands: Commands,
     mut portal: ResMut<Portal>,
@@ -1108,6 +1108,8 @@ fn probe(
     if portal.probe.left == 0 {
         return;
     }
+    // Once the door is open (its view shown, the door dissolved).
+    let opening = portal.showing.is_some() || portal.dissolving.as_ref().is_some_and(|d| !d.2);
     // Stand the player straight out from the door, facing it, once per door opened: the
     // test walks it in from there.
     if portal.probe.placed_for != Some(o.camera) {
@@ -1130,6 +1132,11 @@ fn probe(
     let look = Vec3::from_array(player.look_dir());
     let into = look.truncate().normalize_or_zero().dot((-o.from.out).truncate()) > 0.5;
     if l.y > PROBE_DISTANCE || l.y < 0.0 || l.x.abs() > o.half_width || !into {
+        return;
+    }
+    if opening {
+        // Not through until the door is open and probed.
+        portal.probe.hold = true;
         return;
     }
     // The doorway on screen.
@@ -1179,7 +1186,7 @@ fn remember_outside(
     mut frames: Local<u32>,
 ) {
     *frames += 1;
-    if streamer.interior.is_some() || !streamer.settled || *frames % 30 != 0 {
+    if streamer.interior.is_some() || !streamer.settled || !(*frames).is_multiple_of(30) {
         return;
     }
     let (Ok(fog), Ok((light, t))) = (main.single(), sun.single()) else { return };

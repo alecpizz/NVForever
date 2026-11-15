@@ -1137,7 +1137,7 @@ pub fn travel(
     for (_, sp) in streamer.spawning.drain() {
         commands.entity(sp.entity).despawn();
     }
-    let left: HashMap<(i32, i32), Entity> = streamer.loaded.drain().collect();
+    let left: HashMap<(i32, i32), Entity> = std::mem::take(&mut streamer.loaded);
     if keep {
         // Seamless doors (step 3): the place left stays, hidden; a place parked before
         // that is not the destination goes.

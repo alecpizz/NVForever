@@ -458,7 +458,7 @@ fn list_doors(mut commands: Commands, sim: Option<Res<crate::sim::SimState>>, d:
     info!("seamless doors: {} load doors listed", doors.0.len());
     // Diagnostic `NVF_SEAMLESS_LIST_DOORS=<x>,<y>,<radius>`: the worldspace's load doors
     // there, with where they lead.
-    if let Some(v) = std::env::var("NVF_SEAMLESS_LIST_DOORS").ok() {
+    if let Ok(v) = std::env::var("NVF_SEAMLESS_LIST_DOORS") {
         let n: Vec<f32> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
         if let [x, y, r] = n[..] {
             for door in doors.0.iter().filter(|door| matches!(door.from, Place::Exterior(_)) && Vec2::new(door.pos[0] - x, door.pos[1] - y).length() <= r) {
