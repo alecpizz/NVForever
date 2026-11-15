@@ -38,7 +38,18 @@ pub struct DoorFade {
     pub since: f32,
     /// Fading out (despawned at the end) rather than in.
     pub out: bool,
+    /// Seamless doors: the door is opened onto its other side (`door_portal.rs`), and the
+    /// body walks on into the doorway at this velocity (game units a second, bodies being
+    /// placed in game space) once it shows, cut off by the doorway's view, instead of
+    /// fading.
+    pub walk: Option<Vec3>,
 }
+
+/// Seamless doors: a body going through an opened door waits this long for the doorway to
+/// show (`door_portal::SHOW_AFTER_SECS` and a little), then walks this long into it
+/// [engineering choice].
+pub const WALK_WAIT_SECONDS: f32 = 0.45;
+pub const WALK_SECONDS: f32 = 1.2;
 
 /// The references whose next drawn body fades in (they came through a door), and the
 /// counts for the summary.
@@ -67,7 +78,7 @@ pub fn fade(
     time: Res<Time>,
     mut fades: ResMut<DoorFades>,
     new_roots: Query<(Entity, &ActorRig), Added<ActorRig>>,
-    bodies: Query<(Entity, &DoorFade)>,
+    mut bodies: Query<(Entity, &DoorFade, &mut Transform)>,
     children: Query<&Children>,
     mut meshes: Query<(&mut MeshMaterial3d<NifMaterial>, Has<VisibilityRange>)>,
 ) {
@@ -75,12 +86,23 @@ pub fn fade(
     // A body drawn for one that came through a door starts hidden, this frame.
     for (e, rig) in &new_roots {
         if fades.fade_in.remove(&rig.reference) {
-            commands.entity(e).insert(DoorFade { since: now, out: false });
+            commands.entity(e).insert(DoorFade { since: now, out: false, walk: None });
             apply(&mut commands, e, 0, &children, &mut meshes);
             fades.ins += 1;
         }
     }
-    for (e, f) in &bodies {
+    let dt = time.delta_secs();
+    for (e, f, mut t) in &mut bodies {
+        if let Some(v) = f.walk {
+            // Into the opened doorway, then gone (not dithered: the doorway's view hides it).
+            let since = now - f.since;
+            if since >= WALK_WAIT_SECONDS + WALK_SECONDS {
+                commands.entity(e).despawn();
+            } else if since >= WALK_WAIT_SECONDS {
+                t.translation += v * dt;
+            }
+            continue;
+        }
         let share = ((now - f.since) / FADE_SECONDS).clamp(0.0, 1.0);
         if f.out {
             if share >= 1.0 {

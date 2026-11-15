@@ -137,7 +137,14 @@ open and 5.9 ms with none (the exit line `door portal frames: …`) [observed
   before that its texture is empty while pipelines compile).
 - Exposure: indoors the eye's adaptation lifts the doorway's outdoors (it is blown out
   from a dark room); it settles as one walks out.
-- NPCs going through a door still fade out at it and in at the other side.
+- NPCs: a door near the player (600 units) that opens onto its other side opens for an
+  actor using it too (`residents.rs`), so the door swings as it passes. Going in, the body
+  waits for the doorway to show, then walks on into it, cut off by the doorway's view
+  (`door_fade.rs` `walk`; written, not yet seen in a frame: no actor in the test runs went
+  in by a door near the player). Coming out, the body still fades in at its arrival spot:
+  easing it from the door instead showed it standing at the door before the door had
+  opened (Sunny Smiles out of the saloon, 2026-11-15). Doors away from the player fade as
+  before.
 - Another worldspace (Freeside's gates: the gate at (−9,816, 102,730) in WastelandNV
   arrives at (9,246, −7,137) in FreesideNorthWorld [observed: `fnvtool sim doors`]) and
   interiors overlapping the place left still fade.

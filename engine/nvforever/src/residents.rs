@@ -3049,7 +3049,20 @@ type Moves<'w, 's> = (
     Option<MessageReader<'w, 's, nvf_play::combat::Knockback>>,
     Option<MessageReader<'w, 's, nvf_play::Travel>>,
     Option<ResMut<'w, nvf_play::loading::Loading>>,
+    SeamlessWalk<'w>,
 );
+
+/// Seamless doors: the doors that open onto their other side now, the player (only a door
+/// near it is opened for an actor) and the asks to open one.
+type SeamlessWalk<'w> = (Option<Res<'w, nvf_play::seamless::PortalDoors>>, Option<Res<'w, nvf_play::player::Player>>, Option<ResMut<'w, Messages<nvf_play::seamless::OpenPortal>>>);
+
+/// Seamless doors: how near the player an actor's door is opened onto its other side
+/// [engineering choice: within the distance an open door stays open, `door_portal.rs`].
+const WALK_THROUGH_NEAR: f32 = 600.0;
+
+/// An actor's walk into an opened door, in game units a second [engineering choice: about
+/// a walk].
+const WALK_THROUGH_SPEED: f32 = 90.0;
 
 type Held<'w, 's> = (
     Query<'w, 's, &'static RefVisual, With<OnFurniture>>,
@@ -3078,7 +3091,7 @@ pub fn drive(
     mut doors: ResMut<nvf_play::doors::Doors>,
     (script, mut sim, mut phys, mut blocks): PlayState,
     (seated, hours, flinches, fighters, idle_holds, mut refusals): Held,
-    (mut door_fades, mut door_sounds, mut travel, mut knocks, trips, screen): Moves,
+    (mut door_fades, mut door_sounds, mut travel, mut knocks, trips, screen, (portal_doors, player, mut open_portal)): Moves,
 ) {
     // Hours passed in the Wait menu since the last frame (`--play` only: without it
     // there is no menu and no such message).
@@ -3213,8 +3226,26 @@ pub fn drive(
                 }
             }
         }
+        // Seamless doors: a door near the player that opens onto its other side opens for
+        // the actor too; the body walks on into it and the one beyond is not faded in.
+        let near_player = |d: u32| {
+            at(d).zip(player.as_deref()).is_some_and(|(p, pl)| (p[0] - pl.feet[0]).hypot(p[1] - pl.feet[1]) <= WALK_THROUGH_NEAR)
+        };
+        let ready = |d: u32| portal_doors.as_deref().is_some_and(|p| p.0.contains(&d)) && near_player(d);
+        let through = r.spawned && ready(door);
+        let out_of = !through && ready(to_door);
+        if let (Some(m), Some(d)) = (open_portal.as_deref_mut(), if through { Some(door) } else if out_of { Some(to_door) } else { None }) {
+            m.write(nvf_play::seamless::OpenPortal { door: d });
+            info!("ai: {} goes through load door {d:08X}: it opens onto its other side (seamless doors)", r.label);
+        }
         if let Some(e) = r.root.take().filter(|_| r.spawned) {
-            commands.entity(e).remove::<(RefVisual, crate::limbs::ActorRig)>().insert(crate::door_fade::DoorFade { since: now, out: true });
+            let walk = if through {
+                // Bodies are placed in game space under the world root (`nav::show_actor`).
+                at(door).zip(actors.get(e).ok()).map(|(p, (t, _))| (Vec3::from_array(p) - t.translation).with_z(0.0).normalize_or_zero() * WALK_THROUGH_SPEED)
+            } else {
+                None
+            };
+            commands.entity(e).remove::<(RefVisual, crate::limbs::ActorRig)>().insert(crate::door_fade::DoorFade { since: now, out: true, walk });
             door_fades.outs += 1;
         } else if r.spawned {
             // Diagnostic for #2461: a body spawned and not yet found is not taken away.
@@ -3222,7 +3253,12 @@ pub fn drive(
         }
         r.spawned = false;
         r.last_drawn = None;
-        door_fades.fade_in.insert(actor.0);
+        // Coming out of the opened door it still fades in: its body is drawn at its arrival
+        // spot, out from the door (an ease from the door was tried and showed it there
+        // before the door had opened, 2026-11-15).
+        if !through {
+            door_fades.fade_in.insert(actor.0);
+        }
     }
     if nav.travellers.is_empty() {
         nav.lead = core.list.first().and_then(|r| core.ai.agents.get(&r.actor)).map(|a| Lead { space: a.walker.space, feet: a.walker.feet, heading: a.walker.heading });
