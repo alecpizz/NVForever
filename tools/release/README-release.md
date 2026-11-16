@@ -15,6 +15,7 @@ NVForever only reads the game's `Data` folder and never writes into the game fol
 | `fnvtool(.exe)` | the command-line tool: setup, paths, archive and plugin inspection as JSON |
 | `nvforever.cmd` / `.sh`, `nvf-viewer.cmd` / `.sh` | launchers that point the programs at `schemas/` beside them |
 | `schemas/` | record, NIF and script-function schemas the programs read at start-up |
+| `dxcompiler.dll`, `DXC-LICENSE-*.txt` (Windows) | Microsoft's DirectX shader compiler (DXC) for the DirectX 12 renderer (`WGPU_BACKEND=dx12`), with its licences; the default Vulkan renderer does not use it |
 
 ## Running
 

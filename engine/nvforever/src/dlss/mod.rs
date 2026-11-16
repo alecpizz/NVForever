@@ -1026,15 +1026,21 @@ pub(crate) fn dlss_pass(
 
 /// The renderer's plugin with the adapter pin (the module comment's "Adapter pin"): Bevy's
 /// defaults, with `WgpuSettings::adapter_name` set to the checked NVIDIA GPU when the loader
-/// pinned one. Without a pin it is `RenderPlugin::default()`. `main` sets it on
+/// pinned one. Without a pin Bevy's adapter choice stands. `main` sets it on
 /// `DefaultPlugins`, after [`DlssInitPlugin`] has run.
+///
+/// Either way the DirectX 12 renderer's shader compiler is chosen by
+/// [`crate::dx12_shader::compiler`] (DXC beside the program), not by Bevy's working-directory
+/// check; the Vulkan renderer does not use it.
 pub fn render_plugin() -> bevy::render::RenderPlugin {
     let adapter_name = adapter_pin();
-    if adapter_name.is_none() {
-        return bevy::render::RenderPlugin::default();
-    }
     bevy::render::RenderPlugin {
-        render_creation: bevy::render::settings::WgpuSettings { adapter_name, ..default() }.into(),
+        render_creation: bevy::render::settings::WgpuSettings {
+            adapter_name,
+            dx12_shader_compiler: crate::dx12_shader::compiler(),
+            ..default()
+        }
+        .into(),
         ..default()
     }
 }
@@ -1211,7 +1217,7 @@ mod tests {
     }
 
     #[test]
-    fn without_a_pin_the_renderer_plugin_is_bevys_default() {
+    fn without_a_pin_the_renderer_plugin_names_no_adapter() {
         // No loader ran in the tests: no pin.
         assert_eq!(adapter_pin(), None);
         let plugin = render_plugin();

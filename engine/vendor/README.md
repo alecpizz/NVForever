@@ -111,6 +111,18 @@ Upstream has no way to draw a light's shadow map less often than every frame.
 
 ## bevy_render 0.20.1 (MIT OR Apache-2.0, Bevy contributors)
 
+Change for DirectX 12 (marked `NVForever DX12 bindless`), in
+`src/combined_bind_group.rs`: an `ExtendedMaterial` is laid out and bound without bindless
+unless the base and the extension can both be bindless on the device
+(`bindless_together`); upstream forces it off only when one half has no slab limit. Each
+half's generated `bindless_supported` asks for different features: `StandardMaterial`
+(buffer binding arrays) needs `BUFFER_BINDING_ARRAY`, `NifSurface` (data, textures and
+samplers only) just `TEXTURE_BINDING_ARRAY`. On DX12, which lacks the first [observed
+2026-11-15, RTX 3070], the base fell back to its plain layout while `NifSurface` laid out its
+bindless table, and every NIF bind group (built plain) failed validation: "Number of
+bindings in bind group descriptor (21) does not match ... layout (19)", and the
+pipelines lacked binding 50. Nothing changes where both halves are bindless (Vulkan).
+
 [documented: `src/render_resource/pipeline_cache.rs::create_pipeline_task`, #2317]
 `RENDER_DEVICE_API_GATE` gates pipeline creation on task threads (and synchronous creation).
 Each compilation holds its read side. NVForever's device poll thread shares it;

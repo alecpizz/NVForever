@@ -24,6 +24,7 @@ macro_rules! eprintln {
 }
 
 mod activators;
+mod dx12_shader;
 mod fos_start;
 mod reports;
 mod native_crash;
@@ -1417,6 +1418,8 @@ fn main() -> AppExit {
     // Asks for VK_AMD_anti_lag or VK_NV_low_latency2 when Bevy creates the device: before
     // DefaultPlugins (anti_lag.rs, nv_low_latency.rs).
     app.add_plugins(anti_lag::AntiLagInitPlugin);
+    // Says which shader compiler the DirectX 12 renderer uses, and warns on FXC (dx12_shader.rs).
+    app.add_plugins(dx12_shader::Dx12ShaderPlugin);
     // The upscaler this run starts with, before the renderer exists: Streamline must be loaded
     // and initialised before the Vulkan instance is made (dlss/, #2198), so the settings' INI is
     // read here by the rows' own rules and precedence, as `apply_stored` applies them at
@@ -1446,7 +1449,8 @@ fn main() -> AppExit {
         DefaultPlugins
             .set(task_pools(cpu_placed.pool_threads))
             // Bevy's own renderer plugin, with the GPU the DLSS loader checked asked for by
-            // name when it pinned one (dlss/ "Adapter pin"); otherwise `RenderPlugin::default()`.
+            // name when it pinned one (dlss/ "Adapter pin"), and DirectX 12's shader compiler
+            // chosen by dx12_shader.rs.
             .set(dlss::render_plugin())
             .set(ImagePlugin {
                 default_sampler: ImageSamplerDescriptor {

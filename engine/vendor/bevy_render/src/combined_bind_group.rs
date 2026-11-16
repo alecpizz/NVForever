@@ -45,6 +45,16 @@ fn combine_bindless_slot_count(
     }
 }
 
+/// NVForever DX12 bindless: whether the base `B` and the extension `E` can both be bindless
+/// on this device. Each half's own `bindless_supported` can differ (a half with no buffer
+/// binding arrays needs only `TEXTURE_BINDING_ARRAY`), and a half left to decide alone
+/// would lay out bindless while the other and the bind group are not (vendor/README.md).
+fn bindless_together<B: AsBindGroup, E: AsBindGroup>(render_device: &RenderDevice) -> bool {
+    bindless_slot_count::<B, E>().is_some()
+        && B::bindless_supported(render_device)
+        && E::bindless_supported(render_device)
+}
+
 /// Combines [`AsBindGroup::bind_group_data`] implementations from base `B` and extension `E`
 pub fn bind_group_data<B: AsBindGroup, E: AsBindGroup>(
     base: &B,
@@ -66,7 +76,8 @@ pub fn build_bind_group<B: AsBindGroup, E: AsBindGroup>(
     mut force_no_bindless: bool,
     output: &mut BindGroupBuilder,
 ) -> Result<(), AsBindGroupError> {
-    force_no_bindless = force_no_bindless || bindless_slot_count::<B, E>().is_none();
+    // NVForever DX12 bindless: both halves bindless or neither (vendor/README.md).
+    force_no_bindless = force_no_bindless || !bindless_together::<B, E>(render_device);
 
     B::build_bind_group(
         base,
@@ -93,7 +104,8 @@ pub fn bind_group_layout_entries<B: AsBindGroup, E: AsBindGroup>(
     render_device: &RenderDevice,
     mut force_no_bindless: bool,
 ) -> Vec<BindGroupLayoutEntry> {
-    force_no_bindless = force_no_bindless || bindless_slot_count::<B, E>().is_none();
+    // NVForever DX12 bindless: both halves bindless or neither (vendor/README.md).
+    force_no_bindless = force_no_bindless || !bindless_together::<B, E>(render_device);
 
     let base_entries = B::bind_group_layout_entries(render_device, force_no_bindless);
     let extension_entries = E::bind_group_layout_entries(render_device, force_no_bindless);

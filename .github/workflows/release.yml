@@ -70,6 +70,10 @@ jobs:
 
       - name: Package
         shell: bash
+        env:
+          DXC_TAG: v1.9.2609
+          DXC_ZIP: dxc_2026_09_29.zip
+          DXC_SHA256: ad31b1fc8443175d204f77a611fdb3ef2ec42759bdc2f1167368de24a4a7e7f1
         run: |
           name="NVForever-${TAG}-${{ matrix.target }}"
           mkdir -p "dist/$name"
@@ -83,6 +87,15 @@ jobs:
           # The notices of every third-party package the programs are built from.
           python tools/release/third_party_licenses.py --target "${{ matrix.target }}" --out "dist/$name/THIRD-PARTY-LICENSES.txt"
           if [ "${{ runner.os }}" = "Windows" ]; then
+            # DXC for the DirectX 12 renderer (engine/nvforever/src/dx12_shader.rs): without it
+            # wgpu compiles with FXC, too slowly to draw. Only dxcompiler.dll (built from the open
+            # source, LLVM licence); dxil.dll is not needed (checked 2026-11-15) and not shipped.
+            curl -fsSL -o dxc.zip "https://github.com/microsoft/DirectXShaderCompiler/releases/download/${DXC_TAG}/${DXC_ZIP}"
+            echo "${DXC_SHA256}  dxc.zip" | sha256sum -c -
+            7z e dxc.zip -odxc 'bin\x64\dxcompiler.dll' LICENSE-LLVM.txt LICENSE-MS.txt > /dev/null
+            cp dxc/dxcompiler.dll "dist/$name/"
+            cp dxc/LICENSE-LLVM.txt "dist/$name/DXC-LICENSE-LLVM.txt"
+            cp dxc/LICENSE-MS.txt "dist/$name/DXC-LICENSE-MS.txt"
             cp tools/release/nvforever.cmd tools/release/nvf-viewer.cmd "dist/$name/"
             (cd dist && 7z a -tzip "$name.zip" "$name" > /dev/null)
           else
