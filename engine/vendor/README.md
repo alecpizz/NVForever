@@ -327,6 +327,23 @@ folder, or with `NVF_DLSS_PRELOAD=1`; `NVF_DLSS_PRELOAD=0` leaves out the files 
 (`engine/nvforever/src/upscaler.rs` `UpscalerStartup`, docs/design/dlss-upscaling.md, "Loaded
 whenever the files are there"). Every other run takes upstream's path. Drop it if wgpu-hal gains a way to pass the entry in.
 
+## bevy_render_macros 0.20.1 (MIT OR Apache-2.0, Bevy contributors)
+
+Change for DirectX 12 bindless (marked `NVForever DX12 bindless`), in
+`src/as_bind_group.rs`: the generated `bindless_supported` checks the device's
+`max_binding_array_sampler_elements_per_shader_stage` against the sampler *kinds* the
+material uses (filtering, non-filtering, comparison; all bindless samplers are filtering in
+0.20.1) times its slab's slots, which is what the bindless layout makes
+(`bevy_render::render_resource::create_bindless_bind_group_layout_entries`: one sampler array
+per kind, one element a slot). Upstream multiplied the count of every texture and sampler
+field instead: `StandardMaterial` (Auto slab, 2,048 slots) asked for many times DirectX 12's
+2,048 sampler elements (`D3D12_MAX_SHADER_VISIBLE_SAMPLER_HEAP_SIZE`, vendor/wgpu-hal
+`dx12/adapter.rs`), so it and every `ExtendedMaterial` on it (NIF surfaces, terrain) ran
+without bindless there: no batching across materials and no folded terrain layers. wgpu's
+DX12 backend puts samplers in one global heap and binds arrays of them by index
+(`dx12/sampler.rs`), so the array's length is not a heap cost. On Vulkan the check passed
+before and passes now.
+
 ## wgpu-hal 30.0.1 (MIT OR Apache-2.0, the gfx-rs developers)
 
 wgpu's Vulkan backend, for NVIDIA low latency (`VK_NV_low_latency2`,
