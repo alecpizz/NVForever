@@ -13,8 +13,8 @@
 struct EncodeParams {
     // Paper white and the peak in scRGB units (80 nits), the black level, gamma 2.2 (1).
     look: vec4<f32>,
-    // The pattern (0 none, 1 peak, 2 shadows, 3 paper white, 4 highlights), the peak in
-    // paper whites, the knee, the highlights' strength.
+    // The pattern (0 none, 1 peak, 3 paper white), the peak in paper whites, the knee, the
+    // highlights' strength.
     pattern: vec4<f32>,
     // The pattern's box in the window's parts: left, top, right, bottom.
     rect: vec4<f32>,
@@ -89,13 +89,6 @@ fn scene(p: vec2<f32>, px: vec2<f32>) -> vec3<f32> {
     return encode(textureSampleLevel(preview, nearest, uv, 0.0).rgb);
 }
 
-// The grade's highlight gain for an SDR luminance (imagespace.wesl, its last step).
-fn gain(l: f32) -> f32 {
-    let knee = params.pattern.z;
-    let t = clamp((l - knee) / max(1.0 - knee, 1e-3), 0.0, 1.0);
-    return 1.0 + (params.pattern.y - 1.0) * t * t * params.pattern.w;
-}
-
 // The pattern at `p` (0..1 across the box, y down); `px` is the box's size in pixels.
 fn pattern(p: vec2<f32>, px: vec2<f32>) -> vec3<f32> {
     // A frame of mid grey round the box, two pixels wide.
@@ -115,22 +108,9 @@ fn pattern(p: vec2<f32>, px: vec2<f32>) -> vec3<f32> {
         }
         return vec3<f32>(params.look.y);
     }
-    if mode == 2 {
-        // Shadows: eight patches at sRGB codes 1 to 15 on true black, encoded as the frame
-        // is; the darkest should just vanish.
-        let codes = array<f32, 8>(1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 11.0, 15.0);
-        let cell = p.x * 8.0;
-        let i = i32(floor(cell));
-        let inside = fract(cell) > 0.15 && fract(cell) < 0.85 && p.y > 0.3 && p.y < 0.7;
-        if inside && i >= 0 && i < 8 {
-            return grey(srgb_decode(codes[i] / 255.0));
-        }
-        return vec3<f32>(0.0);
-    }
-    if mode == 3 || mode == 4 {
-        // Paper white, highlights: the player's scene above (the setting's change shows on it
-        // at once), a strip under it: for paper white a ramp from black to white, for the
-        // highlights the ramp with the highlight curve, a mark where the knee is.
+    if mode == 3 {
+        // Paper white: the player's scene above (the setting's change shows on it at once), a
+        // ramp from black to white under it.
         let split = 0.8;
         if p.y < split {
             return scene(vec2<f32>(p.x, p.y / split), vec2<f32>(px.x, px.y * split));
@@ -138,14 +118,7 @@ fn pattern(p: vec2<f32>, px: vec2<f32>) -> vec3<f32> {
         if p.y < split + edge.y * 2.0 {
             return vec3<f32>(0.0);
         }
-        if mode == 3 {
-            return grey(srgb_decode(floor(p.x * 16.0) / 15.0));
-        }
-        let l = srgb_decode(p.x);
-        if abs(l - params.pattern.z) < 0.004 {
-            return vec3<f32>(params.look.x, 0.0, 0.0);
-        }
-        return vec3<f32>(min(shape(l * gain(l)) * params.look.x, params.look.y));
+        return grey(srgb_decode(floor(p.x * 16.0) / 15.0));
     }
     return vec3<f32>(0.0);
 }

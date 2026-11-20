@@ -110,7 +110,7 @@ pub const SECTIONS: &[Section] = &[
     section("Gameplay", Some("Bug Reports"), &["send-reports", "reports-delete"]),
     section("Display", Some("Screen"), &["monitor", "resolution", "borderless"]),
     section("Display", Some("Frame Rate"), &["display-sync", "frame-cap", "physics-rate"]),
-    section("Display", Some("HDR"), &["hdr", "hdr-peak", "hdr-paper-white", "hdr-black-level", "hdr-gamma", "hdr-highlights", "hdr-highlight-start"]),
+    section("Display", Some("HDR"), &["hdr", "hdr-peak", "hdr-paper-white"]),
     section("Display", Some("Upscaling and Anti-Aliasing"), &["upscaler", "upscaler-quality", "dlss-model", "fsr-library", "anti-aliasing", "sharpen"]),
     section("Display", Some("Frame Generation and Latency"), &["frame-generation", "frame-generation-frames", "latency-reduction"]),
     section("Display", Some("Interface"), &["language", "menu-font", "sneak-gauges", "dynamic-crosshair", "crosshair-style", "ui-scale", "menu-scale"]),

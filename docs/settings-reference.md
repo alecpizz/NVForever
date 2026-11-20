@@ -350,6 +350,44 @@ Tweaks tab's rows (#1892) are listed in docs/design/settings-tweaks-layout.md.
 - Command-line switches: `--physics-hz`
 - Registered in `engine/nvf-play/src/phys_rate.rs`
 
+## Display › HDR
+
+### `hdr`: HDR output
+
+- On the page: Brighter highlights and deeper blacks on an HDR display (Windows' HDR on for
+  it). Not with DLSS Frame Generation.
+- In full: The window's picture is made for an HDR display (scRGB): highlights such as the
+  sky, lights and fire rise above the brightness of white text towards the display's peak,
+  how far following the picture's own brightness (at night a fire or a lamp stands out, at
+  noon walls and sand stay as they were), and the dark shades are shown as the gamma 2.2
+  screens the game was made on show them, so blacks stay black. Switches at once. Without
+  Windows' HDR on for the display the picture stays SDR. DLSS Frame Generation is not
+  offered while it is on.
+- Command-line switches: `--hdr` (also `--hdr-black-floor`, `--hdr-srgb-blacks` and
+  `--hdr-knee`, which have no row)
+- Registered in `engine/nvforever/src/hdr.rs`
+
+### `hdr-peak`: HDR peak brightness
+
+- On the page: Your display's brightest, in nits: raise it until the plus in the box at the
+  top right just vanishes (best with the display's HGIG mode on).
+- In full: While the row is chosen, a box at this brightness with a plus at 10,000 nits is
+  drawn at the top right of the page; above what the display can show both look the same,
+  so the setting where the plus just vanishes is the display's peak. The picture's
+  highlights reach it and never go past.
+- Command-line switches: `--hdr-peak`
+- Registered in `engine/nvforever/src/hdr.rs`
+
+### `hdr-paper-white`: HDR brightness
+
+- On the page: The game's brightness, in nits (white text, daylight): set it to taste for
+  your room on your scene in the box at the top right.
+- In full: The brightness of SDR white (the interface, a white wall in daylight). While the
+  row is chosen, the box at the top right shows the game's own scene at this setting, with a
+  ramp from black to white under it.
+- Command-line switches: `--hdr-paper-white`
+- Registered in `engine/nvforever/src/hdr.rs`
+
 ## Display › Upscaling and Anti-Aliasing
 
 ### `upscaler`: Upscaler

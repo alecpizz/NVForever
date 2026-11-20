@@ -506,10 +506,10 @@ struct Args {
     /// HDR output: decode the SDR range by the sRGB curve instead of as a gamma 2.2 screen.
     #[arg(long)]
     hdr_srgb_blacks: bool,
-    /// HDR output: the SDR luminance (linear, 0 to 0.9) above which highlights rise towards
-    /// the peak; lower lifts more of the picture.
-    #[arg(long, default_value_t = 0.25)]
-    hdr_knee: f32,
+    /// HDR output: a fixed knee, the brightest channel (linear, 0 to 0.9) above which
+    /// highlights rise towards the peak; without it the knee follows the picture's average.
+    #[arg(long)]
+    hdr_knee: Option<f32>,
     /// Do not draw the text overlay (implied by --frame-json, and by --play unless
     /// --overlay is given).
     #[arg(long)]

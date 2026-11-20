@@ -32,8 +32,8 @@ struct Grade {
     // the last one's (imagespace.rs).
     motion: vec4<f32>,
     reproject: mat4x4<f32>,
-    // HDR output (hdr.rs): on (x = 1), the peak in paper whites, the knee, the highlights'
-    // strength.
+    // HDR output (hdr.rs): the white point (0: off), the peak in paper whites, the knee
+    // (both the brightest channel, linear), the highlights' strength.
     hdr: vec4<f32>,
 }
 
@@ -160,14 +160,17 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     // modifier holds the brightness at zero, image-modifiers.md §5].
     c = mix(c, grade.fade.rgb, clamp(grade.fade.a, 0.0, 1.0));
     var out = to_linear(clamp(c, vec3(0.0), vec3(1.0)));
-    // HDR output (hdr.rs): above the knee (linear luminance), the graded picture's
-    // highlights rise with the square of the way from the knee to white, SDR white to the
-    // peak; one gain for all three channels keeps the hue [design]. Not the Pip-Boy's
-    // screen, and less as a fade to a colour covers the picture.
-    if grade.hdr.x > 0.5 && !marked {
-        let l = dot(out, vec3(0.2126, 0.7152, 0.0722));
-        let t = clamp((l - grade.hdr.z) / max(1.0 - grade.hdr.z, 1e-3), 0.0, 1.0);
-        let gain = 1.0 + (grade.hdr.y - 1.0) * t * t * grade.hdr.w;
+    // HDR output (hdr.rs): from the knee to the white point the graded picture's highlights
+    // rise towards the peak by the way between them to the power 1.5, reaching the peak's
+    // gain at the white point; driven by the brightest channel (a fire's orange counts as
+    // bright as its red is), one gain for all three keeping the hue [design]. Knee and white
+    // point follow the picture's average (hdr.rs `SceneKey`): low at night, so a fire or a
+    // lamp is a highlight there. Not the Pip-Boy's screen, and less as a fade to a colour
+    // covers the picture.
+    if grade.hdr.x > 0.0 && !marked {
+        let d = max(out.r, max(out.g, out.b));
+        let t = clamp((d - grade.hdr.z) / max(grade.hdr.x - grade.hdr.z, 1e-3), 0.0, 1.0);
+        let gain = 1.0 + (grade.hdr.y - 1.0) * pow(t, 1.5) * grade.hdr.w;
         out = out * mix(gain, 1.0, clamp(grade.fade.a, 0.0, 1.0));
     }
     return vec4(out, select(src.a, 1.0, marked));

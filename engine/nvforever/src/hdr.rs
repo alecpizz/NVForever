@@ -54,8 +54,21 @@ const SCRGB_NITS: f32 = 80.0;
 /// The settings page's ranges.
 const PEAK: (f32, f32, usize) = (400.0, 2000.0, 33);
 const PAPER: (f32, f32, usize) = (80.0, 400.0, 33);
-const BLACK: (f32, f32, usize) = (-0.010, 0.010, 21);
-const KNEE: (f32, f32, usize) = (0.10, 0.60, 11);
+
+/// The knee (the brightest channel, linear, where the highlights start to rise) as a part of
+/// the picture's average luminance ([`SceneKey`]), and its least and most: at night the
+/// average is low and a fire or a lamp is a highlight; at noon the knee is high and walls and
+/// sand stay as in SDR [design, 2026-11-20: the owner found Nipton's fires at night not
+/// punchy; measured, the fire was 0.4-0.55 in the graded SDR picture, under the fixed knee's
+/// reach].
+const KNEE_PER_AVERAGE: f32 = 2.5;
+const KNEE_RANGE: (f32, f32) = (0.10, 0.55);
+/// The white point (where a highlight gets the peak's whole gain) the same way: at night the
+/// brightest things are about 0.5 in the graded picture, so with white at 1 they rose to
+/// about paper white and no further [observed 2026-11-20, Nipton's fire at 23:00]; on a
+/// bright day it stays 1.
+const WHITE_PER_AVERAGE: f32 = 12.0;
+const WHITE_RANGE: (f32, f32) = (0.40, 1.0);
 
 /// The HDR output's settings (the settings page's HDR rows, `--hdr-*`).
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
@@ -72,14 +85,14 @@ pub struct HdrOutput {
     pub gamma22: bool,
     /// How far the highlights rise: 0 as SDR, 1 to the peak.
     pub highlights: f32,
-    /// The graded picture's luminance (linear) where the highlights start to rise: lower
-    /// lifts more of the picture.
-    pub knee: f32,
+    /// A fixed knee (the brightest channel, linear, where the highlights start to rise);
+    /// `None`: it follows the picture's average ([`SceneKey`]).
+    pub knee: Option<f32>,
 }
 
 impl Default for HdrOutput {
     fn default() -> Self {
-        Self { enabled: false, peak_nits: 1000.0, paper_white_nits: 200.0, black_floor: 0.0, gamma22: true, highlights: 1.0, knee: 0.25 }
+        Self { enabled: false, peak_nits: 1000.0, paper_white_nits: 200.0, black_floor: 0.0, gamma22: true, highlights: 1.0, knee: None }
     }
 }
 
@@ -89,14 +102,24 @@ impl HdrOutput {
         self.paper_white_nits = self.paper_white_nits.clamp(SCRGB_NITS, self.peak_nits);
         self.black_floor = self.black_floor.clamp(-0.05, 0.05);
         self.highlights = self.highlights.clamp(0.0, 1.0);
-        self.knee = self.knee.clamp(0.0, 0.9);
+        self.knee = self.knee.map(|k| k.clamp(0.0, 0.9));
         self
     }
 
-    /// The grade's `hdr` (imagespace.rs `ImageSpaceGrade::hdr`): on, the peak in paper
-    /// whites, the knee, the strength.
+    /// The knee now: the fixed one, or from the picture's average.
+    pub fn knee_now(&self) -> f32 {
+        self.knee.unwrap_or_else(|| knee_for(scene_average()))
+    }
+
+    /// The white point now: 1 with a fixed knee, or from the picture's average.
+    pub fn white_now(&self) -> f32 {
+        if self.knee.is_some() { 1.0 } else { white_for(scene_average()) }
+    }
+
+    /// The grade's `hdr` (imagespace.rs `ImageSpaceGrade::hdr`): the white point (above 0:
+    /// on), the peak in paper whites, the knee, the strength.
     pub fn grade(&self) -> Vec4 {
-        Vec4::new(1.0, self.peak_nits / self.paper_white_nits, self.knee, self.highlights)
+        Vec4::new(self.white_now(), self.peak_nits / self.paper_white_nits, self.knee_now(), self.highlights)
     }
 
     /// `hdr_encode.wgsl`'s uniform: paper white and the peak in scRGB units, the black level,
@@ -111,7 +134,7 @@ impl HdrOutput {
             if self.gamma22 { 1.0 } else { 0.0 },
             pattern as u32 as f32,
             self.peak_nits / self.paper_white_nits,
-            self.knee,
+            self.knee_now(),
             self.highlights,
             x0,
             y0,
@@ -122,14 +145,14 @@ impl HdrOutput {
 
     pub fn describe(&self) -> String {
         format!(
-            "{}; peak {:.0} nits, paper white {:.0} nits, black level {:+.3}, {}, highlights {:.0}% from {:.2}",
+            "{}; peak {:.0} nits, paper white {:.0} nits, black level {:+.3}, {}, highlights {:.0}% from {}",
             if self.enabled { "on" } else { "off" },
             self.peak_nits,
             self.paper_white_nits,
             self.black_floor,
             if self.gamma22 { "gamma 2.2 blacks" } else { "sRGB blacks" },
             self.highlights * 100.0,
-            self.knee
+            self.knee.map_or("the picture's average".to_string(), |k| format!("{k:.2}"))
         )
     }
 }
@@ -147,27 +170,21 @@ pub(crate) enum Pattern {
     None = 0,
     /// A box at the peak setting with a plus at 10,000 nits: raised until the plus vanishes.
     Peak = 1,
-    /// Near-black patches on true black: the darkest should just vanish.
-    Shadows = 2,
     /// The player's scene over a ramp to paper white.
     PaperWhite = 3,
-    /// The player's scene over the ramp with the highlight curve, the knee marked.
-    Highlights = 4,
 }
 
 impl Pattern {
     /// Shows the player's own scene ([`ScenePreview`]) with a strip of the pattern under it.
     pub(crate) fn shows_scene(self) -> bool {
-        matches!(self, Pattern::PaperWhite | Pattern::Highlights)
+        matches!(self, Pattern::PaperWhite)
     }
 
     /// The pattern for a settings row's key.
     pub(crate) fn for_row(key: &str) -> Pattern {
         match key {
             "hdr-peak" => Pattern::Peak,
-            "hdr-black-level" | "hdr-gamma" => Pattern::Shadows,
             "hdr-paper-white" => Pattern::PaperWhite,
-            "hdr-highlights" | "hdr-highlight-start" => Pattern::Highlights,
             _ => Pattern::None,
         }
     }
@@ -182,6 +199,24 @@ const PATTERN_BOX: [f32; 4] = [0.725, 0.09, 0.975, 0.40];
 /// The window's surface is HDR now.
 pub(crate) fn active() -> bool {
     HDR_OUTPUT_ACTIVE.load(Ordering::Relaxed)
+}
+
+/// The picture's average luminance (SDR linear, each channel clipped to 1), smoothed, as f32
+/// bits ([`SceneKey`]); 0.1 until measured.
+static SCENE_AVERAGE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3DCC_CCCD);
+
+fn scene_average() -> f32 {
+    f32::from_bits(SCENE_AVERAGE.load(Ordering::Relaxed))
+}
+
+/// The knee for a picture's average luminance.
+fn knee_for(average: f32) -> f32 {
+    (KNEE_PER_AVERAGE * average).clamp(KNEE_RANGE.0, KNEE_RANGE.1)
+}
+
+/// The white point for a picture's average luminance.
+fn white_for(average: f32) -> f32 {
+    (WHITE_PER_AVERAGE * average).clamp(WHITE_RANGE.0, WHITE_RANGE.1)
 }
 
 /// HDR output is asked for (the frame generation row's DLSS choice is not offered then).
@@ -210,11 +245,12 @@ impl Plugin for HdrPlugin {
         render_app
             .init_resource::<WindowEncode>()
             .init_resource::<ScenePreview>()
-            .add_systems(PrePresent, encode_windows)
+            .init_resource::<SceneKey>()
+            .add_systems(PrePresent, (encode_windows, read_scene_key))
             // The graded picture (its highlights in), before the UI is drawn over it.
             .add_systems(
                 Core3d,
-                capture_preview.after(Core3dSystems::PostProcess).after(fullscreen_material_system::<crate::imagespace::ImageSpaceGrade>).before(ui_pass),
+                capture_views.after(Core3dSystems::PostProcess).after(fullscreen_material_system::<crate::imagespace::ImageSpaceGrade>).before(ui_pass),
             );
     }
 }
@@ -410,14 +446,82 @@ struct ScenePreview {
     blit: crate::frame_gen::Blit,
 }
 
-/// The main view's picture into the scene preview, while a scene pattern is up.
-fn capture_preview(view: ViewQuery<&ViewTarget, With<PreviewSource>>, device: Res<RenderDevice>, mut preview: ResMut<ScenePreview>, mut ctx: RenderContext) {
+/// The scene key's sample: the size it is drawn down to, and every how many frames.
+const KEY_SIZE: (u32, u32) = (64, 36);
+const KEY_EVERY: u32 = 4;
+
+/// The picture's average luminance for the knee ([`knee_for`]): the main view's graded
+/// picture drawn down to [`KEY_SIZE`] every [`KEY_EVERY`] frames, copied to a buffer and read
+/// back once the GPU is done with it (never waited for), smoothed over about half a second.
+#[derive(Resource, Default)]
+struct SceneKey {
+    small: Option<(wgpu::Texture, wgpu::TextureView, wgpu::Buffer)>,
+    blit: crate::frame_gen::Blit,
+    state: KeyState,
+    mapped: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    frame: u32,
+    logged: Option<std::time::Instant>,
+}
+
+#[derive(Default, PartialEq, Eq, Clone, Copy)]
+enum KeyState {
+    #[default]
+    Idle,
+    /// The copy is recorded; it is mapped once submitted.
+    Copied,
+    /// Waiting for the map.
+    Mapping,
+}
+
+/// The main view's picture into the scene key's sample and, while the paper white pattern
+/// is up, into the scene preview.
+fn capture_views(
+    view: ViewQuery<&ViewTarget, With<PreviewSource>>,
+    device: Res<RenderDevice>,
+    mut preview: ResMut<ScenePreview>,
+    mut key: ResMut<SceneKey>,
+    mut ctx: RenderContext,
+) {
     let target = view.into_inner();
-    let pattern = ENCODE.lock().unwrap_or_else(std::sync::PoisonError::into_inner)[4];
-    if !active() || ![Pattern::PaperWhite, Pattern::Highlights].into_iter().any(|p| p.shows_scene() && pattern == p as u32 as f32) {
+    if !active() || target.main_texture_format() != SURFACE_FORMAT {
         return;
     }
     let device = device.wgpu_device();
+    let key = &mut *key;
+    key.frame = key.frame.wrapping_add(1);
+    if key.state == KeyState::Idle && key.frame.is_multiple_of(KEY_EVERY) {
+        let (texture, view, buffer) = key.small.get_or_insert_with(|| {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("hdr_scene_key"),
+                size: wgpu::Extent3d { width: KEY_SIZE.0, height: KEY_SIZE.1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: SURFACE_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&default());
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("hdr_scene_key"),
+                size: (KEY_SIZE.0 * 8 * KEY_SIZE.1) as u64,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            (texture, view, buffer)
+        });
+        key.blit.draw(device, ctx.command_encoder(), target.main_texture_view(), view, SURFACE_FORMAT, "hdr_scene_key");
+        ctx.command_encoder().copy_texture_to_buffer(
+            texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo { buffer, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(KEY_SIZE.0 * 8), rows_per_image: None } },
+            wgpu::Extent3d { width: KEY_SIZE.0, height: KEY_SIZE.1, depth_or_array_layers: 1 },
+        );
+        key.state = KeyState::Copied;
+    }
+    let pattern = ENCODE.lock().unwrap_or_else(std::sync::PoisonError::into_inner)[4];
+    if !(Pattern::PaperWhite.shows_scene() && pattern == Pattern::PaperWhite as u32 as f32) {
+        return;
+    }
     let ScenePreview { target: out, blit } = &mut *preview;
     let (_, out_view) = out.get_or_insert_with(|| {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -434,10 +538,43 @@ fn capture_preview(view: ViewQuery<&ViewTarget, With<PreviewSource>>, device: Re
         *PREVIEW.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(view.clone());
         (texture, view)
     });
-    if target.main_texture_format() != SURFACE_FORMAT {
-        return;
-    }
     blit.draw(device, ctx.command_encoder(), target.main_texture_view(), out_view, SURFACE_FORMAT, "hdr_scene_preview");
+}
+
+/// After the frame is submitted (`PrePresent`): the scene key's copy mapped, and a mapped one
+/// read into [`SCENE_AVERAGE`].
+fn read_scene_key(mut key: ResMut<SceneKey>) {
+    let key = &mut *key;
+    let Some((_, _, buffer)) = key.small.as_ref() else { return };
+    match key.state {
+        KeyState::Idle => {}
+        KeyState::Copied => {
+            let mapped = key.mapped.clone();
+            mapped.store(false, Ordering::Relaxed);
+            buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| mapped.store(r.is_ok(), Ordering::Release));
+            key.state = KeyState::Mapping;
+        }
+        KeyState::Mapping => {
+            if !key.mapped.load(Ordering::Acquire) {
+                return;
+            }
+            let average = {
+                let Ok(data) = buffer.slice(..).get_mapped_range() else { return };
+                let f = |at: usize| half::f16::from_bits(u16::from_le_bytes([data[at], data[at + 1]])).to_f32().clamp(0.0, 1.0);
+                let n = (KEY_SIZE.0 * KEY_SIZE.1) as usize;
+                (0..n).map(|i| 0.2126 * f(i * 8) + 0.7152 * f(i * 8 + 2) + 0.0722 * f(i * 8 + 4)).sum::<f32>() / n as f32
+            };
+            buffer.unmap();
+            key.state = KeyState::Idle;
+            // About half a second at 60 frames a second, a sample every fourth.
+            let smoothed = scene_average() + (average - scene_average()) * 0.12;
+            SCENE_AVERAGE.store(smoothed.to_bits(), Ordering::Relaxed);
+            if key.logged.is_none_or(|t| t.elapsed().as_secs() >= 10) {
+                key.logged = Some(std::time::Instant::now());
+                info!("hdr output: the picture's average {smoothed:.3}, highlights from {:.2} to {:.2} (brightest channel)", knee_for(smoothed), white_for(smoothed));
+            }
+        }
+    }
 }
 
 /// The encode of a window's image in place, on the render thread: the image copied out, then
@@ -610,7 +747,7 @@ pub(crate) fn register_settings(app: &mut App, group: &'static str) {
             "hdr-peak",
             group,
             "HDR peak brightness",
-            "Your display's brightest, in nits. Raise it until the plus in the box at the top right just vanishes into the box (best with the display's HGIG mode).",
+            "Your display's brightest, in nits: raise it until the plus in the box at the top right just vanishes (best with the display's HGIG mode on).",
             Slider::choice(PEAK.2, |w| part(w.resource::<HdrOutput>().peak_nits, PEAK), |w, v| edit(w, |h| h.peak_nits = value(v, PEAK)), |v| format!("{:.0} nits", value(v, PEAK))),
         )
         .with_switches("--hdr-peak"),
@@ -620,64 +757,11 @@ pub(crate) fn register_settings(app: &mut App, group: &'static str) {
         Setting::slider(
             "hdr-paper-white",
             group,
-            "HDR paper white",
-            "How bright white text and the daylight picture are, in nits. The box at the top right shows your scene with it; set it to taste for the room.",
+            "HDR brightness",
+            "The game's brightness, in nits (white text, daylight): set it to taste for your room on your scene in the box at the top right.",
             Slider::choice(PAPER.2, |w| part(w.resource::<HdrOutput>().paper_white_nits, PAPER), |w, v| edit(w, |h| h.paper_white_nits = value(v, PAPER)), |v| format!("{:.0} nits", value(v, PAPER))),
         )
         .with_switches("--hdr-paper-white"),
-    );
-    add_setting(
-        app,
-        Setting::slider(
-            "hdr-black-level",
-            group,
-            "HDR black level",
-            "Set it so the darkest of the patches at the top right just vanishes into black and the next stays visible.",
-            Slider::choice(
-                BLACK.2,
-                |w| part(w.resource::<HdrOutput>().black_floor, BLACK),
-                |w, v| edit(w, |h| h.black_floor = value(v, BLACK)),
-                |v| match (value(v, BLACK) * 1000.0).round() as i32 {
-                    0 => "0".to_string(),
-                    n => format!("{n:+}"),
-                },
-            ),
-        )
-        .with_switches("--hdr-black-floor"),
-    );
-    add_setting(
-        app,
-        Setting {
-            key: "hdr-gamma",
-            group,
-            label: "HDR gamma 2.2 shadows",
-            note: "Shows dark shades as the gamma 2.2 screens the game was made on do: deeper blacks. Off: the sRGB curve, lighter shadows.",
-            switches: "--hdr-srgb-blacks",
-            get: |w| w.resource::<HdrOutput>().gamma22,
-            set: |w, on| edit(w, |h| h.gamma22 = on),
-            slider: None,
-        },
-    );
-    add_setting(
-        app,
-        Setting::slider(
-            "hdr-highlights",
-            group,
-            "HDR highlights",
-            "How far highlights (sky, lights, fire) rise above paper white: watch your scene in the box at the top right, its curve under it.",
-            Slider { get: |w| (w.resource::<HdrOutput>().highlights * 20.0).round() / 20.0, set: |w, v| edit(w, |h| h.highlights = v), min: 0.0, step: 0.05, shown: None },
-        ),
-    );
-    add_setting(
-        app,
-        Setting::slider(
-            "hdr-highlight-start",
-            group,
-            "HDR highlight start",
-            "Where highlights start to rise (the red mark under your scene at the top right); lower brightens more of the picture.",
-            Slider::choice(KNEE.2, |w| part(w.resource::<HdrOutput>().knee, KNEE), |w, v| edit(w, |h| h.knee = value(v, KNEE)), |v| format!("{:.0}%", value(v, KNEE) * 100.0)),
-        )
-        .with_switches("--hdr-knee"),
     );
 }
 
@@ -687,12 +771,12 @@ mod tests {
 
     #[test]
     fn settings_stay_in_range() {
-        let wild = HdrOutput { enabled: true, peak_nits: 50.0, paper_white_nits: 900.0, black_floor: 1.0, gamma22: true, highlights: 3.0, knee: 2.0 }.clamped();
+        let wild = HdrOutput { enabled: true, peak_nits: 50.0, paper_white_nits: 900.0, black_floor: 1.0, gamma22: true, highlights: 3.0, knee: Some(2.0) }.clamped();
         assert_eq!(wild.peak_nits, 100.0);
         assert_eq!(wild.paper_white_nits, 100.0, "paper white never above the peak");
         assert_eq!(wild.black_floor, 0.05);
         assert_eq!(wild.highlights, 1.0);
-        assert_eq!(wild.knee, 0.9);
+        assert_eq!(wild.knee, Some(0.9));
     }
 
     #[test]
@@ -700,12 +784,13 @@ mod tests {
         let hdr = HdrOutput::default();
         assert_eq!(hdr.encode(Pattern::None)[..4], [2.5, 12.5, 0.0, 1.0], "scRGB: 1.0 is 80 nits");
         assert_eq!(hdr.encode(Pattern::Peak)[4], 1.0);
-        assert_eq!(hdr.grade(), Vec4::new(1.0, 5.0, 0.25, 1.0), "the peak in paper whites");
+        let fixed = HdrOutput { knee: Some(0.3), ..hdr };
+        assert_eq!(fixed.grade(), Vec4::new(1.0, 5.0, 0.3, 1.0), "the peak in paper whites, a fixed knee");
     }
 
     #[test]
     fn sliders_land_on_their_steps() {
-        for range in [PEAK, PAPER, BLACK, KNEE] {
+        for range in [PEAK, PAPER] {
             for i in 0..range.2 {
                 let v = range.0 + i as f32 * (range.1 - range.0) / (range.2 - 1) as f32;
                 assert!((value(part(v, range), range) - v).abs() < 1e-4, "{v} in {range:?}");
@@ -714,6 +799,17 @@ mod tests {
         let d = HdrOutput::default();
         assert_eq!(value(part(d.peak_nits, PEAK), PEAK), 1000.0);
         assert_eq!(value(part(d.paper_white_nits, PAPER), PAPER), 200.0);
-        assert!((value(part(d.knee, KNEE), KNEE) - 0.25).abs() < 1e-4, "the default knee is a step");
+    }
+
+    #[test]
+    fn the_knee_follows_the_picture() {
+        // Nipton at night (2026-11-20): an average near 0.02, the fire's brightest channel
+        // 0.4-0.55: above the knee now.
+        assert_eq!(knee_for(0.02), KNEE_RANGE.0);
+        assert!(knee_for(0.15) > 0.3 && knee_for(0.15) < KNEE_RANGE.1, "a bright day keeps walls and sand as in SDR");
+        assert_eq!(knee_for(1.0), KNEE_RANGE.1);
+        assert_eq!(white_for(0.03), WHITE_RANGE.0, "at night a fire at 0.5 gets the peak's gain");
+        assert_eq!(white_for(0.15), 1.0, "a bright day: SDR white to the peak");
+        assert!(knee_for(0.03) < white_for(0.03));
     }
 }
