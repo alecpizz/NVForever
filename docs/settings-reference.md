@@ -355,14 +355,15 @@ Tweaks tab's rows (#1892) are listed in docs/design/settings-tweaks-layout.md.
 ### `hdr`: HDR output
 
 - On the page: Brighter highlights and deeper blacks on an HDR display (Windows' HDR on for
-  it). Not with DLSS Frame Generation.
+  it). With DLSS Frame Generation: experimental.
 - In full: The window's picture is made for an HDR display (scRGB): highlights such as the
   sky, lights and fire rise above the brightness of white text towards the display's peak,
   how far following the picture's own brightness (at night a fire or a lamp stands out, at
   noon walls and sand stay as they were), and the dark shades are shown as the gamma 2.2
   screens the game was made on show them, so blacks stay black. Switches at once. Without
-  Windows' HDR on for the display the picture stays SDR. DLSS Frame Generation is not
-  offered while it is on.
+  Windows' HDR on for the display the picture stays SDR. With DLSS Frame Generation it is
+  experimental: the HUD-less copy DLSS-G makes its frames from is encoded as the presented
+  frame is, untested on an RTX 40/50 yet.
 - Command-line switches: `--hdr` (also `--hdr-black-floor`, `--hdr-srgb-blacks` and
   `--hdr-knee`, which have no row)
 - Registered in `engine/nvforever/src/hdr.rs`

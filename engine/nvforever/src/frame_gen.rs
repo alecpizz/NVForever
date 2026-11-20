@@ -173,8 +173,6 @@ pub fn dlss_unavailable_reason(world: &World) -> Option<&'static str> {
         Some("Needs an upscaler")
     } else if world.resource::<crate::frame_pace::FramePace>().sync.vsync() {
         Some("Needs vsync off")
-    } else if crate::hdr::asked(world) {
-        Some("Not with HDR output")
     } else {
         None
     }

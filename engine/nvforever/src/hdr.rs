@@ -20,9 +20,13 @@
 //!     generated frames into the window's images through an [`Encoder`] instead of its copy.
 //!     With `NVF_FG_PRESENTER=0` the generated frame is encoded before the render thread
 //!     presents it (`frame_gen.rs` `present_generated`), the real one as Bevy's present.
-//!   - DLSS Frame Generation is not offered with HDR output, and HDR output is not taken while
-//!     DLSS-G is loaded: Streamline's HUD-less and UI buffers would have to be encoded as well
-//!     (untested here: the owner's RTX 3070 cannot run DLSS-G).
+//!   - DLSS Frame Generation (experimental with HDR, 2026-11-20): Streamline makes the
+//!     generated frames from the tagged HUD-less copy and takes the UI from the presented
+//!     frame, so the HUD-less copy is encoded as well, right after the UI alpha pass reads it
+//!     ([`WindowEncode::encode_in_place`] from `dlss/frame_gen.rs`), and moved back to the
+//!     state its tag declares. Switching HDR changes the swapchain, which counts as a pending
+//!     window change, so DLSS-G's mode goes off first as for a resize. Untested here: the
+//!     owner's RTX 3070 cannot run DLSS-G.
 //!
 //! Screenshots are of the picture before the encode (1.0 = paper white): a PNG shows the SDR
 //! picture with the highlights clipped, an `.hdr` or `.exr` keeps them.
@@ -346,11 +350,6 @@ fn display_peak(windows: Query<&bevy::window::RawHandleWrapper, With<bevy::windo
     *last = Some((std::time::Instant::now(), report));
 }
 
-/// HDR output is asked for (the frame generation row's DLSS choice is not offered then).
-pub(crate) fn asked(world: &World) -> bool {
-    world.get_resource::<HdrOutput>().is_some_and(|h| h.enabled)
-}
-
 pub struct HdrPlugin(pub HdrOutput);
 
 impl Plugin for HdrPlugin {
@@ -385,7 +384,7 @@ impl Plugin for HdrPlugin {
 /// The settings where the renderer and the presenter read them: the surface's request (not
 /// while DLSS Frame Generation is loaded, module notes) and the encode's uniform.
 fn publish(settings: &HdrOutput, pattern: Pattern) {
-    HDR_OUTPUT_REQUEST.store(settings.enabled && !crate::dlss::frame_generation_loaded(), Ordering::Relaxed);
+    HDR_OUTPUT_REQUEST.store(settings.enabled, Ordering::Relaxed);
     *ENCODE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = settings.encode(pattern);
 }
 
@@ -408,8 +407,8 @@ fn follow_settings(world: &World, mut told: Local<Option<HdrOutput>>, mut dlssg_
         info!("hdr output: calibration pattern {pattern:?}");
     }
     publish(&settings, pattern);
-    if settings.enabled && crate::dlss::frame_generation_loaded() && !std::mem::replace(&mut *dlssg_told, true) {
-        warn!("hdr output: not while DLSS Frame Generation is loaded; SDR");
+    if settings.enabled && active() && crate::dlss::frame_generation_loaded() && !std::mem::replace(&mut *dlssg_told, true) {
+        warn!("hdr output: with DLSS Frame Generation loaded: experimental (its HUD-less copy is encoded as the frame is; untested on the owner's RTX 3070)");
     }
     if told.is_some_and(|t| t != settings) {
         info!("hdr output: {}", settings.describe());
@@ -721,7 +720,18 @@ impl WindowEncode {
         if !active() || image.texture.format() != SURFACE_FORMAT {
             return;
         }
-        let size = image.texture.size();
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("hdr_encode") });
+        self.encode_in_place(device, queue, &mut encoder, &image.texture);
+        queue.submit([encoder.finish()]);
+        probe(device, queue, &image.texture, site);
+    }
+
+    /// Record the encode of `texture` (an `Rgba16Float` render attachment that can be copied
+    /// from) in place into `encoder`: copied out, drawn back encoded. DLSS Frame Generation's
+    /// HUD-less copy goes through it too (`dlss/frame_gen.rs`), so the frames DLSS-G makes from
+    /// it are encoded as the real ones are.
+    pub(crate) fn encode_in_place(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, texture: &wgpu::Texture) {
+        let size = texture.size();
         if self.scratch.as_ref().is_none_or(|(t, _)| t.size() != size) {
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("hdr_encode_scratch"),
@@ -737,12 +747,9 @@ impl WindowEncode {
             self.scratch = Some((texture, view));
         }
         let Some((scratch, scratch_view)) = self.scratch.as_ref() else { return };
-        let view = image.texture.create_view(&default());
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("hdr_encode") });
-        encoder.copy_texture_to_texture(image.texture.as_image_copy(), scratch.as_image_copy(), size);
-        self.encoder.draw(device, queue, &mut encoder, scratch_view, &view);
-        queue.submit([encoder.finish()]);
-        probe(device, queue, &image.texture, site);
+        let view = texture.create_view(&default());
+        encoder.copy_texture_to_texture(texture.as_image_copy(), scratch.as_image_copy(), size);
+        self.encoder.draw(device, queue, encoder, scratch_view, &view);
     }
 }
 
@@ -889,7 +896,7 @@ pub(crate) fn register_settings(app: &mut App, group: &'static str) {
             key: "hdr",
             group,
             label: "HDR output",
-            note: "Brighter highlights and deeper blacks on an HDR display (Windows' HDR on for it). Not with DLSS Frame Generation.",
+            note: "Brighter highlights and deeper blacks on an HDR display (Windows' HDR on for it). With DLSS Frame Generation: experimental.",
             switches: "--hdr",
             get: |w| w.resource::<HdrOutput>().enabled,
             set: |w, on| edit(w, |h| h.enabled = on),

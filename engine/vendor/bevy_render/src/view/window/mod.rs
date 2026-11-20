@@ -477,7 +477,9 @@ impl SurfaceData {
     /// frame: `window`'s size or present mode changed, or the surface is marked outdated (also
     /// by a [`HoldSurfaceReconfigure`] that held a change back).
     pub fn reconfigure_pending(&self, window: &ExtractedWindow) -> bool {
-        window.size_changed || window.present_mode_changed || self.outdated()
+        // NVForever (2026-11-19): HDR output switched on or off changes the swapchain's format
+        // and colour space, which DLSS Frame Generation must be off for, as for a resize.
+        window.size_changed || window.present_mode_changed || self.outdated() || self.hdr_pending()
     }
 
     /// NVForever (2026-11-13): marks the surface outdated, so [`create_surfaces`] reconfigures it

@@ -638,7 +638,8 @@ fn tag_inputs(
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: main.format(),
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                // HDR output encodes it in place after the UI alpha pass ([`draw_ui_alpha`]).
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::RENDER_ATTACHMENT,
                 view_formats: &[],
             })
         });
@@ -882,14 +883,20 @@ fn null_tags() -> [ResourceTag; 5] {
 /// The UI buffer on a tagged frame (the module comment's "UI buffer"): the pass, the move to
 /// `RESOURCE`, the tag. When it cannot be made, whatever the reason, the frame is not
 /// generated: its tags go null.
-fn ui_buffer(view: ViewQuery<(&ViewTarget, &PreparedUpscale)>, adapter: Res<RenderAdapter>, mut ctx: RenderContext) {
+fn ui_buffer(
+    view: ViewQuery<(&ViewTarget, &PreparedUpscale)>,
+    adapter: Res<RenderAdapter>,
+    queue: Res<bevy::render::renderer::RenderQueue>,
+    mut hdr: ResMut<crate::hdr::WindowEncode>,
+    mut ctx: RenderContext,
+) {
     let (target, prepared) = view.into_inner();
     let mut guard = frame_gen();
     let Some(fg) = guard.as_mut() else { return };
     let hudless_view = fg.ui_source.take();
     let (Some(index), Some(decision)) = (fg.last_index, fg.decision.filter(|d| d.generate)) else { return };
     let result = match hudless_view {
-        Some(hudless_view) => draw_ui_alpha(fg, &mut ctx, &adapter, target, prepared, index, &hudless_view),
+        Some(hudless_view) => draw_ui_alpha(fg, &mut ctx, &adapter, target, prepared, index, &hudless_view, (&queue, &mut hdr)),
         None => Err("no HUD-less copy this frame".to_string()),
     };
     match result {
@@ -926,6 +933,7 @@ fn draw_ui_alpha(
     prepared: &PreparedUpscale,
     index: u32,
     hudless_view: &wgpu::TextureView,
+    (queue, hdr): (&wgpu::Queue, &mut crate::hdr::WindowEncode),
 ) -> Result<(), String> {
     let main: &wgpu::Texture = target.main_texture();
     let main_view: &wgpu::TextureView = target.main_texture_view();
@@ -997,6 +1005,20 @@ fn draw_ui_alpha(
             render.draw(0..3, 0..1);
         }
         encoder.transition_resources(std::iter::empty(), std::iter::once(wgpu::TextureTransition { texture: &ui_texture, selector: None, state: wgpu::TextureUses::RESOURCE }));
+        // HDR output (hdr.rs): the HUD-less copy encoded as the presented frame will be, now
+        // that the UI alpha has been read from it unencoded, and back in the state its tag
+        // declares (`SHADER_READ_ONLY_OPTIMAL`, wgpu-hal's `RESOURCE`) for DLSS-G at present.
+        if crate::hdr::active() {
+            if let Some(hudless) = fg.kept.back().and_then(|k| k.0.get(2)).filter(|t| t.format() == crate::hdr::SURFACE_FORMAT) {
+                let hudless = hudless.clone();
+                hdr.encode_in_place(&device, queue, encoder, &hudless);
+                encoder.transition_resources(std::iter::empty(), std::iter::once(wgpu::TextureTransition { texture: &hudless, selector: None, state: wgpu::TextureUses::RESOURCE }));
+                if !fg.said.contains(&"hdr hudless") {
+                    fg.said.push("hdr hudless");
+                    note_fg(Level::INFO, "HDR output: the HUD-less copy is encoded to scRGB after the UI alpha pass, as the presented frame is (experimental; said once)");
+                }
+            }
+        }
     }
     let output = Extent { top: 0, left: 0, width: prepared.output_size.x, height: prepared.output_size.y };
     let tag = [ResourceTag::new(&raw mut ui_res, BUFFER_UI_ALPHA, LIFECYCLE_VALID_UNTIL_PRESENT, output)];
