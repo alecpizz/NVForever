@@ -47,6 +47,12 @@ use wgpu::{
 #[derive(ScheduleLabel, Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct RenderGraph;
 
+/// NVForever (2026-11-19): run by [`render_system`] after the frame's commands and the
+/// screenshots' copies are submitted and before the windows are presented. Not made by
+/// Bevy; whoever adds a system to it makes it (`init_schedule`).
+#[derive(ScheduleLabel, Debug, Clone, PartialEq, Eq, Hash, Default)]
+pub struct PrePresent;
+
 impl RenderGraph {
     pub fn base_schedule() -> Schedule {
         let mut schedule = Schedule::new(Self);
@@ -105,6 +111,10 @@ pub fn render_system(
 
         render_queue.submit([encoder.finish()]);
     }
+
+    // NVForever (2026-11-19): the last draws into the windows' images, after the screenshots'
+    // copies into them and before they are presented (HDR output's encode).
+    let _ = world.try_run_schedule(PrePresent);
 
     {
         #[cfg(feature = "trace")]

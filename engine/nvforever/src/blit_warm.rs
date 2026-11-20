@@ -21,11 +21,21 @@
 //! reflection, R32Float for the ripples); a camera after the first on a target blends
 //! (alpha blending); no camera sets a compositing space [engineering choice: a dozen small
 //! full-screen pipelines].
+//!
+//! Also the screenshot's copy back into the window (`ScreenshotToScreenPipeline`, keyed by the
+//! window's view format: sRGB, or `Rgba16Float` with HDR output, hdr.rs): specialized only
+//! when the first screenshot is taken and not waited for, so until it was compiled the
+//! screenshot's frame showed an empty (black) window image [observed 2026-11-19: HDR output's
+//! `NVF_HDR_PROBE`, every frame of a `--screenshot` run, the screenshot's frame black].
 
 use bevy::core_pipeline::blit::{BlitPipeline, BlitPipelineKey};
 use bevy::prelude::*;
 use bevy::render::render_resource::{BlendState, PipelineCache, SpecializedRenderPipelines, TextureFormat};
+use bevy::render::view::screenshot::ScreenshotToScreenPipeline;
 use bevy::render::{Render, RenderApp, RenderSystems};
+
+/// The window's view formats, for the screenshot's copy back into it.
+const WINDOW_FORMATS: [TextureFormat; 3] = [TextureFormat::Bgra8UnormSrgb, TextureFormat::Rgba8UnormSrgb, TextureFormat::Rgba16Float];
 
 /// The output formats of the game's views.
 const FORMATS: [TextureFormat; 6] = [
@@ -53,7 +63,7 @@ pub struct BlitWarmPlugin;
 impl Plugin for BlitWarmPlugin {
     fn build(&self, app: &mut App) {
         if let Some(render) = app.get_sub_app_mut(RenderApp) {
-            render.add_systems(Render, warm.in_set(RenderSystems::Prepare));
+            render.add_systems(Render, (warm, warm_screenshot).in_set(RenderSystems::Prepare));
         }
     }
 }
@@ -76,6 +86,23 @@ fn warm(
     }
     *done = true;
     info!("blit warm: {} upscaling pipelines queued for compiling at start-up", keys.len());
+}
+
+/// The screenshot's copy into the window, for each window format, once.
+fn warm_screenshot(
+    mut done: Local<bool>,
+    cache: Res<PipelineCache>,
+    pipeline: Option<Res<ScreenshotToScreenPipeline>>,
+    pipelines: Option<ResMut<SpecializedRenderPipelines<ScreenshotToScreenPipeline>>>,
+) {
+    if *done {
+        return;
+    }
+    let (Some(pipeline), Some(mut pipelines)) = (pipeline, pipelines) else { return };
+    for format in WINDOW_FORMATS {
+        pipelines.specialize(&cache, &pipeline, format);
+    }
+    *done = true;
 }
 
 #[cfg(test)]

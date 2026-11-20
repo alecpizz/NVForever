@@ -82,6 +82,11 @@ rfd = { version = "0.15", default-features = false, features = ["common-controls
 # UI_WindowsAndMessaging, COM set up for it in System_Com); a version already in the build;
 # MIT/Apache-2.0.
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_System_SystemInformation", "Win32_System_Performance", "Win32_System_ProcessStatus", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_LibraryLoader", "Win32_Security_WinTrust", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Com"] }
+# HDR output's peak (hdr.rs `display_peak`): the display's reported luminance through DXGI
+# (IDXGIOutput6::GetDesc1) for the monitor the window is on (Gdi's MonitorFromWindow); the
+# COM interfaces need the `windows` crate rather than `windows-sys`; a version already in
+# the build; MIT/Apache-2.0.
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # [design, #2249] Optional NVML at runtime; reuse engine/Cargo.lock's libloading.

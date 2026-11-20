@@ -446,6 +446,15 @@ folder, or with `NVF_DLSS_PRELOAD=1`; `NVF_DLSS_PRELOAD=0` leaves out the files 
 (`engine/nvforever/src/upscaler.rs` `UpscalerStartup`, docs/design/dlss-upscaling.md, "Loaded
 whenever the files are there"). Every other run takes upstream's path. Drop it if wgpu-hal gains a way to pass the entry in.
 
+HDR output (prototype, 2026-11-19, `engine/nvforever/src/hdr.rs`), in
+`src/view/window/mod.rs` `create_surfaces`, marked `NVForever (2026-11-19)`: with
+`HDR_OUTPUT_REQUEST` set before the first surface is made, a surface that lists
+`Rgba16Float` in `SurfaceColorSpace::ExtendedSrgbLinear` (scRGB) and can be a copy source is
+configured so (usage `RENDER_ATTACHMENT | COPY_SRC`) and `HDR_OUTPUT_ACTIVE` is set; the
+formats and colour spaces the surface offers are logged ("hdr output: …"). Upstream always
+takes an sRGB format in the default colour space, which it still does without the request.
+Drop it if Bevy gains HDR surface output.
+
 ## wgpu-hal 30.0.1 (MIT OR Apache-2.0, the gfx-rs developers)
 
 wgpu's Vulkan backend, for NVIDIA low latency (`VK_NV_low_latency2`,

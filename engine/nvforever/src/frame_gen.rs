@@ -945,8 +945,11 @@ fn presenter_failed(presenters: &mut Presenters, window: Entity, paired: bool, g
 
 /// `NVF_FG_PRESENTER=0`: present the window's image (the generated frame) from the render
 /// thread; Bevy's `prepare_windows` then takes the next.
+#[allow(clippy::too_many_arguments)]
 fn present_generated(
     pending: Res<PendingReal>,
+    device: Res<RenderDevice>,
+    mut hdr: ResMut<crate::hdr::WindowEncode>,
     queue: Res<RenderQueue>,
     stats: Res<Stats>,
     latency: (Option<Res<crate::anti_lag::Presenting>>, Option<Res<crate::nv_low_latency::NvLowLatency>>),
@@ -958,6 +961,9 @@ fn present_generated(
     let out_of_band = latency.0.and_then(|presenting| crate::nv_low_latency::OutOfBandPresents::of(&presenting, latency.1.as_deref()));
     for (entity, mut window) in &mut windows {
         if pending.iter().any(|(w, _)| *w == entity) {
+            // HDR output: Bevy's image of the generated frame, encoded before it is shown
+            // (the real one is encoded with Bevy's present, hdr.rs).
+            hdr.encode_window(device.wgpu_device(), &queue, &window, "fg-generated");
             let started = Instant::now();
             crate::nv_low_latency::OutOfBandPresents::around(out_of_band.as_ref(), || window.present(&queue));
             stats.generated_present_nanos.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);

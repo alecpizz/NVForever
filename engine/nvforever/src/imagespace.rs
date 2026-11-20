@@ -97,6 +97,10 @@ pub struct ImageSpaceGrade {
     pub motion: Vec4,
     /// Clip space of this frame to clip space of the last one (`update_motion`).
     pub reproject: Mat4,
+    /// HDR output (hdr.rs, which sets it): on (x = 1), the peak in paper whites (y), the
+    /// knee (z) and the highlights' strength (w) of the grade's highlight expansion; all 0
+    /// in SDR, where the grade is as it was.
+    pub hdr: Vec4,
 }
 
 /// VATS mode's grade for the interface's colour `rgb` (the settings page's HUD colour):
@@ -135,6 +139,7 @@ impl Default for ImageSpaceGrade {
             dof_mode: Vec4::ZERO,
             motion: Vec4::ZERO,
             reproject: Mat4::IDENTITY,
+            hdr: Vec4::ZERO,
         }
     }
 }
@@ -674,6 +679,7 @@ fn update_grade(
         dof_mode: Vec4::new(if dof.use_target { 1.0 } else { 0.0 }, f32::from(dof.flags), near.unwrap_or(1.0), 0.0),
         motion: Vec4::new(motion, near.map_or(0.0, |n| n / MOTION_SHARP), MOTION_MAX_REACH, 0.0),
         reproject: Mat4::IDENTITY,
+        hdr: Vec4::ZERO,
     };
     // A 3D scope's lens: a neutral grade with only the lens's modifiers on it.
     let lens = match &world {
