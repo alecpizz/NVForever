@@ -96,9 +96,24 @@ impl HdrOutput {
     }
 
     /// `hdr_encode.wgsl`'s uniform: paper white and the peak in scRGB units, the black level,
-    /// gamma 2.2 (1) or sRGB (0).
-    fn encode(&self) -> [f32; 4] {
-        [self.paper_white_nits / SCRGB_NITS, self.peak_nits / SCRGB_NITS, self.black_floor, if self.gamma22 { 1.0 } else { 0.0 }]
+    /// gamma 2.2 (1) or sRGB (0); the calibration pattern, the peak in paper whites, the knee,
+    /// the highlights' strength; the pattern's box.
+    fn encode(&self, pattern: Pattern) -> [f32; 12] {
+        let [x0, y0, x1, y1] = PATTERN_BOX;
+        [
+            self.paper_white_nits / SCRGB_NITS,
+            self.peak_nits / SCRGB_NITS,
+            self.black_floor,
+            if self.gamma22 { 1.0 } else { 0.0 },
+            pattern as u32 as f32,
+            self.peak_nits / self.paper_white_nits,
+            self.knee,
+            self.highlights,
+            x0,
+            y0,
+            x1,
+            y1,
+        ]
     }
 
     pub fn describe(&self) -> String {
@@ -116,7 +131,44 @@ impl HdrOutput {
 }
 
 /// The encode's settings for every thread that encodes ([`Encoder::draw`]).
-static ENCODE: Mutex<[f32; 4]> = Mutex::new([2.5, 12.5, 0.0, 1.0]);
+static ENCODE: Mutex<[f32; 12]> = Mutex::new([2.5, 12.5, 0.0, 1.0, 0.0, 5.0, 0.25, 1.0, 0.0, 0.0, 0.0, 0.0]);
+
+/// The calibration pattern the encode draws while an HDR row of the settings page is chosen
+/// (`hdr_encode.wgsl` `pattern`), in absolute nits over the frame [design, after the
+/// calibration screens HDR games and Windows' HDR Calibration show].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[repr(u32)]
+pub(crate) enum Pattern {
+    #[default]
+    None = 0,
+    /// A box at the peak setting with a plus at 10,000 nits: raised until the plus vanishes.
+    Peak = 1,
+    /// Near-black patches on true black: the darkest should just vanish.
+    Shadows = 2,
+    /// A ramp and paper white.
+    PaperWhite = 3,
+    /// The SDR ramp over the same ramp with the highlight curve, the knee marked.
+    Highlights = 4,
+}
+
+impl Pattern {
+    /// The pattern for a settings row's key.
+    pub(crate) fn for_row(key: &str) -> Pattern {
+        match key {
+            "hdr-peak" => Pattern::Peak,
+            "hdr-black-level" | "hdr-gamma" => Pattern::Shadows,
+            "hdr-paper-white" => Pattern::PaperWhite,
+            "hdr-highlights" | "hdr-highlight-start" => Pattern::Highlights,
+            _ => Pattern::None,
+        }
+    }
+}
+
+/// Where the pattern goes, in the window's parts (left, top, right, bottom): the settings
+/// page's top right, over the tab rail, which the keys do not need while on a row
+/// [observed 2026-11-20: the settings page at 1920x1080, rows end near x 0.68, the rail's
+/// tabs from y 0.12].
+const PATTERN_BOX: [f32; 4] = [0.725, 0.09, 0.975, 0.40];
 
 /// The window's surface is HDR now.
 pub(crate) fn active() -> bool {
@@ -133,7 +185,7 @@ pub struct HdrPlugin(pub HdrOutput);
 impl Plugin for HdrPlugin {
     fn build(&self, app: &mut App) {
         let settings = self.0.clamped();
-        publish(&settings);
+        publish(&settings, Pattern::None);
         app.insert_resource(settings)
             .add_systems(Startup, move || {
                 if settings.enabled {
@@ -151,20 +203,37 @@ impl Plugin for HdrPlugin {
 
 /// The settings where the renderer and the presenter read them: the surface's request (not
 /// while DLSS Frame Generation is loaded, module notes) and the encode's uniform.
-fn publish(settings: &HdrOutput) {
+fn publish(settings: &HdrOutput, pattern: Pattern) {
     HDR_OUTPUT_REQUEST.store(settings.enabled && !crate::dlss::frame_generation_loaded(), Ordering::Relaxed);
-    *ENCODE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = settings.encode();
+    *ENCODE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = settings.encode(pattern);
 }
 
-fn follow_settings(settings: Res<HdrOutput>, mut told: Local<Option<HdrOutput>>, mut dlssg_told: Local<bool>) {
-    publish(&settings);
+/// The pattern for this frame: the pause menu's settings page with an HDR row chosen.
+fn chosen_pattern(world: &World) -> Pattern {
+    use nvf_play::pause::{Page, Paused};
+    use nvf_play::settings_view::RowId;
+    if !world.get_resource::<Paused>().is_some_and(|p| p.0) {
+        return Pattern::None;
+    }
+    let Some(Page::Settings { selected: Some(RowId::Setting(i)) }) = world.get_resource::<Page>().copied() else { return Pattern::None };
+    world.get_resource::<nvf_play::settings::Settings>().and_then(|s| s.list().get(i)).map_or(Pattern::None, |row| Pattern::for_row(row.key))
+}
+
+fn follow_settings(world: &World, mut told: Local<Option<HdrOutput>>, mut dlssg_told: Local<bool>, mut shown: Local<Pattern>) {
+    let settings = *world.resource::<HdrOutput>();
+    let pattern = chosen_pattern(world);
+    if pattern != *shown {
+        *shown = pattern;
+        info!("hdr output: calibration pattern {pattern:?}");
+    }
+    publish(&settings, pattern);
     if settings.enabled && crate::dlss::frame_generation_loaded() && !std::mem::replace(&mut *dlssg_told, true) {
         warn!("hdr output: not while DLSS Frame Generation is loaded; SDR");
     }
-    if told.is_some_and(|t| t != *settings) {
+    if told.is_some_and(|t| t != settings) {
         info!("hdr output: {}", settings.describe());
     }
-    *told = Some(*settings);
+    *told = Some(settings);
 }
 
 /// The main camera while the surface is HDR: the HDR (fp16) view, so the grade's highlights
@@ -248,7 +317,7 @@ impl Encoder {
                 cache: None,
             });
             let sampler = device.create_sampler(&wgpu::SamplerDescriptor { label: Some("hdr_encode"), ..default() });
-            let buffer = device.create_buffer(&wgpu::BufferDescriptor { label: Some("hdr_encode"), size: 16, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor { label: Some("hdr_encode"), size: 48, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
             (pipeline, layout, sampler, buffer)
         });
         let params = *ENCODE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -339,7 +408,8 @@ fn encode_windows(windows: Query<&ExtractedWindow>, device: Res<RenderDevice>, q
 /// Bevy's present; `fg`: frame generation's presenter thread; `fg-generated`: its render-thread
 /// fallback) wrote are read back after the encode and logged as "hdr probe: <site> <i>: …" in
 /// nits (scRGB 1.0 = 80): the median, the 99.9th and 1st percentiles of the luminance over the
-/// image. Each read waits for the GPU: a test aid, never in play.
+/// image (`NVF_HDR_PROBE_DIR` keeps the images). Each read waits for the GPU: a test aid,
+/// never in play.
 pub(crate) fn probe(device: &wgpu::Device, queue: &wgpu::Queue, image: &wgpu::Texture, site: &'static str) {
     static LIMIT: std::sync::OnceLock<(usize, usize)> = std::sync::OnceLock::new();
     static COUNTS: Mutex<Vec<(&'static str, usize)>> = Mutex::new(Vec::new());
@@ -381,6 +451,21 @@ pub(crate) fn probe(device: &wgpu::Device, queue: &wgpu::Queue, image: &wgpu::Te
         return;
     }
     let Ok(data) = buffer.slice(..).get_mapped_range() else { return };
+    // `NVF_HDR_PROBE_DIR=<folder>`: each read image saved as `<site>-<i>.f16` (width and
+    // height as two little-endian u32, then the rows of RGBA f16, padding dropped), for
+    // looking at the encoded picture off the display. Never into the game's folders.
+    if let Some(dir) = std::env::var_os("NVF_HDR_PROBE_DIR").map(std::path::PathBuf::from) {
+        if fnv_install::guard_write(&dir, None).is_ok() && std::fs::create_dir_all(&dir).is_ok() {
+            let mut out = Vec::with_capacity(8 + (size.width * size.height * 8) as usize);
+            out.extend_from_slice(&size.width.to_le_bytes());
+            out.extend_from_slice(&size.height.to_le_bytes());
+            for y in 0..size.height {
+                let at = (y * row) as usize;
+                out.extend_from_slice(&data[at..at + (size.width * 8) as usize]);
+            }
+            let _ = std::fs::write(dir.join(format!("{site}-{index}.f16")), out);
+        }
+    }
     let f = |at: usize| half::f16::from_bits(u16::from_le_bytes([data[at], data[at + 1]])).to_f32();
     let mut nits: Vec<f32> = Vec::with_capacity((size.width * size.height / 4) as usize);
     for y in (0..size.height).step_by(2) {
@@ -436,7 +521,7 @@ pub(crate) fn register_settings(app: &mut App, group: &'static str) {
             "hdr-peak",
             group,
             "HDR peak brightness",
-            "Your display's brightest, in nits: the picture's highlights reach it and never go past.",
+            "Your display's brightest, in nits. Raise it until the plus in the box at the top right just vanishes into the box (best with the display's HGIG mode).",
             Slider::choice(PEAK.2, |w| part(w.resource::<HdrOutput>().peak_nits, PEAK), |w, v| edit(w, |h| h.peak_nits = value(v, PEAK)), |v| format!("{:.0} nits", value(v, PEAK))),
         )
         .with_switches("--hdr-peak"),
@@ -447,7 +532,7 @@ pub(crate) fn register_settings(app: &mut App, group: &'static str) {
             "hdr-paper-white",
             group,
             "HDR paper white",
-            "How bright white text and the daylight picture are, in nits; the highlights rise above it.",
+            "How bright white text and the daylight picture are, in nits: the box at the top right shows it; set it to taste against the room.",
             Slider::choice(PAPER.2, |w| part(w.resource::<HdrOutput>().paper_white_nits, PAPER), |w, v| edit(w, |h| h.paper_white_nits = value(v, PAPER)), |v| format!("{:.0} nits", value(v, PAPER))),
         )
         .with_switches("--hdr-paper-white"),
@@ -458,7 +543,7 @@ pub(crate) fn register_settings(app: &mut App, group: &'static str) {
             "hdr-black-level",
             group,
             "HDR black level",
-            "Above 0 the darkest shades sink to black; below 0 they are lifted to show more in the dark.",
+            "Set it so the darkest of the patches at the top right just vanishes into black and the next stays visible.",
             Slider::choice(
                 BLACK.2,
                 |w| part(w.resource::<HdrOutput>().black_floor, BLACK),
@@ -490,7 +575,7 @@ pub(crate) fn register_settings(app: &mut App, group: &'static str) {
             "hdr-highlights",
             group,
             "HDR highlights",
-            "How far the picture's highlights (sky, lights, fire) rise above paper white towards the peak.",
+            "How far highlights (sky, lights, fire) rise above paper white. The box at the top right: SDR above, with highlights below.",
             Slider { get: |w| (w.resource::<HdrOutput>().highlights * 20.0).round() / 20.0, set: |w, v| edit(w, |h| h.highlights = v), min: 0.0, step: 0.05, shown: None },
         ),
     );
@@ -500,7 +585,7 @@ pub(crate) fn register_settings(app: &mut App, group: &'static str) {
             "hdr-highlight-start",
             group,
             "HDR highlight start",
-            "Where in the picture's brightness the highlights start to rise: lower brightens more of the picture.",
+            "Where highlights start to rise (the red mark in the box at the top right); lower brightens more of the picture.",
             Slider::choice(KNEE.2, |w| part(w.resource::<HdrOutput>().knee, KNEE), |w, v| edit(w, |h| h.knee = value(v, KNEE)), |v| format!("{:.0}%", value(v, KNEE) * 100.0)),
         )
         .with_switches("--hdr-knee"),
@@ -524,7 +609,8 @@ mod tests {
     #[test]
     fn units() {
         let hdr = HdrOutput::default();
-        assert_eq!(hdr.encode(), [2.5, 12.5, 0.0, 1.0], "scRGB: 1.0 is 80 nits");
+        assert_eq!(hdr.encode(Pattern::None)[..4], [2.5, 12.5, 0.0, 1.0], "scRGB: 1.0 is 80 nits");
+        assert_eq!(hdr.encode(Pattern::Peak)[4], 1.0);
         assert_eq!(hdr.grade(), Vec4::new(1.0, 5.0, 0.25, 1.0), "the peak in paper whites");
     }
 
