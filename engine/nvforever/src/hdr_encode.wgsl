@@ -23,6 +23,8 @@ struct EncodeParams {
 @group(0) @binding(0) var frame: texture_2d<f32>;
 @group(0) @binding(1) var nearest: sampler;
 @group(0) @binding(2) var<uniform> params: EncodeParams;
+// The player's scene for the paper white and highlight patterns (hdr.rs `ScenePreview`).
+@group(0) @binding(3) var preview: texture_2d<f32>;
 
 struct Out {
     @builtin(position) position: vec4<f32>,
@@ -66,6 +68,27 @@ fn grey(v: f32) -> vec3<f32> {
     return vec3<f32>(min(shape(v) * params.look.x, params.look.y));
 }
 
+// A frame's colour (1 = paper white) encoded.
+fn encode(c: vec3<f32>) -> vec3<f32> {
+    let shaped = vec3<f32>(shape(c.r), shape(c.g), shape(c.b));
+    return min(shaped * params.look.x, vec3<f32>(params.look.y));
+}
+
+// The scene preview over `p` (0..1 in the area it fills, `px` that area in pixels), cropped
+// to fill it.
+fn scene(p: vec2<f32>, px: vec2<f32>) -> vec3<f32> {
+    let dims = vec2<f32>(textureDimensions(preview));
+    let a = dims.x / dims.y;
+    let b = px.x / px.y;
+    var uv = p;
+    if b > a {
+        uv.y = 0.5 + (p.y - 0.5) * a / b;
+    } else {
+        uv.x = 0.5 + (p.x - 0.5) * b / a;
+    }
+    return encode(textureSampleLevel(preview, nearest, uv, 0.0).rgb);
+}
+
 // The grade's highlight gain for an SDR luminance (imagespace.wesl, its last step).
 fn gain(l: f32) -> f32 {
     let knee = params.pattern.z;
@@ -104,29 +127,23 @@ fn pattern(p: vec2<f32>, px: vec2<f32>) -> vec3<f32> {
         }
         return vec3<f32>(0.0);
     }
-    if mode == 3 {
-        // Paper white: a ramp from black to white above, paper white below with a mid grey
-        // patch (the menu's own white is paper white too).
-        if p.y < 0.5 {
+    if mode == 3 || mode == 4 {
+        // Paper white, highlights: the player's scene above (the setting's change shows on it
+        // at once), a strip under it: for paper white a ramp from black to white, for the
+        // highlights the ramp with the highlight curve, a mark where the knee is.
+        let split = 0.8;
+        if p.y < split {
+            return scene(vec2<f32>(p.x, p.y / split), vec2<f32>(px.x, px.y * split));
+        }
+        if p.y < split + edge.y * 2.0 {
+            return vec3<f32>(0.0);
+        }
+        if mode == 3 {
             return grey(srgb_decode(floor(p.x * 16.0) / 15.0));
         }
-        if abs(p.x - 0.5) < 0.12 && abs(p.y - 0.75) < 0.12 {
-            return grey(0.18);
-        }
-        return grey(1.0);
-    }
-    if mode == 4 {
-        // Highlights: the SDR ramp above, the same with the grade's highlight gain below, a
-        // mark where the knee is.
         let l = srgb_decode(p.x);
-        if abs(l - params.pattern.z) < 0.004 && p.y > 0.45 && p.y < 0.55 {
+        if abs(l - params.pattern.z) < 0.004 {
             return vec3<f32>(params.look.x, 0.0, 0.0);
-        }
-        if p.y < 0.48 {
-            return grey(l);
-        }
-        if p.y < 0.52 {
-            return vec3<f32>(0.0);
         }
         return vec3<f32>(min(shape(l * gain(l)) * params.look.x, params.look.y));
     }
@@ -140,7 +157,5 @@ fn fragment(in: Out) -> @location(0) vec4<f32> {
         let size = vec2<f32>(textureDimensions(frame)) * (r.zw - r.xy);
         return vec4<f32>(pattern((in.uv - r.xy) / (r.zw - r.xy), size), 1.0);
     }
-    let c = textureSampleLevel(frame, nearest, in.uv, 0.0);
-    let shaped = vec3<f32>(shape(c.r), shape(c.g), shape(c.b));
-    return vec4<f32>(min(shaped * params.look.x, vec3<f32>(params.look.y)), 1.0);
+    return vec4<f32>(encode(textureSampleLevel(frame, nearest, in.uv, 0.0).rgb), 1.0);
 }

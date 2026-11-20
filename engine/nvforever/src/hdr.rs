@@ -34,10 +34,14 @@
 //!
 //! Not yet: a separate UI brightness, wide gamut, HDR10 (PQ) output.
 
+use bevy::core_pipeline::fullscreen_material::fullscreen_material_system;
+use bevy::core_pipeline::{Core3d, Core3dSystems};
 use bevy::prelude::*;
-use bevy::render::renderer::{PrePresent, RenderDevice, RenderQueue};
-use bevy::render::view::{ExtractedWindow, HDR_OUTPUT_ACTIVE, HDR_OUTPUT_REQUEST};
+use bevy::render::extract_component::{ExtractComponent, ExtractComponentPlugin};
+use bevy::render::renderer::{PrePresent, RenderContext, RenderDevice, RenderQueue, ViewQuery};
+use bevy::render::view::{ExtractedWindow, ViewTarget, HDR_OUTPUT_ACTIVE, HDR_OUTPUT_REQUEST};
 use bevy::render::RenderApp;
+use bevy::ui_render::ui_pass;
 use nvf_play::settings::{add_setting, Setting, Slider};
 use std::sync::atomic::Ordering;
 use std::sync::Mutex;
@@ -145,13 +149,18 @@ pub(crate) enum Pattern {
     Peak = 1,
     /// Near-black patches on true black: the darkest should just vanish.
     Shadows = 2,
-    /// A ramp and paper white.
+    /// The player's scene over a ramp to paper white.
     PaperWhite = 3,
-    /// The SDR ramp over the same ramp with the highlight curve, the knee marked.
+    /// The player's scene over the ramp with the highlight curve, the knee marked.
     Highlights = 4,
 }
 
 impl Pattern {
+    /// Shows the player's own scene ([`ScenePreview`]) with a strip of the pattern under it.
+    pub(crate) fn shows_scene(self) -> bool {
+        matches!(self, Pattern::PaperWhite | Pattern::Highlights)
+    }
+
     /// The pattern for a settings row's key.
     pub(crate) fn for_row(key: &str) -> Pattern {
         match key {
@@ -196,8 +205,17 @@ impl Plugin for HdrPlugin {
             // After graphics.rs's `apply`, which takes the HDR view off with the light glow,
             // and imagespace.rs's `update_grade`, which writes the grade whole (both Update).
             .add_systems(PostUpdate, main_camera);
+        app.add_plugins(ExtractComponentPlugin::<PreviewSource>::default());
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else { return };
-        render_app.init_resource::<WindowEncode>().add_systems(PrePresent, encode_windows);
+        render_app
+            .init_resource::<WindowEncode>()
+            .init_resource::<ScenePreview>()
+            .add_systems(PrePresent, encode_windows)
+            // The graded picture (its highlights in), before the UI is drawn over it.
+            .add_systems(
+                Core3d,
+                capture_preview.after(Core3dSystems::PostProcess).after(fullscreen_material_system::<crate::imagespace::ImageSpaceGrade>).before(ui_pass),
+            );
     }
 }
 
@@ -246,7 +264,7 @@ fn main_camera(
     settings: Res<HdrOutput>,
     graphics: Res<crate::graphics::Graphics>,
     mut cams: Query<
-        (Entity, Has<bevy::camera::Hdr>, Has<crate::fsr::FsrUpscaling>, Has<crate::upscaler::DlssUpscaling>, Option<&mut crate::imagespace::ImageSpaceGrade>),
+        (Entity, Has<bevy::camera::Hdr>, Has<crate::fsr::FsrUpscaling>, Has<crate::upscaler::DlssUpscaling>, Option<&mut crate::imagespace::ImageSpaceGrade>, Has<PreviewSource>),
         With<crate::fly::FlyCam>,
     >,
     mut put_on: Local<bool>,
@@ -257,11 +275,14 @@ fn main_camera(
         *was = on;
         info!("hdr output: the surface is {}", if on { "HDR (scRGB)" } else { "SDR" });
     }
-    for (cam, hdr, fsr, dlss, grade) in &mut cams {
+    for (cam, hdr, fsr, dlss, grade, source) in &mut cams {
         if on {
             if !hdr {
                 commands.entity(cam).insert(bevy::camera::Hdr);
                 *put_on = true;
+            }
+            if !source {
+                commands.entity(cam).insert(PreviewSource);
             }
             if let Some(mut grade) = grade {
                 let want = settings.grade();
@@ -282,13 +303,13 @@ fn main_camera(
 /// generation's presenter).
 #[derive(Default)]
 pub(crate) struct Encoder {
-    made: Option<(wgpu::RenderPipeline, wgpu::BindGroupLayout, wgpu::Sampler, wgpu::Buffer)>,
+    made: Option<(wgpu::RenderPipeline, wgpu::BindGroupLayout, wgpu::Sampler, wgpu::Buffer, wgpu::TextureView)>,
 }
 
 impl Encoder {
     /// Draw `source` encoded over the whole of `target` (an image of the HDR surface).
     pub(crate) fn draw(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, source: &wgpu::TextureView, target: &wgpu::TextureView) {
-        let (pipeline, layout, sampler, buffer) = self.made.get_or_insert_with(|| {
+        let (pipeline, layout, sampler, buffer, no_preview) = self.made.get_or_insert_with(|| {
             let entry = |binding, ty| wgpu::BindGroupLayoutEntry { binding, visibility: wgpu::ShaderStages::FRAGMENT, ty, count: None };
             let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("hdr_encode"),
@@ -296,6 +317,7 @@ impl Encoder {
                     entry(0, wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }),
                     entry(1, wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)),
                     entry(2, wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }),
+                    entry(3, wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }),
                 ],
             });
             let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("hdr_encode"), source: wgpu::ShaderSource::Wgsl(include_str!("hdr_encode.wgsl").into()) });
@@ -318,8 +340,22 @@ impl Encoder {
             });
             let sampler = device.create_sampler(&wgpu::SamplerDescriptor { label: Some("hdr_encode"), ..default() });
             let buffer = device.create_buffer(&wgpu::BufferDescriptor { label: Some("hdr_encode"), size: 48, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-            (pipeline, layout, sampler, buffer)
+            // Bound while there is no scene preview ([`ScenePreview`]).
+            let no_preview = device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("hdr_encode_no_preview"),
+                    size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: SURFACE_FORMAT,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                })
+                .create_view(&default());
+            (pipeline, layout, sampler, buffer, no_preview)
         });
+        let preview = PREVIEW.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
         let params = *ENCODE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let bytes: Vec<u8> = params.iter().flat_map(|v| v.to_le_bytes()).collect();
         queue.write_buffer(buffer, 0, &bytes);
@@ -330,6 +366,7 @@ impl Encoder {
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(source) },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
                 wgpu::BindGroupEntry { binding: 2, resource: buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(preview.as_ref().unwrap_or(no_preview)) },
             ],
         });
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -349,6 +386,58 @@ impl Encoder {
         pass.set_bind_group(0, &group, &[]);
         pass.draw(0..3, 0..1);
     }
+}
+
+/// On the main camera while the surface is HDR: [`capture_preview`] takes its picture.
+#[derive(Component, ExtractComponent, Clone, Copy)]
+#[extract_app(bevy::render::RenderApp)]
+pub struct PreviewSource;
+
+/// The scene preview's size: small, as the pattern's box is about a quarter of the window.
+const PREVIEW_SIZE: (u32, u32) = (640, 360);
+
+/// The scene preview the encode draws in the pattern's box for the paper white and highlight
+/// rows: the main view's graded picture (its highlights in, 1.0 = paper white) before the
+/// UI, scaled down each frame while such a row is chosen, so a slider's change shows on the
+/// player's own scene at once [design: the owner, 2026-11-20, asked whether an in-game picture
+/// would be better than patterns: the patterns stay for the display's limits, the scene is
+/// for what is taste].
+static PREVIEW: Mutex<Option<wgpu::TextureView>> = Mutex::new(None);
+
+#[derive(Resource, Default)]
+struct ScenePreview {
+    target: Option<(wgpu::Texture, wgpu::TextureView)>,
+    blit: crate::frame_gen::Blit,
+}
+
+/// The main view's picture into the scene preview, while a scene pattern is up.
+fn capture_preview(view: ViewQuery<&ViewTarget, With<PreviewSource>>, device: Res<RenderDevice>, mut preview: ResMut<ScenePreview>, mut ctx: RenderContext) {
+    let target = view.into_inner();
+    let pattern = ENCODE.lock().unwrap_or_else(std::sync::PoisonError::into_inner)[4];
+    if !active() || ![Pattern::PaperWhite, Pattern::Highlights].into_iter().any(|p| p.shows_scene() && pattern == p as u32 as f32) {
+        return;
+    }
+    let device = device.wgpu_device();
+    let ScenePreview { target: out, blit } = &mut *preview;
+    let (_, out_view) = out.get_or_insert_with(|| {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("hdr_scene_preview"),
+            size: wgpu::Extent3d { width: PREVIEW_SIZE.0, height: PREVIEW_SIZE.1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: SURFACE_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&default());
+        *PREVIEW.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(view.clone());
+        (texture, view)
+    });
+    if target.main_texture_format() != SURFACE_FORMAT {
+        return;
+    }
+    blit.draw(device, ctx.command_encoder(), target.main_texture_view(), out_view, SURFACE_FORMAT, "hdr_scene_preview");
 }
 
 /// The encode of a window's image in place, on the render thread: the image copied out, then
@@ -532,7 +621,7 @@ pub(crate) fn register_settings(app: &mut App, group: &'static str) {
             "hdr-paper-white",
             group,
             "HDR paper white",
-            "How bright white text and the daylight picture are, in nits: the box at the top right shows it; set it to taste against the room.",
+            "How bright white text and the daylight picture are, in nits. The box at the top right shows your scene with it; set it to taste for the room.",
             Slider::choice(PAPER.2, |w| part(w.resource::<HdrOutput>().paper_white_nits, PAPER), |w, v| edit(w, |h| h.paper_white_nits = value(v, PAPER)), |v| format!("{:.0} nits", value(v, PAPER))),
         )
         .with_switches("--hdr-paper-white"),
@@ -575,7 +664,7 @@ pub(crate) fn register_settings(app: &mut App, group: &'static str) {
             "hdr-highlights",
             group,
             "HDR highlights",
-            "How far highlights (sky, lights, fire) rise above paper white. The box at the top right: SDR above, with highlights below.",
+            "How far highlights (sky, lights, fire) rise above paper white: watch your scene in the box at the top right, its curve under it.",
             Slider { get: |w| (w.resource::<HdrOutput>().highlights * 20.0).round() / 20.0, set: |w, v| edit(w, |h| h.highlights = v), min: 0.0, step: 0.05, shown: None },
         ),
     );
@@ -585,7 +674,7 @@ pub(crate) fn register_settings(app: &mut App, group: &'static str) {
             "hdr-highlight-start",
             group,
             "HDR highlight start",
-            "Where highlights start to rise (the red mark in the box at the top right); lower brightens more of the picture.",
+            "Where highlights start to rise (the red mark under your scene at the top right); lower brightens more of the picture.",
             Slider::choice(KNEE.2, |w| part(w.resource::<HdrOutput>().knee, KNEE), |w, v| edit(w, |h| h.knee = value(v, KNEE)), |v| format!("{:.0}%", value(v, KNEE) * 100.0)),
         )
         .with_switches("--hdr-knee"),
