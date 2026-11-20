@@ -535,6 +535,7 @@ fn register_display(app: &mut App) {
     // The physics rate (nvf_play::phys_rate) after the renderer's own Display rows, so their
     // order in the registry and the INI is as it was before the row.
     nvf_play::phys_rate::register_setting(app);
+    crate::hdr::register_settings(app, GROUP_PICTURE);
     if app.world().resource::<Args>().log_frame_times.is_some() {
         return;
     }

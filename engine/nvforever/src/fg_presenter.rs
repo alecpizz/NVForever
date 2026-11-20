@@ -224,6 +224,8 @@ impl Drop for Presenter {
 
 fn run(received: &mpsc::Receiver<Job>, surface: &SharedSurface, device: &wgpu::Device, queue: &wgpu::Queue, shared: &Shared) {
     let mut blit = Blit::default();
+    // HDR output: the frames drawn into the window's images encoded (hdr.rs).
+    let mut hdr = crate::hdr::Encoder::default();
     let mut pacer = Pacer::default();
     let mut gpu_time = Duration::ZERO;
     let mut last_present: Option<Instant> = None;
@@ -282,8 +284,13 @@ fn run(received: &mpsc::Receiver<Job>, surface: &SharedSurface, device: &wgpu::D
             };
             let target = image.texture.create_view(&wgpu::TextureViewDescriptor { format: Some(view_format), ..Default::default() });
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame_gen_present_copy") });
-            blit.draw(device, &mut encoder, source, &target, view_format, "frame_gen_present_copy");
+            if view_format == crate::hdr::SURFACE_FORMAT && crate::hdr::active() {
+                hdr.draw(device, queue, &mut encoder, source, &target);
+            } else {
+                blit.draw(device, &mut encoder, source, &target, view_format, "frame_gen_present_copy");
+            }
             queue.submit([encoder.finish()]);
+            crate::hdr::probe(device, queue, &image.texture, if count == 2 && i == 0 { "fg-generated" } else { "fg" });
             if i + 1 == count {
                 shared.copied(job.index);
             }

@@ -445,6 +445,12 @@ pub struct SurfaceData {
     /// NVForever (2026-11-09): the window the surface was made on, for [`SharedSurface`] holders
     /// (after `surface`, so it is dropped after it).
     window: RawHandleWrapper,
+    /// NVForever (2026-11-19): the sRGB format chosen for SDR output, and whether the surface is
+    /// configured for HDR output now ([`HDR_OUTPUT_REQUEST`]).
+    sdr_format: TextureFormat,
+    hdr: bool,
+    /// NVForever (2026-11-19): HDR was asked for and the surface could not take it.
+    hdr_refused: bool,
 }
 
 impl SurfaceData {
@@ -456,6 +462,15 @@ impl SurfaceData {
     /// NVForever (2026-11-09): a [`SharedSurface`] holder found the surface outdated.
     fn outdated(&self) -> bool {
         self.shared.outdated.load(core::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// NVForever (2026-11-19): HDR output was switched on or off ([`HDR_OUTPUT_REQUEST`]) and
+    /// the surface not reconfigured for it yet. An HDR request the surface refused is not tried
+    /// again while it stands; switched off, the refusal is cleared (one reconfigure), so
+    /// switching on again (Windows' HDR turned on meanwhile) tries once more.
+    fn hdr_pending(&self) -> bool {
+        let want = HDR_OUTPUT_REQUEST.load(core::sync::atomic::Ordering::Relaxed);
+        if want { !self.hdr && !self.hdr_refused } else { self.hdr || self.hdr_refused }
     }
 
     /// NVForever (2026-11-13): whether [`create_surfaces`] would reconfigure the surface this
@@ -612,7 +627,8 @@ pub fn prepare_windows(
 pub fn need_surface_configuration(windows: Query<(&ExtractedWindow, Option<&SurfaceData>)>) -> bool {
     for (window, surface_data) in &windows {
         // NVForever (2026-11-09): or a surface a `SharedSurface` holder found outdated.
-        if surface_data.is_none_or(SurfaceData::outdated) || window.size_changed || window.present_mode_changed {
+        // NVForever (2026-11-19): or HDR output switched on or off.
+        if surface_data.is_none_or(|d| d.outdated() || d.hdr_pending()) || window.size_changed || window.present_mode_changed {
             return true;
         }
     }
@@ -674,28 +690,8 @@ pub fn create_surfaces(
                 }
             }
             // NVForever (2026-11-19): HDR output when asked for and offered.
-            let mut color_space = wgpu::SurfaceColorSpace::Auto;
-            let mut usage = TextureUsages::RENDER_ATTACHMENT;
-            if HDR_OUTPUT_REQUEST.load(core::sync::atomic::Ordering::Relaxed) {
-                let spaces = caps.color_spaces(TextureFormat::Rgba16Float);
-                let offered: Vec<_> = caps.format_capabilities.iter().map(|fc| alloc::format!("{:?} {:?}", fc.format, fc.color_spaces)).collect();
-                info!("hdr output: the surface offers {}", offered.join(", "));
-                if spaces.contains(wgpu::SurfaceColorSpaces::EXTENDED_SRGB_LINEAR) && caps.usages.contains(TextureUsages::COPY_SRC) {
-                    format = TextureFormat::Rgba16Float;
-                    color_space = wgpu::SurfaceColorSpace::ExtendedSrgbLinear;
-                    usage |= TextureUsages::COPY_SRC;
-                    HDR_OUTPUT_ACTIVE.store(true, core::sync::atomic::Ordering::Relaxed);
-                    info!("hdr output: Rgba16Float, extended sRGB linear (scRGB)");
-                } else {
-                    warn!("hdr output: asked for, but the surface has no Rgba16Float in extended sRGB linear that can be copied (is Windows HDR on for this display?); SDR");
-                }
-            }
-
-            let texture_view_format = if !format.is_srgb() {
-                Some(format.add_srgb_suffix())
-            } else {
-                None
-            };
+            let output = surface_output(&caps, format, HDR_OUTPUT_REQUEST.load(core::sync::atomic::Ordering::Relaxed));
+            let (format, color_space, usage, texture_view_format) = (output.format, output.color_space, output.usage, output.view_format);
             let configuration = SurfaceConfiguration {
                 format,
                 width: window.physical_width,
@@ -733,6 +729,9 @@ pub fn create_surfaces(
                 window: handle.clone(),
                 configuration,
                 texture_view_format,
+                sdr_format: output.sdr_format,
+                hdr: output.hdr,
+                hdr_refused: HDR_OUTPUT_REQUEST.load(core::sync::atomic::Ordering::Relaxed) && !output.hdr,
             });
             continue;
         };
@@ -740,7 +739,13 @@ pub fn create_surfaces(
         // NVForever (2026-11-09): also when a `SharedSurface` holder found the surface outdated,
         // which can happen with the window's size unchanged (alt-tab, a display mode or HDR
         // change); the holder does not configure it itself.
-        if window.size_changed || window.present_mode_changed || data.outdated() {
+        // NVForever (2026-11-19): also when HDR output is switched on or off; a reconfigure
+        // with the other format and colour space, the surface kept (frame generation's
+        // presenter holds it, `SharedSurface`). An HDR request the surface cannot take is not
+        // tried again until the request changes.
+        let want_hdr = HDR_OUTPUT_REQUEST.load(core::sync::atomic::Ordering::Relaxed);
+        let hdr_changed = data.hdr_pending();
+        if window.size_changed || window.present_mode_changed || data.outdated() || hdr_changed {
             // NVForever (2026-11-13): held back for a later frame (`HoldSurfaceReconfigure`).
             if hold.as_ref().is_some_and(|h| h.0) {
                 data.hold_back();
@@ -759,6 +764,19 @@ pub fn create_surfaces(
             data.configuration.height = window.physical_height;
             let caps = data.surface.get_capabilities(&render_adapter);
             data.configuration.present_mode = present_mode(&window, &caps);
+            if hdr_changed {
+                let output = surface_output(&caps, data.sdr_format, want_hdr);
+                data.configuration.format = output.format;
+                data.configuration.color_space = output.color_space;
+                data.configuration.usage = output.usage;
+                data.configuration.view_formats = output.view_format.into_iter().collect();
+                data.texture_view_format = output.view_format;
+                data.hdr = output.hdr;
+                data.hdr_refused = want_hdr && !output.hdr;
+                if !want_hdr {
+                    info!("hdr output: off, {:?}", output.format);
+                }
+            }
             // NVForever (2026-11-08): not while a thread holding the surface takes or presents.
             let mut shared = data.shared.configuration.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             // NVForever (2026-11-09): cleared under the lock, which holders set it under.
@@ -767,6 +785,44 @@ pub fn create_surfaces(
             *shared = data.configuration.clone();
         }
     }
+}
+
+/// NVForever (2026-11-19): a surface's format, colour space, usage and sRGB view format.
+struct SurfaceOutput {
+    format: TextureFormat,
+    color_space: wgpu::SurfaceColorSpace,
+    usage: TextureUsages,
+    view_format: Option<TextureFormat>,
+    sdr_format: TextureFormat,
+    hdr: bool,
+}
+
+/// NVForever (2026-11-19): HDR output (`Rgba16Float` in extended sRGB linear, scRGB, which can be
+/// a copy source) when `hdr` asks for it and the surface offers it, else `sdr_format` as
+/// upstream picks it; sets [`HDR_OUTPUT_ACTIVE`] and logs the choice.
+fn surface_output(caps: &wgpu::SurfaceCapabilities, sdr_format: TextureFormat, hdr: bool) -> SurfaceOutput {
+    let srgb_view = |format: TextureFormat| (!format.is_srgb()).then(|| format.add_srgb_suffix());
+    let sdr = SurfaceOutput { format: sdr_format, color_space: wgpu::SurfaceColorSpace::Auto, usage: TextureUsages::RENDER_ATTACHMENT, view_format: srgb_view(sdr_format), sdr_format, hdr: false };
+    let mut output = sdr;
+    if hdr {
+        let offered: Vec<_> = caps.format_capabilities.iter().map(|fc| alloc::format!("{:?} {:?}", fc.format, fc.color_spaces)).collect();
+        info!("hdr output: the surface offers {}", offered.join(", "));
+        if caps.color_spaces(TextureFormat::Rgba16Float).contains(wgpu::SurfaceColorSpaces::EXTENDED_SRGB_LINEAR) && caps.usages.contains(TextureUsages::COPY_SRC) {
+            output = SurfaceOutput {
+                format: TextureFormat::Rgba16Float,
+                color_space: wgpu::SurfaceColorSpace::ExtendedSrgbLinear,
+                usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
+                view_format: None,
+                sdr_format,
+                hdr: true,
+            };
+            info!("hdr output: Rgba16Float, extended sRGB linear (scRGB)");
+        } else {
+            warn!("hdr output: asked for, but the surface has no Rgba16Float in extended sRGB linear that can be copied (is Windows HDR on for this display?); SDR");
+        }
+    }
+    HDR_OUTPUT_ACTIVE.store(output.hdr, core::sync::atomic::Ordering::Relaxed);
+    output
 }
 
 fn present_mode(window: &ExtractedWindow, caps: &wgpu::SurfaceCapabilities) -> wgpu::PresentMode {

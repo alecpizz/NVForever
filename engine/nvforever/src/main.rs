@@ -489,26 +489,26 @@ struct Args {
     /// Test aid: exit with success after this many seconds (smoke tests).
     #[arg(long)]
     run_seconds: Option<f32>,
-    /// HDR output (prototype, hdr.rs): an scRGB surface when the display is in HDR mode
-    /// (Windows' "Use HDR" on); SDR otherwise.
+    /// HDR output (hdr.rs; the settings page's HDR rows): an scRGB surface when the display is
+    /// in HDR mode (Windows' "Use HDR" on); SDR otherwise.
     #[arg(long)]
     hdr: bool,
-    /// With --hdr: the display's peak brightness in nits.
-    #[arg(long, default_value_t = 1000.0, requires = "hdr")]
+    /// HDR output: the display's peak brightness in nits.
+    #[arg(long, default_value_t = 1000.0)]
     hdr_peak: f32,
-    /// With --hdr: what SDR white (the UI, daylight) shows at, in nits.
-    #[arg(long, default_value_t = 200.0, requires = "hdr")]
+    /// HDR output: what SDR white (the UI, daylight) shows at, in nits.
+    #[arg(long, default_value_t = 200.0)]
     hdr_paper_white: f32,
-    /// With --hdr: the black floor, subtracted from the SDR range's linear values and
+    /// HDR output: the black floor, subtracted from the SDR range's linear values and
     /// stretched back (> 0 crushes, < 0 lifts; -0.05 to 0.05).
-    #[arg(long, default_value_t = 0.0, allow_hyphen_values = true, requires = "hdr")]
+    #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
     hdr_black_floor: f32,
-    /// With --hdr: decode the SDR range by the sRGB curve instead of as a gamma 2.2 screen.
-    #[arg(long, requires = "hdr")]
+    /// HDR output: decode the SDR range by the sRGB curve instead of as a gamma 2.2 screen.
+    #[arg(long)]
     hdr_srgb_blacks: bool,
-    /// With --hdr: the SDR luminance (linear, 0 to 0.9) above which highlights rise towards
+    /// HDR output: the SDR luminance (linear, 0 to 0.9) above which highlights rise towards
     /// the peak; lower lifts more of the picture.
-    #[arg(long, default_value_t = 0.25, requires = "hdr")]
+    #[arg(long, default_value_t = 0.25)]
     hdr_knee: f32,
     /// Do not draw the text overlay (implied by --frame-json, and by --play unless
     /// --overlay is given).
@@ -1733,14 +1733,15 @@ fn main() -> AppExit {
     // The ambient occlusion's shader for the lighting (imported only under its def).
     .add_plugins(ssao_lighting::SsaoLightingPlugin)
     .add_plugins(mesh_terrain_blend::MeshTerrainBlendPlugin)
-    .add_plugins(hdr::HdrPlugin(args.hdr.then(|| hdr::HdrOutput {
+    .add_plugins(hdr::HdrPlugin(hdr::HdrOutput {
+        enabled: args.hdr,
         peak_nits: args.hdr_peak,
         paper_white_nits: args.hdr_paper_white,
         black_floor: args.hdr_black_floor,
         gamma22: !args.hdr_srgb_blacks,
         knee: args.hdr_knee,
         ..default()
-    })))
+    }))
     // The switches the settings page weighs against the INI (`--play` only), for the
     // frame split's start-time decision (perf_overlay/split.rs).
     .add_plugins(perf_overlay::PerfOverlayPlugin(args.fps, play.is_some().then(|| settings::given_switches(&args, &command_line()))))
