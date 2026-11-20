@@ -128,6 +128,16 @@ impl SwapchainWaits {
     }
 }
 
+/// NVForever (2026-11-19, HDR output prototype): set before the first window's surface is
+/// made to ask for an HDR surface: `Rgba16Float` in the extended sRGB linear colour space
+/// (scRGB: Rec.709 primaries, 1.0 = 80 nits, values above 1 brighter). Taken only when the
+/// surface lists that pair and can be a copy source (the game's HDR encode pass copies the
+/// finished frame before writing it back encoded).
+pub static HDR_OUTPUT_REQUEST: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// NVForever (2026-11-19): a window's surface was configured for HDR ([`HDR_OUTPUT_REQUEST`]).
+pub static HDR_OUTPUT_ACTIVE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 pub static SWAPCHAIN_WAITS: SwapchainWaits = SwapchainWaits {
     present_nanos: core::sync::atomic::AtomicU64::new(0),
     presents: core::sync::atomic::AtomicU64::new(0),
@@ -649,7 +659,7 @@ pub fn create_surfaces(
             };
             let caps = surface.get_capabilities(&render_adapter);
             let present_mode = present_mode(&window, &caps);
-            let formats = caps.formats;
+            let formats = caps.formats.clone();
             // For future HDR output support, we'll need to request a format that supports HDR,
             // but as of wgpu 0.15 that is not yet supported.
             // Prefer sRGB formats for surfaces, but fall back to first available format if no sRGB formats are available.
@@ -663,6 +673,23 @@ pub fn create_surfaces(
                     break;
                 }
             }
+            // NVForever (2026-11-19): HDR output when asked for and offered.
+            let mut color_space = wgpu::SurfaceColorSpace::Auto;
+            let mut usage = TextureUsages::RENDER_ATTACHMENT;
+            if HDR_OUTPUT_REQUEST.load(core::sync::atomic::Ordering::Relaxed) {
+                let spaces = caps.color_spaces(TextureFormat::Rgba16Float);
+                let offered: Vec<_> = caps.format_capabilities.iter().map(|fc| alloc::format!("{:?} {:?}", fc.format, fc.color_spaces)).collect();
+                info!("hdr output: the surface offers {}", offered.join(", "));
+                if spaces.contains(wgpu::SurfaceColorSpaces::EXTENDED_SRGB_LINEAR) && caps.usages.contains(TextureUsages::COPY_SRC) {
+                    format = TextureFormat::Rgba16Float;
+                    color_space = wgpu::SurfaceColorSpace::ExtendedSrgbLinear;
+                    usage |= TextureUsages::COPY_SRC;
+                    HDR_OUTPUT_ACTIVE.store(true, core::sync::atomic::Ordering::Relaxed);
+                    info!("hdr output: Rgba16Float, extended sRGB linear (scRGB)");
+                } else {
+                    warn!("hdr output: asked for, but the surface has no Rgba16Float in extended sRGB linear that can be copied (is Windows HDR on for this display?); SDR");
+                }
+            }
 
             let texture_view_format = if !format.is_srgb() {
                 Some(format.add_srgb_suffix())
@@ -673,7 +700,7 @@ pub fn create_surfaces(
                 format,
                 width: window.physical_width,
                 height: window.physical_height,
-                usage: TextureUsages::RENDER_ATTACHMENT,
+                usage,
                 present_mode,
                 desired_maximum_frame_latency: window
                     .desired_maximum_frame_latency
@@ -690,7 +717,7 @@ pub fn create_surfaces(
                     Some(format) => vec![format],
                     None => vec![],
                 },
-                color_space: wgpu::SurfaceColorSpace::Auto,
+                color_space,
             };
 
             render_device.configure_surface(&surface, &configuration);

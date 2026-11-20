@@ -32,6 +32,9 @@ struct Grade {
     // the last one's (imagespace.rs).
     motion: vec4<f32>,
     reproject: mat4x4<f32>,
+    // HDR output (hdr.rs): on (x = 1), the peak in paper whites, the knee, the highlights'
+    // strength.
+    hdr: vec4<f32>,
 }
 
 @group(0) @binding(0) var screen: texture_2d<f32>;
@@ -156,5 +159,16 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     // The fade colour covers the graded picture [observed: the opening is white while a
     // modifier holds the brightness at zero, image-modifiers.md §5].
     c = mix(c, grade.fade.rgb, clamp(grade.fade.a, 0.0, 1.0));
-    return vec4(to_linear(clamp(c, vec3(0.0), vec3(1.0))), select(src.a, 1.0, marked));
+    var out = to_linear(clamp(c, vec3(0.0), vec3(1.0)));
+    // HDR output (hdr.rs): above the knee (linear luminance), the graded picture's
+    // highlights rise with the square of the way from the knee to white, SDR white to the
+    // peak; one gain for all three channels keeps the hue [design]. Not the Pip-Boy's
+    // screen, and less as a fade to a colour covers the picture.
+    if grade.hdr.x > 0.5 && !marked {
+        let l = dot(out, vec3(0.2126, 0.7152, 0.0722));
+        let t = clamp((l - grade.hdr.z) / max(1.0 - grade.hdr.z, 1e-3), 0.0, 1.0);
+        let gain = 1.0 + (grade.hdr.y - 1.0) * t * t * grade.hdr.w;
+        out = out * mix(gain, 1.0, clamp(grade.fade.a, 0.0, 1.0));
+    }
+    return vec4(out, select(src.a, 1.0, marked));
 }
