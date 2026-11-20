@@ -52,8 +52,16 @@ pub(crate) const SURFACE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba
 const SCRGB_NITS: f32 = 80.0;
 
 /// The settings page's ranges.
+/// The peak row: Auto, then 400 to 2000 nits in 50s.
 const PEAK: (f32, f32, usize) = (400.0, 2000.0, 33);
-const PAPER: (f32, f32, usize) = (80.0, 400.0, 33);
+/// The peak when it is Auto and the display reports none to go by.
+const FALLBACK_PEAK: f32 = 1000.0;
+/// The brightness row's choices of paper white, in nits, the reference white among them.
+const PAPER_STEPS: [f32; 15] = [80.0, 100.0, 120.0, 140.0, 160.0, 180.0, 203.0, 220.0, 240.0, 260.0, 280.0, 300.0, 320.0, 350.0, 400.0];
+/// Paper white by default: the reference white of HDR video and games, 203 nits
+/// [documented: ITU-R BT.2408, "HDR Reference White" 203 cd/m2; the owner's pointer, 2026-11-20:
+/// gammastudios.tech's The Sinking City 2 HDR write-up uses it as its default].
+const PAPER_DEFAULT: f32 = 203.0;
 
 /// The knee (the brightest channel, linear, where the highlights start to rise) as a part of
 /// the picture's average luminance ([`SceneKey`]), and its least and most: at night the
@@ -75,8 +83,9 @@ const WHITE_RANGE: (f32, f32) = (0.40, 1.0);
 pub struct HdrOutput {
     /// Asked for (the surface is HDR only where the display offers it: [`active`]).
     pub enabled: bool,
-    /// The display's brightest, in nits.
-    pub peak_nits: f32,
+    /// The display's brightest, in nits; `None`: Auto, what the display reports
+    /// ([`display_peak`]), else [`FALLBACK_PEAK`].
+    pub peak_nits: Option<f32>,
     /// What SDR's white (the UI, a white wall in daylight) shows at, in nits.
     pub paper_white_nits: f32,
     /// Subtracted from the SDR range's linear values and stretched back (< 0 lifts).
@@ -92,18 +101,28 @@ pub struct HdrOutput {
 
 impl Default for HdrOutput {
     fn default() -> Self {
-        Self { enabled: false, peak_nits: 1000.0, paper_white_nits: 200.0, black_floor: 0.0, gamma22: true, highlights: 1.0, knee: None }
+        Self { enabled: false, peak_nits: None, paper_white_nits: PAPER_DEFAULT, black_floor: 0.0, gamma22: true, highlights: 1.0, knee: None }
     }
 }
 
 impl HdrOutput {
     pub fn clamped(mut self) -> Self {
-        self.peak_nits = self.peak_nits.clamp(100.0, 10_000.0);
-        self.paper_white_nits = self.paper_white_nits.clamp(SCRGB_NITS, self.peak_nits);
+        self.peak_nits = self.peak_nits.map(|p| p.clamp(100.0, 10_000.0));
+        self.paper_white_nits = self.paper_white_nits.clamp(SCRGB_NITS, 10_000.0);
         self.black_floor = self.black_floor.clamp(-0.05, 0.05);
         self.highlights = self.highlights.clamp(0.0, 1.0);
         self.knee = self.knee.map(|k| k.clamp(0.0, 0.9));
         self
+    }
+
+    /// The peak now: the chosen one, or Auto's.
+    pub fn peak(&self) -> f32 {
+        self.peak_nits.unwrap_or_else(|| detected_peak().unwrap_or(FALLBACK_PEAK))
+    }
+
+    /// Paper white now, never above the peak.
+    pub fn paper(&self) -> f32 {
+        self.paper_white_nits.min(self.peak())
     }
 
     /// The knee now: the fixed one, or from the picture's average.
@@ -119,7 +138,7 @@ impl HdrOutput {
     /// The grade's `hdr` (imagespace.rs `ImageSpaceGrade::hdr`): the white point (above 0:
     /// on), the peak in paper whites, the knee, the strength.
     pub fn grade(&self) -> Vec4 {
-        Vec4::new(self.white_now(), self.peak_nits / self.paper_white_nits, self.knee_now(), self.highlights)
+        Vec4::new(self.white_now(), self.peak() / self.paper(), self.knee_now(), self.highlights)
     }
 
     /// `hdr_encode.wgsl`'s uniform: paper white and the peak in scRGB units, the black level,
@@ -128,12 +147,12 @@ impl HdrOutput {
     fn encode(&self, pattern: Pattern) -> [f32; 12] {
         let [x0, y0, x1, y1] = PATTERN_BOX;
         [
-            self.paper_white_nits / SCRGB_NITS,
-            self.peak_nits / SCRGB_NITS,
+            self.paper() / SCRGB_NITS,
+            self.peak() / SCRGB_NITS,
             self.black_floor,
             if self.gamma22 { 1.0 } else { 0.0 },
             pattern as u32 as f32,
-            self.peak_nits / self.paper_white_nits,
+            self.peak() / self.paper(),
             self.knee_now(),
             self.highlights,
             x0,
@@ -145,9 +164,12 @@ impl HdrOutput {
 
     pub fn describe(&self) -> String {
         format!(
-            "{}; peak {:.0} nits, paper white {:.0} nits, black level {:+.3}, {}, highlights {:.0}% from {}",
+            "{}; peak {}, paper white {:.0} nits, black level {:+.3}, {}, highlights {:.0}% from {}",
             if self.enabled { "on" } else { "off" },
-            self.peak_nits,
+            match self.peak_nits {
+                Some(p) => format!("{p:.0} nits"),
+                None => format!("Auto ({:.0} nits{})", self.peak(), if detected_peak().is_some() { ", the display's" } else { "" }),
+            },
             self.paper_white_nits,
             self.black_floor,
             if self.gamma22 { "gamma 2.2 blacks" } else { "sRGB blacks" },
@@ -183,8 +205,8 @@ impl Pattern {
     /// The pattern for a settings row's key.
     pub(crate) fn for_row(key: &str) -> Pattern {
         match key {
-            "hdr-peak" => Pattern::Peak,
-            "hdr-paper-white" => Pattern::PaperWhite,
+            "hdr-peak-brightness" => Pattern::Peak,
+            "hdr-brightness" => Pattern::PaperWhite,
             _ => Pattern::None,
         }
     }
@@ -219,6 +241,111 @@ fn white_for(average: f32) -> f32 {
     (WHITE_PER_AVERAGE * average).clamp(WHITE_RANGE.0, WHITE_RANGE.1)
 }
 
+/// The peak the window's display reports (f32 bits, 0: none yet or none usable).
+static DISPLAY_PEAK: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+fn detected_peak() -> Option<f32> {
+    Some(f32::from_bits(DISPLAY_PEAK.load(Ordering::Relaxed))).filter(|p| *p > 0.0)
+}
+
+/// What a display reports of its luminance (Windows: DXGI's output description for the
+/// monitor the window is on): its peak, its peak over the whole screen, its least, and whether
+/// the output is in HDR (BT.2100 PQ) now.
+#[derive(Clone, Debug, PartialEq)]
+struct DisplayLuminance {
+    /// The output's name (`\\.\DISPLAY1`), for the log.
+    name: String,
+    peak: f32,
+    full_frame: f32,
+    min: f32,
+    hdr: bool,
+}
+
+/// The peak worth taking from a report: a display in HDR mode reporting between 300 and
+/// 10,000 nits, and not a stand-in report: the same peak over the whole screen as for a
+/// highlight above 1000 nits is what Windows gives for a display whose own data says nothing
+/// usable [observed 2026-11-20: the owner's OLED reported 4000 nits, 4000 over the whole
+/// screen and 0.12 at least, where an OLED shows a few hundred over the whole screen and
+/// near 0 black; design: displays reporting nothing give 0, and some SDR panels in HDR mode
+/// 270-ish]. Those keep the fallback; Windows' HDR Calibration app replaces the report with
+/// measured values.
+fn usable_peak(l: &DisplayLuminance) -> Option<f32> {
+    let stand_in = l.peak > 1000.0 && l.full_frame >= l.peak;
+    (l.hdr && (300.0..=10_000.0).contains(&l.peak) && !stand_in).then_some(l.peak)
+}
+
+/// The window's display's luminance, as Windows reports it (`IDXGIOutput6::GetDesc1`, which
+/// Windows' own HDR Calibration app's profile changes) [documented: Microsoft Learn,
+/// DXGI_OUTPUT_DESC1: MaxLuminance, MaxFullFrameLuminance, MinLuminance in nits, ColorSpace].
+#[cfg(windows)]
+fn display_luminance(hwnd: *mut core::ffi::c_void) -> Option<DisplayLuminance> {
+    use windows::core::Interface;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Dxgi::Common::DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
+    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1, IDXGIOutput6};
+    use windows::Win32::Graphics::Gdi::{MonitorFromWindow, MONITOR_DEFAULTTONEAREST};
+    // SAFETY: the window handle is the game's own live window; the DXGI calls take and
+    // return COM interfaces the `windows` crate counts references of.
+    unsafe {
+        let monitor = MonitorFromWindow(HWND(hwnd), MONITOR_DEFAULTTONEAREST);
+        let factory: IDXGIFactory1 = CreateDXGIFactory1().ok()?;
+        for a in 0u32.. {
+            let Ok(adapter) = factory.EnumAdapters1(a) else { break };
+            for o in 0u32.. {
+                let Ok(output) = adapter.EnumOutputs(o) else { break };
+                let Ok(output) = output.cast::<IDXGIOutput6>() else { continue };
+                let Ok(desc) = output.GetDesc1() else { continue };
+                if desc.Monitor == monitor {
+                    let len = desc.DeviceName.iter().position(|c| *c == 0).unwrap_or(desc.DeviceName.len());
+                    return Some(DisplayLuminance {
+                        name: String::from_utf16_lossy(&desc.DeviceName[..len]),
+                        peak: desc.MaxLuminance,
+                        full_frame: desc.MaxFullFrameLuminance,
+                        min: desc.MinLuminance,
+                        hdr: desc.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020,
+                    });
+                }
+            }
+        }
+        None
+    }
+}
+
+#[cfg(not(windows))]
+fn display_luminance(_hwnd: *mut core::ffi::c_void) -> Option<DisplayLuminance> {
+    None
+}
+
+/// While the surface is HDR, the window's display's report read now and then (every few
+/// seconds: the window may move to another display) into Auto's peak; logged when it changes.
+fn display_peak(windows: Query<&bevy::window::RawHandleWrapper, With<bevy::window::PrimaryWindow>>, mut last: Local<Option<(std::time::Instant, Option<DisplayLuminance>)>>) {
+    if !active() || last.as_ref().is_some_and(|(t, _)| t.elapsed().as_secs() < 5) {
+        return;
+    }
+    let Ok(handle) = windows.single() else { return };
+    let hwnd = match handle.get_window_handle() {
+        wgpu::rwh::RawWindowHandle::Win32(h) => h.hwnd.get() as *mut core::ffi::c_void,
+        _ => return,
+    };
+    let report = display_luminance(hwnd);
+    if last.as_ref().is_none_or(|(_, r)| *r != report) {
+        match &report {
+            Some(l) => info!(
+                "hdr output: {} reports peak {:.0} nits (whole screen {:.0}, least {:.4}), {}; Auto's peak {}",
+                l.name,
+                l.peak,
+                l.full_frame,
+                l.min,
+                if l.hdr { "in HDR" } else { "not in HDR" },
+                usable_peak(l).map_or(format!("{FALLBACK_PEAK:.0} nits (not usable)"), |p| format!("{p:.0} nits"))
+            ),
+            None => info!("hdr output: the display reports nothing; Auto's peak {FALLBACK_PEAK:.0} nits"),
+        }
+    }
+    DISPLAY_PEAK.store(report.as_ref().and_then(usable_peak).unwrap_or(0.0).to_bits(), Ordering::Relaxed);
+    *last = Some((std::time::Instant::now(), report));
+}
+
 /// HDR output is asked for (the frame generation row's DLSS choice is not offered then).
 pub(crate) fn asked(world: &World) -> bool {
     world.get_resource::<HdrOutput>().is_some_and(|h| h.enabled)
@@ -236,7 +363,7 @@ impl Plugin for HdrPlugin {
                     info!("hdr output: {}", settings.describe());
                 }
             })
-            .add_systems(Update, follow_settings)
+            .add_systems(Update, (display_peak, follow_settings).chain())
             // After graphics.rs's `apply`, which takes the HDR view off with the light glow,
             // and imagespace.rs's `update_grade`, which writes the grade whole (both Update).
             .add_systems(PostUpdate, main_camera);
@@ -705,15 +832,43 @@ pub(crate) fn probe(device: &wgpu::Device, queue: &wgpu::Queue, image: &wgpu::Te
     info!("hdr probe: {site} {index}: median {:.1} nits, p99.9 {:.0}, max {:.0}, p1 {:.3}, black {:.3}", q(0.5), q(0.999), q(1.0), q(0.01), nits.iter().filter(|n| **n < 0.01).count() as f32 / nits.len() as f32);
 }
 
-/// A slider part for `v` in `(min, max)`, as `Slider::fit` keeps parts.
-fn part(v: f32, (min, max, _): (f32, f32, usize)) -> f32 {
-    ((v - min) / (max - min) * 1000.0).round().clamp(0.0, 1000.0) / 1000.0
+/// The peak row's part: Auto first (0), then [`PEAK`]'s steps.
+fn peak_part(peak: Option<f32>) -> f32 {
+    let n = PEAK.2;
+    match peak {
+        None => 0.0,
+        Some(p) => {
+            let i = ((p - PEAK.0) / (PEAK.1 - PEAK.0) * (n - 1) as f32).round().clamp(0.0, (n - 1) as f32);
+            ((i + 1.0) / n as f32 * 1000.0).round() / 1000.0
+        }
+    }
 }
 
-/// The value for a slider part, on the range's steps.
-fn value(p: f32, (min, max, n): (f32, f32, usize)) -> f32 {
-    let i = (p.clamp(0.0, 1.0) * (n - 1) as f32).round();
-    min + i * (max - min) / (n - 1) as f32
+/// The peak for the peak row's part: `None` for Auto.
+fn peak_value(v: f32) -> Option<f32> {
+    let n = PEAK.2;
+    let i = (v.clamp(0.0, 1.0) * n as f32).round() as usize;
+    (i > 0).then(|| PEAK.0 + (i - 1) as f32 * (PEAK.1 - PEAK.0) / (n - 1) as f32)
+}
+
+fn peak_text(v: f32) -> String {
+    match peak_value(v) {
+        Some(p) => format!("{p:.0} nits"),
+        None => match detected_peak() {
+            Some(p) => format!("Auto ({p:.0} nits)"),
+            None => format!("Auto ({FALLBACK_PEAK:.0} nits)"),
+        },
+    }
+}
+
+/// The brightness row's part for a paper white: its nearest choice.
+fn paper_part(paper: f32) -> f32 {
+    let i = PAPER_STEPS.iter().enumerate().min_by(|a, b| (a.1 - paper).abs().total_cmp(&(b.1 - paper).abs())).map_or(0, |(i, _)| i);
+    (i as f32 / (PAPER_STEPS.len() - 1) as f32 * 1000.0).round() / 1000.0
+}
+
+fn paper_value(v: f32) -> f32 {
+    PAPER_STEPS[(v.clamp(0.0, 1.0) * (PAPER_STEPS.len() - 1) as f32).round() as usize]
 }
 
 fn edit(world: &mut World, change: impl FnOnce(&mut HdrOutput)) {
@@ -744,22 +899,22 @@ pub(crate) fn register_settings(app: &mut App, group: &'static str) {
     add_setting(
         app,
         Setting::slider(
-            "hdr-peak",
+            "hdr-peak-brightness",
             group,
             "HDR peak brightness",
-            "Your display's brightest, in nits: raise it until the plus in the box at the top right just vanishes (best with the display's HGIG mode on).",
-            Slider::choice(PEAK.2, |w| part(w.resource::<HdrOutput>().peak_nits, PEAK), |w, v| edit(w, |h| h.peak_nits = value(v, PEAK)), |v| format!("{:.0} nits", value(v, PEAK))),
+            "Your display's brightest. Auto: what Windows reports for it. Or raise it until the plus at the top right just vanishes (best with HGIG on).",
+            Slider::choice(PEAK.2 + 1, |w| peak_part(w.resource::<HdrOutput>().peak_nits), |w, v| edit(w, |h| h.peak_nits = peak_value(v)), peak_text),
         )
         .with_switches("--hdr-peak"),
     );
     add_setting(
         app,
         Setting::slider(
-            "hdr-paper-white",
+            "hdr-brightness",
             group,
             "HDR brightness",
             "The game's brightness, in nits (white text, daylight): set it to taste for your room on your scene in the box at the top right.",
-            Slider::choice(PAPER.2, |w| part(w.resource::<HdrOutput>().paper_white_nits, PAPER), |w, v| edit(w, |h| h.paper_white_nits = value(v, PAPER)), |v| format!("{:.0} nits", value(v, PAPER))),
+            Slider::choice(PAPER_STEPS.len(), |w| paper_part(w.resource::<HdrOutput>().paper_white_nits), |w, v| edit(w, |h| h.paper_white_nits = paper_value(v)), |v| format!("{:.0} nits", paper_value(v))),
         )
         .with_switches("--hdr-paper-white"),
     );
@@ -771,9 +926,9 @@ mod tests {
 
     #[test]
     fn settings_stay_in_range() {
-        let wild = HdrOutput { enabled: true, peak_nits: 50.0, paper_white_nits: 900.0, black_floor: 1.0, gamma22: true, highlights: 3.0, knee: Some(2.0) }.clamped();
-        assert_eq!(wild.peak_nits, 100.0);
-        assert_eq!(wild.paper_white_nits, 100.0, "paper white never above the peak");
+        let wild = HdrOutput { enabled: true, peak_nits: Some(50.0), paper_white_nits: 900.0, black_floor: 1.0, gamma22: true, highlights: 3.0, knee: Some(2.0) }.clamped();
+        assert_eq!(wild.peak_nits, Some(100.0));
+        assert_eq!(wild.paper(), 100.0, "paper white never above the peak");
         assert_eq!(wild.black_floor, 0.05);
         assert_eq!(wild.highlights, 1.0);
         assert_eq!(wild.knee, Some(0.9));
@@ -781,7 +936,7 @@ mod tests {
 
     #[test]
     fn units() {
-        let hdr = HdrOutput::default();
+        let hdr = HdrOutput { peak_nits: Some(1000.0), paper_white_nits: 200.0, ..HdrOutput::default() };
         assert_eq!(hdr.encode(Pattern::None)[..4], [2.5, 12.5, 0.0, 1.0], "scRGB: 1.0 is 80 nits");
         assert_eq!(hdr.encode(Pattern::Peak)[4], 1.0);
         let fixed = HdrOutput { knee: Some(0.3), ..hdr };
@@ -790,15 +945,31 @@ mod tests {
 
     #[test]
     fn sliders_land_on_their_steps() {
-        for range in [PEAK, PAPER] {
-            for i in 0..range.2 {
-                let v = range.0 + i as f32 * (range.1 - range.0) / (range.2 - 1) as f32;
-                assert!((value(part(v, range), range) - v).abs() < 1e-4, "{v} in {range:?}");
-            }
+        assert_eq!(peak_value(peak_part(None)), None, "Auto");
+        for i in 0..PEAK.2 {
+            let p = PEAK.0 + i as f32 * 50.0;
+            assert_eq!(peak_value(peak_part(Some(p))), Some(p));
+        }
+        for p in PAPER_STEPS {
+            assert_eq!(paper_value(paper_part(p)), p);
         }
         let d = HdrOutput::default();
-        assert_eq!(value(part(d.peak_nits, PEAK), PEAK), 1000.0);
-        assert_eq!(value(part(d.paper_white_nits, PAPER), PAPER), 200.0);
+        assert_eq!(d.peak_nits, None, "Auto by default");
+        assert_eq!(d.paper_white_nits, 203.0, "BT.2408's reference white");
+        assert_eq!(paper_value(paper_part(d.paper_white_nits)), 203.0);
+        assert_eq!(paper_value(paper_part(1000.0)), 400.0, "the nearest choice");
+    }
+
+    #[test]
+    fn display_reports() {
+        let oled = DisplayLuminance { name: String::new(), peak: 800.0, full_frame: 200.0, min: 0.0005, hdr: true };
+        assert_eq!(usable_peak(&oled), Some(800.0));
+        assert_eq!(usable_peak(&DisplayLuminance { hdr: false, ..oled.clone() }), None, "not in HDR now");
+        assert_eq!(usable_peak(&DisplayLuminance { peak: 0.0, ..oled.clone() }), None, "nothing reported");
+        assert_eq!(usable_peak(&DisplayLuminance { peak: 270.0, ..oled.clone() }), None, "an SDR panel's report");
+        let stand_in = DisplayLuminance { peak: 4000.0, full_frame: 4000.0, min: 0.1199, ..oled.clone() };
+        assert_eq!(usable_peak(&stand_in), None, "the owner's OLED before calibration (2026-11-20)");
+        assert_eq!(usable_peak(&DisplayLuminance { peak: 1000.0, full_frame: 1000.0, ..oled }), Some(1000.0), "an LCD holding 1000 nits over the screen");
     }
 
     #[test]

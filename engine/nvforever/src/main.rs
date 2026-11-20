@@ -493,11 +493,12 @@ struct Args {
     /// in HDR mode (Windows' "Use HDR" on); SDR otherwise.
     #[arg(long)]
     hdr: bool,
-    /// HDR output: the display's peak brightness in nits.
-    #[arg(long, default_value_t = 1000.0)]
-    hdr_peak: f32,
+    /// HDR output: the display's peak brightness in nits (without it: Auto, what the display
+    /// reports).
+    #[arg(long)]
+    hdr_peak: Option<f32>,
     /// HDR output: what SDR white (the UI, daylight) shows at, in nits.
-    #[arg(long, default_value_t = 200.0)]
+    #[arg(long, default_value_t = 203.0)]
     hdr_paper_white: f32,
     /// HDR output: the black floor, subtracted from the SDR range's linear values and
     /// stretched back (> 0 crushes, < 0 lifts; -0.05 to 0.05).

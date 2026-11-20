@@ -367,24 +367,30 @@ Tweaks tab's rows (#1892) are listed in docs/design/settings-tweaks-layout.md.
   `--hdr-knee`, which have no row)
 - Registered in `engine/nvforever/src/hdr.rs`
 
-### `hdr-peak`: HDR peak brightness
+### `hdr-peak-brightness`: HDR peak brightness
 
-- On the page: Your display's brightest, in nits: raise it until the plus in the box at the
-  top right just vanishes (best with the display's HGIG mode on).
-- In full: While the row is chosen, a box at this brightness with a plus at 10,000 nits is
-  drawn at the top right of the page; above what the display can show both look the same,
-  so the setting where the plus just vanishes is the display's peak. The picture's
-  highlights reach it and never go past.
+- On the page: Your display's brightest. Auto: what Windows reports for it. Or raise it
+  until the plus at the top right just vanishes (best with HGIG on).
+- In full: Auto (the default) takes the peak Windows reports for the display the window is
+  on, once it is in HDR; a report that says nothing usable (none, an SDR panel's, or the
+  stand-in Windows gives a display without HDR data: the same peak over the whole screen as
+  for a highlight, above 1000 nits) leaves 1000 nits. Running Windows' HDR Calibration app
+  replaces the report with measured values. Otherwise 400 to 2000 nits: while the row is
+  chosen, a box at this brightness with a plus at 10,000 nits is drawn at the top right of
+  the page; above what the display can show both look the same, so the setting where the
+  plus just vanishes is the display's peak. The picture's highlights reach it and never go
+  past.
 - Command-line switches: `--hdr-peak`
 - Registered in `engine/nvforever/src/hdr.rs`
 
-### `hdr-paper-white`: HDR brightness
+### `hdr-brightness`: HDR brightness
 
 - On the page: The game's brightness, in nits (white text, daylight): set it to taste for
   your room on your scene in the box at the top right.
-- In full: The brightness of SDR white (the interface, a white wall in daylight). While the
-  row is chosen, the box at the top right shows the game's own scene at this setting, with a
-  ramp from black to white under it.
+- In full: The brightness of SDR white (the interface, a white wall in daylight), 203 nits
+  by default (the reference white of ITU-R BT.2408). While the row is chosen, the box at the
+  top right shows the game's own scene at this setting, with a ramp from black to white
+  under it.
 - Command-line switches: `--hdr-paper-white`
 - Registered in `engine/nvforever/src/hdr.rs`
 
