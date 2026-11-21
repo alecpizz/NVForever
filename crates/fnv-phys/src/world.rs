@@ -453,6 +453,8 @@ pub struct PhysWorld {
     pub(crate) passes_ragdoll: HashMap<u32, u32>,
     /// Gore pieces by their id (`crate::gore`).
     pub(crate) gore: BTreeMap<u32, RigidBodyHandle>,
+    /// Spent shell casings by their id (`crate::casings`).
+    pub(crate) casings: BTreeMap<u32, RigidBodyHandle>,
     /// Per-triangle material codes of triangle-mesh colliders; one code for a convex
     /// collider.
     pub(crate) materials: HashMap<ColliderHandle, Arc<[u32]>>,
@@ -538,6 +540,7 @@ impl PhysWorld {
             ragdoll_of: HashMap::new(),
             passes_ragdoll: HashMap::new(),
             gore: BTreeMap::new(),
+            casings: BTreeMap::new(),
             materials: HashMap::new(),
             shells: HashMap::new(),
             dirty: false,
@@ -1339,6 +1342,7 @@ impl PhysWorld {
             ragdoll_of: self.ragdoll_of.clone(),
             passes_ragdoll: self.passes_ragdoll.clone(),
             gore: self.gore.clone(),
+            casings: self.casings.clone(),
             materials: self.materials.clone(),
             shells: self.shells.clone(),
             dirty: self.dirty,

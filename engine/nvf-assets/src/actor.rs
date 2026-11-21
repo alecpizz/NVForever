@@ -178,6 +178,9 @@ pub struct PreparedPart {
     /// worker thread, for the same reason as `projectile_nodes` (#3057: 28-30 ms of the
     /// frame an armed NPC was drawn in [observed 2026-11-20, `profile hitch` spans]).
     pub muzzle: Option<Affine3A>,
+    /// A held weapon's `ShellCasingNode`, likewise (Modern Feel's shell casings,
+    /// nvforever `feel_casings`).
+    pub casing: Option<Affine3A>,
     /// The `UPB` string of each node that has one, by node name: the bone a weapon's
     /// part hangs from (nvforever `weapons::spawn_model`). Read here for the same reason.
     pub upb: Arc<HashMap<String, String>>,
@@ -965,6 +968,10 @@ fn prepare_part_into(sink: &mut impl ModelSink, path: &str, nif: Nif, failures: 
     if objects.iter().any(|o| o.is_node && o.name.as_deref().is_some_and(muzzle_named)) {
         let (nodes, _) = crate::model::model_nodes(&objects);
         out.muzzle = crate::model::node_path(&nodes, &MUZZLE_NODES).map(|path| path.iter().fold(out.root, |m, &j| m * nodes[j].local));
+    }
+    if objects.iter().any(|o| o.is_node && o.name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case("ShellCasingNode"))) {
+        let (nodes, _) = crate::model::model_nodes(&objects);
+        out.casing = crate::model::node_path(&nodes, &["ShellCasingNode"]).map(|path| path.iter().fold(out.root, |m, &j| m * nodes[j].local));
     }
     let mut upb = HashMap::new();
     for o in objects.iter().filter(|o| o.is_node) {

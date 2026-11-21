@@ -658,6 +658,7 @@ fn casings(
     mut knocks: MessageWriter<PlaySound>,
     body: Option<Res<PlayerBody>>,
     nodes: Query<&GlobalTransform>,
+    feel: Option<Res<nvf_play::modern_feel::ModernFeel>>,
 ) {
     let dt = time.delta_secs();
     let gravity = phys.world.params.gravity;
@@ -694,7 +695,9 @@ fn casings(
             t.rotation = Quat::from_scaled_axis(c.spin * dt) * t.rotation;
         }
     }
-    let (Some(sfx), Ok((world_root, root_at))) = (sfx, root.single()) else {
+    // Modern Feel's shell casings throw them instead (`feel_casings`).
+    let modern = feel.as_deref().is_some_and(nvf_play::modern_feel::ModernFeel::shell_casings);
+    let (Some(sfx), Ok((world_root, root_at)), false) = (sfx, root.single(), modern) else {
         thrown.clear();
         return;
     };

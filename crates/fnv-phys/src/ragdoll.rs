@@ -211,6 +211,13 @@ impl PhysicsHooks for RagdollHooks<'_> {
     fn filter_contact_pair(&self, c: &PairFilterContext) -> Option<SolverFlags> {
         let rag = |b: Option<RigidBodyHandle>| b.and_then(|h| self.of_body.get(&h)).copied();
         let owner = |h: ColliderHandle| c.colliders.get(h).and_then(|co| Owner::decode(co.user_data));
+        // Shell casings (`crate::casings`) meet the world and each other only.
+        let data = |h: ColliderHandle| c.colliders.get(h).map_or(0, |co| co.user_data);
+        let (d1, d2) = (data(c.collider1), data(c.collider2));
+        if crate::casings::is_casing(d1) || crate::casings::is_casing(d2) {
+            let (other, other_data) = if crate::casings::is_casing(d1) { (owner(c.collider2), d2) } else { (owner(c.collider1), d1) };
+            return PhysWorld::casing_meets(other, other_data).then_some(SolverFlags::COMPUTE_RIGID_IMPULSES);
+        }
         // Gore pieces (`crate::gore`) meet the world and each other only.
         let (o1, o2) = (owner(c.collider1), owner(c.collider2));
         if PhysWorld::is_gore(o1) || PhysWorld::is_gore(o2) {
@@ -955,7 +962,7 @@ impl PhysWorld {
 
     /// Step with the ragdolls' contact filter.
     pub(crate) fn step_world(&mut self) {
-        if self.ragdolls.is_empty() && self.gore.is_empty() {
+        if self.ragdolls.is_empty() && self.gore.is_empty() && self.casings.is_empty() {
             self.w.step();
         } else {
             let hooks = RagdollHooks { ragdolls: &self.ragdolls, of_body: &self.ragdoll_of, passes: &self.passes_ragdoll };
@@ -965,7 +972,7 @@ impl PhysWorld {
 
     /// Update the collision pairs with the ragdolls' contact filter.
     pub(crate) fn detect(&mut self) {
-        if self.ragdolls.is_empty() && self.gore.is_empty() {
+        if self.ragdolls.is_empty() && self.gore.is_empty() && self.casings.is_empty() {
             self.w.detect_collisions(&(), &());
         } else {
             let hooks = RagdollHooks { ragdolls: &self.ragdolls, of_body: &self.ragdoll_of, passes: &self.passes_ragdoll };

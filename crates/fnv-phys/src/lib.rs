@@ -34,6 +34,7 @@ pub mod actors;
 pub mod air;
 pub mod arrival;
 pub mod buoyancy;
+pub mod casings;
 pub mod character;
 pub mod convert;
 #[cfg(feature = "debug-lines")]
