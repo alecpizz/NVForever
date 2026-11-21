@@ -96,7 +96,7 @@ pub fn haze(fog_far: f32, fog_strength: f32) -> f32 {
 }
 
 /// The sun's place on the screen and the strength and tint of its shafts this frame.
-fn follow_sun(sky: Res<SkyState>, mut cams: Query<(&GlobalTransform, &Projection, &mut LightShafts), With<FlyCam>>) {
+pub(crate) fn follow_sun(sky: Res<SkyState>, mut cams: Query<(&GlobalTransform, &Projection, &mut LightShafts), With<FlyCam>>) {
     let Ok((gt, proj, mut shafts)) = cams.single_mut() else { return };
     let Projection::Perspective(p) = proj else { return };
     let mut strength = 0.0;

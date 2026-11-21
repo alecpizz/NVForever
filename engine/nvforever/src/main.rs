@@ -182,6 +182,9 @@ mod swimming;
 mod ssao;
 mod ssao_lighting;
 mod taa;
+// Modern Feel graphics parts (docs/design/modern-feel-gfx.md).
+mod object_blur;
+mod vol_fog;
 mod fg_presenter;
 mod ffx_api;
 mod frame_gen;

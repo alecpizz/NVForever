@@ -602,7 +602,7 @@ impl Plugin for GraphicsPlugin {
         app.insert_resource(g)
             .insert_resource(MsaaSetting(self.1))
             .insert_resource(DirectionalLightShadowMap { size: SHADOW_MAP })
-            .add_plugins((crate::ssao::SsaoPlugin, crate::post::PostPlugin, crate::taa::TaaPlugin, crate::shafts::ShaftsPlugin, crate::heat_haze::HeatHazePlugin, crate::upscaler::prep::PrepPlugin, crate::fsr::FsrPlugin, crate::dlss::DlssPassPlugin))
+            .add_plugins((crate::ssao::SsaoPlugin, crate::post::PostPlugin, crate::taa::TaaPlugin, crate::shafts::ShaftsPlugin, crate::heat_haze::HeatHazePlugin, crate::upscaler::prep::PrepPlugin, crate::fsr::FsrPlugin, crate::dlss::DlssPassPlugin, crate::vol_fog::VolFogPlugin, crate::object_blur::ObjectBlurPlugin))
             .add_systems(Startup, |g: Res<Graphics>| info!("graphics: {}", g.describe()))
             .add_systems(Update, (crate::upscaler::follow_request, apply, sun_shadow_key.pipe(sun_shadow_quality).after(crate::sky::update_sky)).chain())
             .add_systems(PostUpdate, log_shadow_map.before(bevy::light::SimulationLightSystems::UpdateDirectionalLightCascades));

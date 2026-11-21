@@ -23,6 +23,10 @@ struct Taa {
 @group(0) @binding(2) var depth: texture_depth_2d;
 @group(0) @binding(3) var linear_sampler: sampler;
 @group(0) @binding(4) var<uniform> taa: Taa;
+// The motion-vector prepass, when the camera has it (Modern Feel's object motion blur,
+// object_blur.rs): the history is then found by each pixel's own motion, so what moves by
+// itself (actors, plants in the wind) keeps its smoothing and leaves no trail.
+@if(MOTION_VECTORS) @group(0) @binding(5) var motion: texture_2d<f32>;
 
 struct Out {
     @location(0) picture: vec4<f32>,
@@ -123,6 +127,9 @@ fn fragment(in: FullscreenVertexOutput) -> Out {
     let prev_clip = taa.reproject * ndc;
     var prev_uv = uv + (vec2(prev_clip.x, -prev_clip.y) / max(prev_clip.w, 1e-7) * 0.5 + 0.5 - at);
     var reset = taa.params.z > 0.5 || prev_clip.w <= 0.0;
+    @if(MOTION_VECTORS) if !locked {
+        prev_uv = uv - textureLoad(motion, nearest_at, 0).xy;
+    }
     // The first-person arms and weapon move with the camera.
     if locked {
         prev_uv = uv;

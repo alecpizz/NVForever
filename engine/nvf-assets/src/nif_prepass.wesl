@@ -48,14 +48,18 @@ fn fragment(in: VertexOutput) -> @builtin(sample_mask) u32 {
 @if(MOTION_VECTOR_PREPASS)
 struct MotionOutput {
     @location(1) motion_vector: vec2<f32>,
+    // A multisampled view's soft edge (nif_material.rs `prepass_coverage`).
+    @if(COVERAGE_MASK)
+    @builtin(sample_mask) mask: u32,
     @if(FIRST_PERSON_DEPTH || UNCLIPPED_DEPTH_ORTHO_EMULATION)
     @builtin(frag_depth) depth: f32,
 }
 
 @if(MOTION_VECTOR_PREPASS) @fragment
 fn fragment(in: VertexOutput) -> MotionOutput {
-    test_fragment(in);
     var out: MotionOutput;
+    @if(COVERAGE_MASK) out.mask = test_fragment(in);
+    @if(!COVERAGE_MASK) test_fragment(in);
     out.motion_vector = calculate_motion_vector(in.world_position, in.previous_world_position);
     @if(FIRST_PERSON_DEPTH) out.depth = squeeze(in.position.z);
     @if(!FIRST_PERSON_DEPTH && UNCLIPPED_DEPTH_ORTHO_EMULATION) out.depth = in.unclipped_depth;

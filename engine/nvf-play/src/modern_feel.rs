@@ -22,8 +22,10 @@
 //! - **Grounded footsteps**: actors' walk clips play at the speed they move, feet stay put in
 //!   a turn, and standing actors turn in place.
 //! - **NPC aim**: an armed actor's spine and arms bend so the gun points at its target.
-//! - **Volumetric fog**: light shafts and haze in dusty air from the sun and lamps.
-//! - **Object motion blur**: moving things blur by their own motion, not only the camera's.
+//! - **Volumetric fog** (nvforever `vol_fog.rs`): light shafts and haze in dusty air from the sun
+//!   and lamps.
+//! - **Object motion blur** (nvforever `object_blur.rs`): moving things blur by their own
+//!   motion, not only the camera's.
 
 use bevy::prelude::*;
 
