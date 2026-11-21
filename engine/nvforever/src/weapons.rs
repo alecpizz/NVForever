@@ -425,6 +425,11 @@ pub fn spawn_muzzle(commands: &mut Commands, actor: &SpawnedActor, weapon_node: 
     let at = part.muzzle?;
     let e = commands.spawn((Name::new("Muzzle"), Muzzle { reference }, Transform::from_matrix(Mat4::from(at)), Visibility::Inherited)).id();
     commands.entity(actor.nodes[weapon_node]).add_child(e);
+    // Its `ShellCasingNode` under it, where Modern Feel's casings leave (`feel_casings`);
+    // it goes with the muzzle.
+    if let Some(port) = part.casing {
+        commands.spawn((Name::new("CasingPort"), crate::feel_casings::CasingPort { reference }, Transform::from_matrix(Mat4::from(at.inverse() * port)), Visibility::Inherited, ChildOf(e)));
+    }
     Some(e)
 }
 

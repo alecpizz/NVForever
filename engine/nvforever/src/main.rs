@@ -142,6 +142,8 @@ mod quality;
 mod quality_probe;
 mod particles;
 mod shot_fx;
+mod feel_casings;
+mod feel_impacts;
 mod ragdoll;
 mod swing_traps;
 mod wrecks;
@@ -2020,6 +2022,8 @@ fn main() -> AppExit {
             // The Vigor Tester's machine: its camera and lights, the room behind it.
             app.add_plugins(vigor_view::VigorViewPlugin);
             app.add_plugins((player_body::PlayerBodyPlugin { first_person_body: args.first_person_body, weapon_sway: args.weapon_sway, head_bob: args.head_bob, weapon_lower: !args.no_weapon_lower, true_iron_sights: !args.no_true_iron_sights }, stealth_field::StealthFieldPlugin, pipboy_arm::PipBoyArmPlugin, deaths::DeathsPlugin, limbs::LimbsPlugin, ragdoll::RagdollPlugin, swing_traps::SwingTrapsPlugin, wrecks::WrecksPlugin, shot_fx::ShotFxPlugin, particles::ParticlesPlugin, dismember::DismemberPlugin, grass_fire_fx::GrassFireFxPlugin));
+            // Modern Feel's shell casings and impact effects (docs/design/modern-feel-vfx.md).
+            app.add_plugins((feel_casings::FeelCasingsPlugin, feel_impacts::FeelImpactsPlugin));
             app.insert_resource(nvf_play::aim_zoom::Scope3d { on: args.scope_3d, lens: false });
             // Advanced Movement's parts are off unless switched on, Advanced Recoil on under
             // the Global Toggle [design: the owner, 2026-11-16, "make sure all advanced

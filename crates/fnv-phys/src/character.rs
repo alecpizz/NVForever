@@ -1009,6 +1009,8 @@ fn solid_for(ignore: crate::layers::LayerSet, passes: bool) -> impl Fn(ColliderH
         Some(Owner::Ref { layer, .. }) => !ignore.contains(layer),
         Some(Owner::Actor { .. }) => false,
         Some(Owner::Character { .. }) => !passes,
+        // Spent shell casings (`crate::casings`) lie underfoot.
+        None if crate::casings::is_casing(co.user_data) => false,
         _ => true,
     }
 }

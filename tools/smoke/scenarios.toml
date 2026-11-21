@@ -33779,3 +33779,50 @@ expect = [
   { re = 'combat: swing reaches 1 actors .*1 of them out of the fan of rays at eye height', label = "the level knife swing reaches the low creature through the ground fallback" },
   { re = 'combat: .*, 1 swings \(0 chained, 0 power, 1 hits\)', label = "the short weapon hits once at the widened blocking stop" },
 ]
+
+[[scenario]]
+name = "feel-casings-impacts"
+source = "Modern Feel experiment (fork owner, 2026-11-20; docs/design/modern-feel-vfx.md): shell casings as physical bodies, muzzle smoke and dust, clods and chips where shots strike the ground"
+note = "The service rifle (WeapNVServiceRifle 000E9C3B, 5.56 mm 00004240) fired eight times at the ground ahead in Goodsprings at noon, then held: the cases fly right from the ShellCasingNode, bounce and lie by the player's feet; the barrel smokes after the burst. Frames: feel_case_flight and feel_case_flight2 (just after shots), feel_impact (dust and clods), feel_smoke (after the burst) and feel_case_ground (third person, the cases by the feet)"
+areas = ["combat", "shot-fx"]
+paths = ["engine/nvforever/src/feel_casings.rs", "engine/nvforever/src/feel_impacts.rs", "crates/fnv-phys/src/casings.rs"]
+env = { NVF_PLAY_TEST_SCRIPT_MENUS = "0.3", NVF_PLAY_TEST_NO_SPREAD = "1", NVF_PLAY_TEST_EQUIP = "000E9C3B", NVF_PLAY_TEST_GIVE = "00004240:60", NVF_PLAY_TEST_LOOK = "9:46:-28", NVF_PLAY_TEST_CONTROL = "9:weapon,12:fire,12.4:fire,12.8:fire,13.2:fire,13.6:fire,14:fire,14.4:fire,14.8:fire,15.2:fire,15.6:fire,16:fire,16.4:fire,16.8:fire,17.2:fire,17.6:fire,18:fire,19:view,19.5:zoom=150", NVF_PLAY_TEST_SHOTS = "12.1:feel_case_flight.png,12.9:feel_case_flight2.png,16.1:feel_impact.png,18.6:feel_smoke.png,21:feel_case_ground.png" }
+args = ["--cell", "Goodsprings", "--play", "--no-voice", "--no-messages", "--pos=-67900,1400,8500", "--hour", "12"]
+run_seconds = 23
+expect = [
+  { re = 'shell casings: WeapNVServiceRifle throws \S+ \(the player.s\)', label = "the rifle throws its cases" },
+  { re = 'shell casings summary: (?P<n>\d+) thrown by the player', range = [4, 100], label = "a case for each shot" },
+  { re = 'shell casings summary: .* (?P<n>\d+) knocks heard', range = [1, 1000], label = "the cases clink as they land" },
+  { re = 'impact effects: WeapNVServiceRifle smokes at its muzzle', label = "the muzzle smokes" },
+  { re = 'impact effects: (dirt|stone|grass) at', label = "the ground's dust and chips" },
+  { text = "shot fx: shell casing", max = 0, label = "the original's casings are not thrown while Modern Feel's are" },
+]
+
+[[scenario]]
+name = "feel-casings-revolver-reload"
+source = "Modern Feel experiment (fork owner, 2026-11-20; docs/design/modern-feel-vfx.md): a revolver keeps its cases until the reload, when the spent ones fall out"
+note = "The .357 revolver (WeapNV357Revolver 0008F216, .357 rounds 0008ED02) fired three times, then reloaded"
+areas = ["combat", "shot-fx"]
+paths = ["engine/nvforever/src/feel_casings.rs"]
+env = { NVF_PLAY_TEST_SCRIPT_MENUS = "0.3", NVF_PLAY_TEST_NO_SPREAD = "1", NVF_PLAY_TEST_EQUIP = "0008F216", NVF_PLAY_TEST_GIVE = "0008ED02:30", NVF_PLAY_TEST_LOOK = "9:46:-28", NVF_PLAY_TEST_CONTROL = "9:weapon,12:fire,12.4:fire,13.4:fire,13.8:fire,14.8:fire,15.2:fire,16.5:reload", NVF_PLAY_TEST_SHOTS = "17.2:feel_revolver_drop.png,19:feel_revolver_ground.png" }
+args = ["--cell", "Goodsprings", "--play", "--no-voice", "--no-messages", "--pos=-67900,1400,8500", "--hour", "12"]
+run_seconds = 21
+expect = [
+  { re = 'shell casings: WeapNV357Revolver reloads: (?P<n>\d+) spent cases fall out', range = [1, 6], label = "the spent cases fall out at the reload" },
+  { re = 'shell casings summary: .*\((?P<n>\d+) dropped at reloads\)', range = [1, 6], label = "and only then" },
+]
+
+[[scenario]]
+name = "feel-casings-npc"
+source = "Modern Feel experiment (fork owner, 2026-11-20; docs/design/modern-feel-vfx.md): another actor's shots throw cases from its weapon's ShellCasingNode and smoke at its muzzle"
+note = "As npc-muzzle-flash-rifle: Violet (FiendVioletRef 000F570B) with a service rifle set on the player (god mode), the player 100 units before her at 12 s"
+areas = ["combat", "shot-fx"]
+paths = ["engine/nvforever/src/feel_casings.rs", "engine/nvforever/src/feel_impacts.rs", "engine/nvforever/src/weapons.rs", "engine/nvf-assets/src/actor.rs"]
+env = { NVF_PLAY_TEST_GOD = "1", NVF_PLAY_TEST_SCRIPT_MENUS = "1", NVF_PLAY_TEST_SCRIPT = "3:call:FiendVioletRef:AddItem:WeapNVServiceRifle:1,3.5:call:FiendVioletRef:EquipItem:WeapNVServiceRifle,4:combat:FiendVioletRef:player", NVF_PLAY_TEST_FACE = "12:000F570B", NVF_PLAY_TEST_SHOTS = "15:feel_npc_casings.png,17:feel_npc_casings2.png" }
+args = ["--cell", "Goodsprings", "--pos=-45900,64896,7000", "--play", "--hour", "12", "--no-voice", "--no-messages", "--npc-packages", "FiendVioletRef"]
+run_seconds = 20
+expect = [
+  { re = 'shell casings: WeapNVServiceRifle throws \S+ \(another actor.s\)', label = "her rifle throws cases" },
+  { re = 'shell casings summary: .* (?P<n>\d+) by other actors', range = [1, 1000] },
+  { re = 'impact effects summary: (?P<n>\d+) shots smoked', range = [1, 100000] },
+]
