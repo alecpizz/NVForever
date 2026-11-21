@@ -1428,6 +1428,81 @@ expect = [
 ]
 
 [[scenario]]
+name = "motion-matching"
+source = "fork experiment 2026-11-20 (engine/nvforever/src/player_body/motion_matching.rs, engine/nvf-assets/src/motion_match.rs; docs/design/motion-matching.md): with Motion Matching on, the third-person body's run, diagonals, strafes, backing up, turning on the spot and stops are picked by the matcher: its database builds, it searches, and it jumps when the controls change but not at every search (no flicker between near equals)"
+areas = ["player-body"]
+paths = ["engine/nvforever/src/player_body/motion_matching.rs", "engine/nvf-assets/src/motion_match.rs", "engine/nvf-assets/src/anim_blend.rs", "engine/nvforever/src/player_body.rs", "engine/nvf-play/src/inertia.rs"]
+env = { RUST_LOG = "info,nvforever::player_body::motion_matching=debug", NVF_PLAY_TEST_FEET_JOLT = "1", NVF_PLAY_TEST_CONTROL = "2:view", NVF_PLAY_TEST_MOVE = "4:1:0,7:1:1,9:0:1,11:-1:0,13:0:0,19:1:0,21:0:0", NVF_PLAY_TEST_LOOK = "15.0:0:0,15.1:15:0,15.2:30:0,15.3:45:0,15.4:60:0,15.5:75:0,15.6:90:0,15.7:105:0,15.8:120:0,15.9:135:0,16.0:150:0,16.1:165:0,16.2:180:0,17.5:180:0" }
+args = ["--cell", "Goodsprings", "--play", "--no-voice", "--no-messages", "--hour", "12", "--motion-matching"]
+run_seconds = 24
+expect = [
+  { re = 'motion matching: database of (?P<n>\d+) rows', range = [500, 20000], label = "the clip set's database is built (idle, 32 movement blends, 2 turns, each mirrored: about 2,300 rows)" },
+  { re = 'motion matching: (?P<n>\d+) searches, \d+ jumps in the last 10 s', range = [40, 1e9], label = "the matcher searches about every 0.1 s" },
+  { re = 'motion matching: \d+ searches, (?P<n>\d+) jumps in the last 10 s', range = [3, 60], label = "it jumps as the controls change, but not at every search" },
+  { re = 'motion matching: to (walk|run|walk-run) ', label = "a movement motion is taken" },
+  { re = 'motion matching: to idle', min = 3, label = "the idle at the start and at each of the two stops (no walking on the spot)" },
+  { re = 'motion matching: to turn (left|right)', label = "turning on the spot plays a turning clip" },
+  { re = 'third-person feet jolt: median \d+', label = "the feet jolt is measured (compare with motion-matching-off)" },
+]
+
+[[scenario]]
+name = "motion-matching-sets"
+source = "fork experiment 2026-11-20 (engine/nvforever/src/player_body/motion_matching.rs): the matcher builds a database for each clip set the body goes into (unarmed, a 10mm pistol drawn, sneaking with it) and moves in each; the jumps stay hidden (the feet jolt's worst against motion-matching-off's)"
+areas = ["player-body"]
+paths = ["engine/nvforever/src/player_body/motion_matching.rs", "engine/nvf-assets/src/motion_match.rs", "engine/nvforever/src/player_body.rs"]
+env = { RUST_LOG = "info,nvforever::player_body::motion_matching=debug", NVF_PLAY_TEST_FEET_JOLT = "1", NVF_PLAY_TEST_EQUIP = "000E3778", NVF_PLAY_TEST_GIVE = "0008ED03:50", NVF_PLAY_TEST_CONTROL = "2:view,3:weapon,13:sneak", NVF_PLAY_TEST_MOVE = "6:1:0,8:1:-1,10:0:0,15:1:0,17:0:1,19:0:0" }
+args = ["--cell", "Goodsprings", "--play", "--no-voice", "--no-messages", "--hour", "12", "--motion-matching"]
+run_seconds = 22
+expect = [
+  { re = 'motion matching: database of (?P<n>\d+) rows', min = 3, label = "a database for each set: unarmed, the pistol drawn, sneaking with it" },
+  { re = 'building the database of \d+ motions for \(Stand, false, Some\("1hp"\), false\)', label = "the pistol drawn" },
+  { re = 'building the database of \d+ motions for \(Sneak, false, Some\("1hp"\), false\)', label = "sneaking with it" },
+  { re = 'motion matching: to (walk|run|walk-run) ', min = 4, label = "it moves in them" },
+  { re = 'third-person feet jolt: \d+ units/s', max = 2, label = "at most a couple of spikes over 60,000 units/s² (the original's worst is about 50,000-80,000)" },
+]
+
+[[scenario]]
+name = "motion-matching-inertia"
+source = "fork experiment 2026-11-20 (engine/nvforever/src/player_body/motion_matching.rs, foot_ik.rs, nvf-play player.rs AnimationPace): with Movement Inertia on (the owner's case of feet sliding before a start), Motion Matching sets the ground speed by the legs' pace and locks the planted feet; the foot skate line compares the planted feet's speed over the ground as animated and as shown (compare motion-matching-inertia-off)"
+areas = ["player-body"]
+paths = ["engine/nvforever/src/player_body/motion_matching.rs", "engine/nvf-assets/src/motion_match.rs", "engine/nvforever/src/foot_ik.rs", "engine/nvf-play/src/player.rs", "engine/nvf-play/src/inertia.rs"]
+env = { RUST_LOG = "info,nvforever::player_body::motion_matching=debug", NVF_PLAY_TEST_FOOT_SKATE = "foot-skate.csv", NVF_PLAY_TEST_CONTROL = "2:view", NVF_PLAY_TEST_MOVE = "4:1:0,7:1:1,9:0:1,11:-1:0,13:0:0,15:1:0,16:0:0,17:1:0,18:0:0,19:1:0,21:0:0" }
+args = ["--cell", "Goodsprings", "--play", "--no-voice", "--no-messages", "--hour", "12", "--movement-inertia", "--motion-matching"]
+run_seconds = 24
+expect = [
+  { re = 'foot skate: planted feet over the ground, units/s: animated mean \d+', label = "the skate is measured" },
+  { re = 'foot skate: .*; shown mean (?P<n>\d+),', range = [0, 40], label = "the planted feet shown hardly slide (locked)" },
+  { re = 'foot skate: .* (?P<n>\d+) locks so far', range = [10, 1e9], label = "feet are locked as they come down" },
+]
+
+[[scenario]]
+name = "motion-matching-inertia-off"
+source = "fork experiment 2026-11-20: motion-matching-inertia's moves with Motion Matching off, the original's clips with Movement Inertia: the foot skate baseline"
+areas = ["player-body"]
+paths = ["engine/nvforever/src/player_body/motion_matching.rs", "engine/nvf-assets/src/motion_match.rs", "engine/nvforever/src/foot_ik.rs", "engine/nvf-play/src/player.rs", "engine/nvf-play/src/inertia.rs"]
+env = { RUST_LOG = "info,nvforever::player_body::motion_matching=debug", NVF_PLAY_TEST_FOOT_SKATE = "foot-skate.csv", NVF_PLAY_TEST_CONTROL = "2:view", NVF_PLAY_TEST_MOVE = "4:1:0,7:1:1,9:0:1,11:-1:0,13:0:0,15:1:0,16:0:0,17:1:0,18:0:0,19:1:0,21:0:0" }
+args = ["--cell", "Goodsprings", "--play", "--no-voice", "--no-messages", "--hour", "12", "--movement-inertia"]
+run_seconds = 24
+expect = [
+  { re = 'foot skate: planted feet over the ground, units/s: animated mean \d+', label = "the skate is measured" },
+  { re = 'foot skate: .* 0 locks so far', label = "no feet locked with Motion Matching off" },
+]
+
+[[scenario]]
+name = "motion-matching-off"
+source = "fork experiment 2026-11-20 (engine/nvforever/src/player_body/motion_matching.rs): the motion-matching scenario's moves and turns with Motion Matching off, the original's clip choice: no matcher runs, and the feet jolt line gives the baseline to compare the matcher's against"
+areas = ["player-body"]
+paths = ["engine/nvforever/src/player_body/motion_matching.rs", "engine/nvf-assets/src/motion_match.rs", "engine/nvf-assets/src/anim_blend.rs", "engine/nvforever/src/player_body.rs", "engine/nvf-play/src/inertia.rs"]
+env = { RUST_LOG = "info,nvforever::player_body::motion_matching=debug", NVF_PLAY_TEST_FEET_JOLT = "1", NVF_PLAY_TEST_CONTROL = "2:view", NVF_PLAY_TEST_MOVE = "4:1:0,7:1:1,9:0:1,11:-1:0,13:0:0,19:1:0,21:0:0", NVF_PLAY_TEST_LOOK = "15.0:0:0,15.1:15:0,15.2:30:0,15.3:45:0,15.4:60:0,15.5:75:0,15.6:90:0,15.7:105:0,15.8:120:0,15.9:135:0,16.0:150:0,16.1:165:0,16.2:180:0,17.5:180:0" }
+args = ["--cell", "Goodsprings", "--play", "--no-voice", "--no-messages", "--hour", "12"]
+run_seconds = 24
+expect = [
+  { re = 'third-person feet jolt: median \d+', label = "the feet jolt is measured" },
+  { re = 'advanced movement: .*Motion Matching off', label = "off by default" },
+  { re = 'motion matching: ', max = 0, label = "no matcher runs with it off" },
+]
+
+[[scenario]]
 name = "movement-inertia"
 source = "owner 2026-11-13 (engine/nvf-play/src/inertia.rs, engine/nvforever/src/player_body.rs, view_sway.rs; docs/design/player-body.md §1.4a.2): the player speeds up over a moment and glides to a stop, the first-person view eases into a crouch and out, the weapon dips on a jump and a landing"
 areas = ["player-body"]

@@ -282,6 +282,10 @@ pub struct MovementInertia {
     pub weapon_handling: bool,
     /// Sprint ([`Self::sprint_on`]): the Sprint control runs faster for AP (`crate::stance`).
     pub sprint: bool,
+    /// Motion Matching ([`Self::matches_motion`]): the third-person body's walking, running
+    /// and turning picked frame by frame from the locomotion clips (nvforever
+    /// `player_body.rs`, docs/design/motion-matching.md).
+    pub motion_matching: bool,
     pub handling: f32,
     /// Movement Weight, 0.25 to 1 ([`MOVEMENT_WEIGHTS`]): the share of the inertia's times.
     pub weight: f32,
@@ -314,7 +318,7 @@ impl Default for MovementInertia {
     /// What a new game gets: the Global Toggle and Advanced Recoil on, the rest off, so an app
     /// that only adds the resource (a test app, `crate::player::PlayerPlugin`) plays as shipped.
     fn default() -> Self {
-        MovementInertia { advanced: true, on: false, smooth: false, recoil: true, weapon_handling: false, sprint: false, handling: 1.0, weight: 1.0, weapon_weight: None, agility: 5.0, strength: 5.0, axes: [Spring::REST; 2], last_key: [0.0; 2], starting: None, gliding: None, reports: Vec::new(), ran: true, grounded: true, last_feet: None, last_placed: None }
+        MovementInertia { advanced: true, on: false, smooth: false, recoil: true, weapon_handling: false, sprint: false, motion_matching: false, handling: 1.0, weight: 1.0, weapon_weight: None, agility: 5.0, strength: 5.0, axes: [Spring::REST; 2], last_key: [0.0; 2], starting: None, gliding: None, reports: Vec::new(), ran: true, grounded: true, last_feet: None, last_placed: None }
     }
 }
 
@@ -349,6 +353,11 @@ impl MovementInertia {
     /// The first-person weapon clips follow the settling curve (Animation Smoothing).
     pub fn smooth_hands(&self) -> bool {
         self.advanced && self.smooth
+    }
+
+    /// The third-person body walks, runs and turns by motion matching (Motion Matching).
+    pub fn matches_motion(&self) -> bool {
+        self.advanced && self.motion_matching
     }
 
     /// Drawing, putting away and aiming go by the weapon's weight and the attributes, never
@@ -592,19 +601,20 @@ impl MovementInertia {
 
 /// Log Advanced Movement's switches kept here at the start and whenever one changes (a smoke
 /// check of the defaults: the owner, 2026-11-16, every part off but Advanced Recoil).
-pub fn log_switches(inertia: Res<MovementInertia>, mut last: Local<Option<[bool; 6]>>) {
-    let now = [inertia.advanced, inertia.on, inertia.weapon_handling, inertia.recoil, inertia.smooth, inertia.sprint];
+pub fn log_switches(inertia: Res<MovementInertia>, mut last: Local<Option<[bool; 7]>>) {
+    let now = [inertia.advanced, inertia.on, inertia.weapon_handling, inertia.recoil, inertia.smooth, inertia.sprint, inertia.motion_matching];
     if *last != Some(now) {
         *last = Some(now);
         let s = |b: bool| if b { "on" } else { "off" };
         info!(
-            "advanced movement: Global Toggle {}, Movement Inertia {}, Weapon Handling {}, Advanced Recoil {}, Animation Smoothing {}, Sprint {}",
+            "advanced movement: Global Toggle {}, Movement Inertia {}, Weapon Handling {}, Advanced Recoil {}, Animation Smoothing {}, Sprint {}, Motion Matching {}",
             s(now[0]),
             s(now[1]),
             s(now[2]),
             s(now[3]),
             s(now[4]),
-            s(now[5])
+            s(now[5]),
+            s(now[6])
         );
     }
 }

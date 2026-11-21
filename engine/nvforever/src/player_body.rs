@@ -98,6 +98,9 @@ use nvf_play::PlayWorld;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// The third-person body's locomotion by motion matching (the Motion Matching switch).
+mod motion_matching;
+
 /// Layer roles ([`Animator`] tags).
 const TAG_IDLE: u32 = 0;
 const TAG_MOVE: u32 = 10; // + 0 along, + 1 sideways
@@ -803,6 +806,8 @@ struct Rig {
     /// body's axes, unscaled), while one whose root travels plays: the player is carried
     /// that far (`nvf_play::player::Lunge`, docs/spec-notes/actors.md §8.13).
     carry: Option<Vec2>,
+    /// Third person: the motion matcher (the Motion Matching switch).
+    mm: motion_matching::State,
 }
 
 /// The node of a weapon model that shots are drawn from, by either of its names
@@ -1290,6 +1295,7 @@ impl PlayerBody {
                 use_lens: false, drawn: Vec::new(), shown: Some(false), seen: None,
                 furniture: None, since_attack: f32::INFINITY, attack_loop: None,
                 wound_up: None, wound_hit: None, sighting2: None, attack_eject: None, ejected: false, carry: None,
+                mm: Default::default(),
             }
         }
         Self {
@@ -2117,11 +2123,15 @@ fn build_rig(commands: &mut Commands, parent: Entity, world: &ActorWorld, ctx: &
         attack_eject: None,
         ejected: false,
         carry: None,
+        mm: Default::default(),
     })
 }
 
 /// What both rigs play this frame.
 struct Frame {
+    /// Motion Matching is on: what the controls ask of the third-person body's walk
+    /// (`motion_matching`).
+    mm: Option<motion_matching::Input>,
     /// Smooth weapon animations are on. In the first-person rig ([`pose_rig`]): every
     /// clip's fade follows the settling curve (`anim_blend::Layer::smooth`: quick first,
     /// slow at the end, never straight); and the turning-on-the-spot clips are left out
@@ -2335,10 +2345,25 @@ fn pose_rig(rig: &mut Rig, f: &Frame, events: &[HandEvent], posed: Posed, ctx: &
     // then jumps"; tenth: "sometimes still"; the trace `movement-inertia-trace-crouch-jump`].
     let first_inertia = f.inertia && rig.view == View::First;
     let keep_crouch = f.crouch_jump && rig.view == View::First && f.stance == Stance::Sneak;
-    if f.airborne >= AIRBORNE_LOOP && !keep_crouch {
+    let in_air = f.airborne >= AIRBORNE_LOOP && !keep_crouch;
+    if rig.view == View::Third {
+        motion_matching::watch(rig, f.dt);
+    }
+    // Motion Matching: the matcher's motion in place of the movement and turning clips
+    // (`motion_matching`); in the air, swimming or under an idle the clips as without it.
+    let matched = match f.mm.filter(|_| rig.view == View::Third && !in_air && f.stance != Stance::Swim && !special.covers()) {
+        Some(input) => motion_matching::choose(rig, ctx, f, input),
+        None => None,
+    };
+    if matched.is_none() && rig.view == View::Third {
+        motion_matching::pause(rig);
+    }
+    if in_air {
         if let Some(c) = rig.clip(ctx, ClipKey::Jump(f.stance, f.drawn, main_dir, false)) {
             want.push((c, TAG_JUMP, 1.0, Mode::Loop));
         }
+    } else if matched.is_some() {
+        // The matcher's clips go in below, after the frame's other clips.
     } else if let Some(w) = f.dirs {
         for (i, (dir, weight)) in w.into_iter().enumerate() {
             if weight <= 0.0 {
@@ -2674,10 +2699,42 @@ fn pose_rig(rig: &mut Rig, f: &Frame, events: &[HandEvent], posed: Posed, ctx: &
         let l = &mut a.layers[i];
         (l.rate, l.time) = (0.0, if f.inertia { pipboy_clip_time(*t) } else { *t });
     }
+    // The matcher's motion: its clips at once on the shared phase; at a jump the clips
+    // playing go at once too and the pose eases across (`Animator::smooth_jump`).
+    let is_matched = |tag: u32| (TAG_MOVE..TAG_MOVE + 4).contains(&tag) || tag == TAG_TURN;
+    match &matched {
+        Some(p) => {
+            if p.jumped {
+                for tag in (TAG_MOVE..TAG_MOVE + 4).chain([TAG_TURN]) {
+                    a.cut(tag);
+                }
+            }
+            for (clip, tag, w, offset) in &p.layers {
+                let i = a.want(clip, *tag, *w, Mode::Synced, 0.0);
+                a.layers[i].phase_offset = *offset;
+            }
+            if p.jumped {
+                a.phase = p.phase;
+                if let (Some(t), Some(l)) = (p.idle_time, a.layers.iter_mut().find(|l| l.tag == TAG_IDLE && !l.is_leaving())) {
+                    l.time = t;
+                }
+                a.smooth_jump();
+            }
+        }
+        None => {
+            for l in a.layers.iter_mut().filter(|l| is_matched(l.tag)) {
+                l.phase_offset = 0.0;
+            }
+        }
+    }
     a.end();
     // Movement clips play at the speed the character actually moves [hypothesis: the
     // game matches the clip's root motion to the ground speed].
-    let rate = if expected_speed > 1.0 { (f.speed / expected_speed).clamp(0.25, 2.5) } else { 1.0 };
+    let rate = match &matched {
+        Some(p) => p.rate,
+        None if expected_speed > 1.0 => (f.speed / expected_speed).clamp(0.25, 2.5),
+        None => 1.0,
+    };
     let attack_time = |a: &Animator| {
         let (clip, _) = rig.attack_eject.as_ref()?;
         a.layers.iter().find(|l| l.tag == TAG_ATTACK && Arc::ptr_eq(&l.clip, clip)).map(|l| l.time)
@@ -3201,7 +3258,7 @@ fn drive_body(
     mut transforms: Query<&mut Transform>,
     mut visibility: Query<&mut Visibility>,
     mut anim: ResMut<WeaponAnim>,
-    (furniture, mut idles, mut seat, pip, cams, first_fov, limbs, (death, knock), (zoom, combat, mut true_sights, scope, mut lens3d, lens_sway), (ahead, mut lunge, s1st, vats, inertia, mut blows)): (
+    (furniture, mut idles, mut seat, pip, cams, first_fov, limbs, (death, knock), (zoom, combat, mut true_sights, scope, mut lens3d, lens_sway), (ahead, mut lunge, s1st, vats, inertia, mut blows, (move_speeds, mut anim_pace))): (
         Res<crate::furniture::BodyOverride>,
         ResMut<PlayerIdles>,
         ResMut<nvf_play::furniture::PlayerSeat>,
@@ -3211,7 +3268,7 @@ fn drive_body(
         Option<Res<nvf_play::combat::PlayerLimbs>>,
         (Res<crate::death_cam::DeathCam>, Res<crate::player_knockdown::PlayerKnockdown>),
         (Option<Res<nvf_play::aim_zoom::AimZoom>>, Option<Res<nvf_play::combat::Combat>>, Option<ResMut<nvf_play::aim_zoom::TrueSights>>, Option<Res<nvf_play::aim_zoom::Scope>>, Option<ResMut<nvf_play::aim_zoom::Scope3d>>, Option<Res<nvf_play::aim_zoom::LensSway>>),
-        (Res<crate::weapon_lower::Ahead>, ResMut<nvf_play::player::Lunge>, Option<Res<nvf_play::console::ShowFirstPerson>>, Option<Res<nvf_play::vats_mode::VatsMode>>, Option<Res<nvf_play::inertia::MovementInertia>>, Option<ResMut<PlayerBlows>>),
+        (Res<crate::weapon_lower::Ahead>, ResMut<nvf_play::player::Lunge>, Option<Res<nvf_play::console::ShowFirstPerson>>, Option<Res<nvf_play::vats_mode::VatsMode>>, Option<Res<nvf_play::inertia::MovementInertia>>, Option<ResMut<PlayerBlows>>, (Option<Res<nvf_play::player::MoveSpeeds>>, Option<ResMut<nvf_play::player::AnimationPace>>)),
     ),
     mut driven: ResMut<nvf_play::player::ViewDriven>,
 ) {
@@ -3551,7 +3608,23 @@ fn drive_body(
     let smooth_with = inertia.as_deref().filter(|i| i.smooth_hands());
     let smooth = smooth_with.is_some();
     let advanced = inertia.as_deref().is_none_or(|i| i.advanced);
+    // Motion Matching: the velocity the keys ask for in the body's frame (the heading's:
+    // x right, y forward) and the one it has, and its turn (anticlockwise).
+    let mm = inertia.as_deref().filter(|i| i.matches_motion() && third_view).map(|i| {
+        let speeds = move_speeds.as_deref().copied().unwrap_or(nvf_play::player::MoveSpeeds { walk: 86.8, run: 344.0 });
+        let asked = if d.auto_walk > 0.0 { MoveIntent { forward: 1.0, right: 0.0, ..*intent } } else { *intent };
+        let goal = nvf_play::player::velocity(&asked, 0.0, speeds);
+        // The legs set the speed (`AnimationPace`): it follows a change of gait within about
+        // a tenth of a second. Without that (a test aid), with Movement Inertia the
+        // controller's springs, else at once.
+        let paced = std::env::var_os("NVF_MM_NO_PACE").is_none();
+        let halflife = if paced { 0.12 } else if i.ground() { 0.3 } else { 0.08 };
+        motion_matching::Input { velocity: m.velocity, goal: Vec2::from_array(goal), turn: -m.turn_rate, halflife }
+    });
+    // The jumps between motions are eased over (inertialization) while it matches.
+    body.third.animator.smooth_seams((mm.is_some() && std::env::var_os("NVF_MM_NO_BLEND").is_none()).then_some(motion_matching::BLEND_SECONDS));
     let frame = Frame {
+        mm,
         inertia: smooth,
         crouch_jump: inertia.as_deref().is_some_and(|i| i.eased_crouch()),
         aim_fade: inertia.as_deref().filter(|i| i.smooth_hands() || i.handles()).map(|i| i.aim_seconds(control.aiming)),
@@ -3620,6 +3693,13 @@ fn drive_body(
     let root = Transform { translation: Vec3::from_array(feet) - sink, rotation: Quat::from_rotation_z(-player.heading) * lean, scale: Vec3::splat(body.scale * script_scale) };
     let third = Posed { root, look_pitch: player.pitch, special: &idles.third, sequences:&sequences.third, sequence_dt: dt, pipboy: None, sway: SwayPose::NONE, sights: None };
     let third_eye = pose_rig(&mut body.third, &frame, &events, third, &mut ctx, &mut transforms).map(|(e, _)| e + eye_sink);
+    // Motion Matching: the legs set the ground speed (`nvf_play::player::AnimationPace`).
+    if let Some(p) = anim_pace.as_deref_mut() {
+        let pace = frame.mm.and(body.third.mm.pace()).filter(|_| std::env::var_os("NVF_MM_NO_PACE").is_none());
+        if p.speed != pace {
+            p.speed = pace;
+        }
+    }
     // The third-person body's melee attack clip carries the player by its root's travel
     // (actors.md §8.13), turned by the heading and scaled with the body.
     if let Some(d) = body.third.carry.filter(|_| dt > 0.0) {

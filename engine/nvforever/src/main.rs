@@ -834,6 +834,15 @@ struct Args {
     /// switch of the settings page.
     #[arg(long, requires = "play")]
     no_animation_smoothing: bool,
+    /// Motion Matching: the third-person body's walking, running and turning picked frame
+    /// by frame from the locomotion clips (player_body.rs, docs/design/motion-matching.md);
+    /// off unless given; a switch of the settings page.
+    #[arg(long, requires = "play", conflicts_with = "no_motion_matching")]
+    motion_matching: bool,
+    /// No Motion Matching: the original's choice of clips, the default; a switch of the
+    /// settings page.
+    #[arg(long, requires = "play")]
+    no_motion_matching: bool,
     /// No Advanced Recoil: the whole kick of a shot stays, as in the original
     /// (nvf_play::inertia); a switch of the settings page (on by default).
     #[arg(long, requires = "play")]
@@ -1980,6 +1989,7 @@ fn main() -> AppExit {
             let mut inertia = nvf_play::inertia::MovementInertia::switched(args.movement_inertia);
             inertia.weapon_handling = args.weapon_handling;
             inertia.smooth = args.animation_smoothing;
+            inertia.motion_matching = args.motion_matching;
             inertia.recoil = !args.no_advanced_recoil;
             inertia.sprint = args.sprint;
             inertia.advanced = !args.no_advanced_movement;

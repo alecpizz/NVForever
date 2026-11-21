@@ -1361,6 +1361,13 @@ stretches drift downstream. Vanilla leaves the switch off. Enhanced turns it on.
 - Off by default (the owner, 2026-11-16: every Advanced Movement part off by default but Advanced Recoil).
 - Registered in `engine/nvf-play/src/player.rs`
 
+### `motion-matching`: Motion Matching
+
+- On the page: On: in third person your walk, run and turns are picked frame by frame to follow the controls and flow from the pose before. Off: the original's clips.
+- Command-line switches: `--motion-matching`, `--no-motion-matching`
+- Off by default (an NVForever feature, not the original's: docs/design/motion-matching.md).
+- Registered in `engine/nvf-play/src/player.rs`
+
 ### `camera-motion`: Camera Motion
 
 - On the page: On: in first person the view bobs with each step, breathes, gets out of breath after running and jolts when you are hit. Off: it stays still.

@@ -72,7 +72,7 @@ pub const fn group_section(subgroup: &'static str, heading: &'static str, keys: 
 /// The rows the NVF Features tab may hold: only what the owner named there [design: owner
 /// 2026-11-15]. Adding a key needs the owner's word; a bigger gameplay change is offered to
 /// the owner for this tab, never moved here unasked (docs/design/settings-page.md).
-pub const NVF_FEATURES_KEYS: [&str; 16] = [
+pub const NVF_FEATURES_KEYS: [&str; 17] = [
     "advanced-movement",
     "movement-weight",
     "movement-inertia",
@@ -81,6 +81,9 @@ pub const NVF_FEATURES_KEYS: [&str; 16] = [
     "sprint",
     "weapon-inertia",
     "animation-smoothing",
+    // The third-person body's locomotion by motion matching [design: the fork's owner,
+    // 2026-11-20, "put it in NVF Features"; docs/design/motion-matching.md].
+    "motion-matching",
     "camera-motion",
     "grass-fire",
     // The Quick Loot menu and its columns [design, #2933].
@@ -214,7 +217,7 @@ pub const SECTIONS: &[Section] = &[
     section(NVF_FEATURES_TAB, Some("Advanced Movement"), &["advanced-movement", "movement-weight"]),
     // Sprint after Advanced Recoil (#3000).
     section(NVF_FEATURES_TAB, Some("Gameplay"), &["movement-inertia", "weapon-handling", "advanced-recoil", "sprint"]),
-    section(NVF_FEATURES_TAB, Some("Visual Only"), &["weapon-inertia", "animation-smoothing", "camera-motion"]),
+    section(NVF_FEATURES_TAB, Some("Visual Only"), &["weapon-inertia", "animation-smoothing", "motion-matching", "camera-motion"]),
     section(NVF_FEATURES_TAB, Some("World Interaction"), &["grass-fire"]),
     // The Quick Loot menu (docs/design/quick-loot.md) [design, #2933].
     section(NVF_FEATURES_TAB, Some("Quick Loot"), &["quick-loot", "quick-loot-scale", "quick-loot-background", "quick-loot-weight", "quick-loot-value", "quick-loot-value-per-weight"]),

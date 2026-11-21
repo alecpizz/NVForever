@@ -306,7 +306,7 @@ mod tests {
     /// resolution row, Gore Shake and #2670's Cloud shadows; #2661's mesh terrain blend row, the
     /// Quick Loot rows; #2965's heat haze row; #2675's desert haze row; Sprint; #2671's terrain
     /// shadows row), by the group it registers with.
-    const KNOWN: [(&str, &str); 139] = [
+    const KNOWN: [(&str, &str); 140] = [
         ("detached-camera", "Gameplay"),
         ("gore-shake", "Gameplay"),
         ("advanced-movement", "Gameplay"),
@@ -316,6 +316,7 @@ mod tests {
         ("advanced-recoil", "Gameplay"),
         ("sprint", "Gameplay"),
         ("animation-smoothing", "Gameplay"),
+        ("motion-matching", "Gameplay"),
         ("sound-cover", "Gameplay"),
         ("menu-pause", "Gameplay"),
         ("dialogue-goodbye-hint", "Gameplay"),
@@ -647,7 +648,7 @@ mod tests {
         assert_eq!(keys(&list, &l, "Controls")[..6], ["[Input]", "@device", "button-style", "@automatic-input", "@rumble", ""]);
         assert_eq!(
             keys(&list, &l, NVF_FEATURES_TAB),
-            ["[Advanced Movement]", "advanced-movement", "movement-weight", "", "[Gameplay]", "movement-inertia", "weapon-handling", "advanced-recoil", "sprint", "", "[Visual Only]", "weapon-inertia", "animation-smoothing", "camera-motion", "", "[World Interaction]", "grass-fire", "", "[Quick Loot]", "quick-loot", "quick-loot-scale", "quick-loot-background", "quick-loot-weight", "quick-loot-value", "quick-loot-value-per-weight"]
+            ["[Advanced Movement]", "advanced-movement", "movement-weight", "", "[Gameplay]", "movement-inertia", "weapon-handling", "advanced-recoil", "sprint", "", "[Visual Only]", "weapon-inertia", "animation-smoothing", "motion-matching", "camera-motion", "", "[World Interaction]", "grass-fire", "", "[Quick Loot]", "quick-loot", "quick-loot-scale", "quick-loot-background", "quick-loot-weight", "quick-loot-value", "quick-loot-value-per-weight"]
         );
         assert_eq!(keys(&list, &l, "Debug"), ["overlay", "hit-markers", "god-mode", "navmesh", "terrain-wireframe", "scope-3d"]);
         assert!(keys(&list, &l, "Tweaks").is_empty(), "an empty tab is still a tab");

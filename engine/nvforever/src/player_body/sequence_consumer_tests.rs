@@ -199,6 +199,7 @@ fn authored_rig(world: &mut World, view: View, root_x: f32) -> OwnedRig {
         attack_eject: None,
         ejected: false,
         carry: None,
+        mm: Default::default(),
     };
     OwnedRig {
         rig,
@@ -210,6 +211,7 @@ fn authored_rig(world: &mut World, view: View, root_x: f32) -> OwnedRig {
 
 fn neutral_frame(dt: f32) -> Frame {
     Frame {
+        mm: None,
         inertia: false,
         crouch_jump: false,
         aim_fade: None,

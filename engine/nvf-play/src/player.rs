@@ -366,6 +366,7 @@ impl Plugin for PlayerPlugin {
             .init_resource::<StatSpeed>()
             .init_resource::<ReloadPace>()
             .init_resource::<Lunge>()
+            .init_resource::<AnimationPace>()
             .add_systems(Update, take_knockbacks.after(PlaySet::Input).before(PlaySet::Physics))
             .init_resource::<crate::control::DetachedCamera>()
             .add_systems(
@@ -443,6 +444,14 @@ impl Plugin for PlayerPlugin {
                 "--animation-smoothing --no-animation-smoothing",
                 |w| w.resource::<Inertia>().smooth,
                 |w, on| w.resource_mut::<Inertia>().smooth = on,
+            ),
+            switch(
+                "motion-matching",
+                "Motion Matching",
+                "On: in third person your walk, run and turns are picked frame by frame to follow the controls and flow from the pose before. Off: the original's clips.",
+                "--motion-matching --no-motion-matching",
+                |w| w.resource::<Inertia>().motion_matching,
+                |w, on| w.resource_mut::<Inertia>().motion_matching = on,
             ),
         ] {
             crate::settings::add_setting(app, s);
@@ -882,6 +891,30 @@ impl Default for PerkSpeed {
 /// as where the player walks; walls and actors stop it as they stop walking. Travel, not
 /// a velocity, so a long frame after a short one moves the player the clip's own travel
 /// (review of #1209).
+/// Motion Matching's hold on the ground speed (the Motion Matching switch, nvforever
+/// `player_body/motion_matching.rs`): the root speed of the motion the third-person body
+/// plays, which the player's ground speed may not pass, so starts and stops go at the
+/// pace of the legs and the feet do not slide [design: the fork's owner, 2026-11-20,
+/// "animation shapes speed", for grounded movement]. `None`: the keys' (and Movement
+/// Inertia's) speed alone.
+#[derive(Resource, Debug, Clone, Copy, Default, PartialEq)]
+pub struct AnimationPace {
+    pub speed: Option<f32>,
+}
+
+/// A ground velocity of `speed` the way `keys` points, or with no keys the way `last`
+/// went (a stop at the legs' pace); none with neither.
+pub fn paced(keys: [f32; 2], last: [f32; 2], speed: f32) -> [f32; 2] {
+    let dir = |v: [f32; 2]| {
+        let len = v[0].hypot(v[1]);
+        (len > 1e-3).then(|| [v[0] / len, v[1] / len])
+    };
+    match dir(keys).or_else(|| dir(last)) {
+        Some([x, y]) => [x * speed.max(0.0), y * speed.max(0.0)],
+        None => [0.0, 0.0],
+    }
+}
+
 #[derive(Resource, Debug, Clone, Copy, Default, PartialEq)]
 pub struct Lunge {
     /// Game-space travel (x, y, units) the clip has carried the player by that the
@@ -1351,7 +1384,7 @@ const FELL_THROUGH: f32 = 1000.0;
 /// two.
 #[allow(clippy::too_many_arguments)]
 fn step(
-    mut stroke_time: Local<f32>,
+    (mut stroke_time, mut last_ground): (Local<f32>, Local<[f32; 2]>),
     time: Res<Time>,
     state: Res<State<PlayState>>,
     d: Res<PlayWorld>,
@@ -1365,7 +1398,7 @@ fn step(
     (mut seat, mut landed): (ResMut<crate::furniture::PlayerSeat>, MessageWriter<crate::rumble::Landed>),
     (mut blocks, noclip, mut inertia): (Option<ResMut<crate::blocking::ActorBlocks>>, Res<NoClip>, ResMut<crate::inertia::MovementInertia>),
     (mut falls, mut fell, mut lunge): (Option<ResMut<crate::falls::Falls>>, MessageWriter<crate::falls::Fell>, ResMut<Lunge>),
-    tweaks: Option<Res<crate::tweaks::TweakSettings>>,
+    (tweaks, anim_pace): (Option<Res<crate::tweaks::TweakSettings>>, Option<Res<AnimationPace>>),
 ) {
     if *state.get() != PlayState::Playing {
         // No time reaches the stepper while not playing, so nothing steps; its remainder is
@@ -1557,6 +1590,20 @@ fn step(
             // On the ground the velocity speeds up and slows down (`crate::inertia`); in
             // the air the controller's own rules take the keys' velocity.
             let [x, y] = if inertia.ground() && c.grounded { inertia.step(key, intent.walk && sprint.0 < crate::sprint::RUN_GAIT_FROM, dt) } else { key };
+            // Motion Matching: on the ground the legs' pace (`AnimationPace`), the way the
+            // keys point (or, let go, the way the player was going), scaled as the keys'
+            // speed is by the paces above (perks, limbs, sprint, the tweaks).
+            let [x, y] = match anim_pace.as_deref().and_then(|a| a.speed).filter(|_| c.grounded && !c.swimming) {
+                Some(s) => {
+                    let base = velocity(&intent, player.heading, *speeds);
+                    let base = base[0].hypot(base[1]);
+                    let keyed = key[0].hypot(key[1]);
+                    let paces = if base > 1e-3 { keyed / base } else { 1.0 };
+                    paced(key, *last_ground, s * paces)
+                }
+                None => [x, y],
+            };
+            *last_ground = [x, y];
             // An attack's clip carries the player (`Lunge`).
             if lunge.carrying && lunge.from.is_none() {
                 lunge.from = Some(c.feet);
@@ -1917,6 +1964,7 @@ mod tests {
                 .init_resource::<crate::furniture::PlayerSeat>()
                 .init_resource::<NoClip>()
                 .init_resource::<Lunge>()
+            .init_resource::<AnimationPace>()
                 .init_resource::<crate::inertia::MovementInertia>()
                 .add_message::<crate::rumble::Landed>()
                 .add_message::<crate::falls::Fell>()

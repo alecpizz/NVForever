@@ -78,6 +78,10 @@ pub struct Layer {
     pub smooth: bool,
     /// Playback speed multiplier (Loop and Once).
     pub rate: f32,
+    /// Added to the shared phase before a [`Mode::Synced`] layer samples its clip (a
+    /// share of the cycle): lines the clips of a blend up by their footfalls
+    /// ([`crate::motion_match`]); 0 for every other layer.
+    pub phase_offset: f32,
     seen: bool,
     /// Not asked for at the last [`Animator::end`]: fading out.
     leaving: bool,
@@ -193,7 +197,7 @@ impl Layer {
     pub fn sample_time(&self, phase: f32) -> f32 {
         let c = &self.clip;
         match self.mode {
-            Mode::Synced => c.start + phase.rem_euclid(1.0) * c.length(),
+            Mode::Synced => c.start + (phase + self.phase_offset).rem_euclid(1.0) * c.length(),
             Mode::Once => cycle_time(c.start + self.time, c.start, c.stop, 2),
             Mode::Loop => cycle_time(c.start + self.time, c.start, c.stop, c.cycle_type),
         }
@@ -618,6 +622,7 @@ impl Animator {
             fade_in,
             smooth: false,
             rate: 1.0,
+            phase_offset: 0.0,
             seen: true,
             leaving: false,
             aligned: Vec::new(),

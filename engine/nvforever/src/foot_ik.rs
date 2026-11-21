@@ -70,6 +70,15 @@ pub const EASE_RATE: f32 = 12.0;
 /// a crate), and the animation is kept for it.
 const PROBE_UP: f32 = MAX_RAISE + 5.0;
 const PROBE_DOWN: f32 = 60.0;
+/// Foot locking (the player's body with Motion Matching on, docs/design/motion-matching.md
+/// §11): a foot the animation holds within `LOCK_LIFT` of its bind height, moving slower
+/// than `LOCK_SPEED` over the ground, is held where it came down; let go when it lifts or
+/// when the animation has left it `LOCK_DRIFT` behind; held and let go along an ease of
+/// `LOCK_RATE` per second [design].
+pub const LOCK_LIFT: f32 = 4.0;
+pub const LOCK_SPEED: f32 = 250.0;
+pub const LOCK_DRIFT: f32 = 16.0;
+pub const LOCK_RATE: f32 = 30.0;
 /// Below this the state counts as at rest and the bones are given back.
 const REST: f32 = 0.05;
 
@@ -106,11 +115,19 @@ pub struct FootIk {
     written_body: Option<(Vec3, Vec3)>,
     /// Per side, per bone (thigh, calf, foot): animated rotation and what was written.
     written: [[Option<(Quat, Quat)>; 3]; 2],
+    /// Foot locking, per side: where the foot is held (world), whether it is held now, how
+    /// fully (eased 0-1), and the animated ankle's world place last frame.
+    lock_at: [Option<Vec3>; 2],
+    locked: [bool; 2],
+    lock_w: [f32; 2],
+    last_ankle: [Option<Vec3>; 2],
+    /// The ankle's target as shown last frame (world; the skate test aid).
+    shown_last: [Option<Vec3>; 2],
 }
 
 impl FootIk {
     fn at_rest(&self) -> bool {
-        self.drop.abs() < REST && self.raise.iter().all(|r| r.abs() < REST) && self.tilt.iter().all(|t| t.angle_between(Quat::IDENTITY) < 0.002)
+        self.lock_w.iter().all(|w| *w < REST) && self.drop.abs() < REST && self.raise.iter().all(|r| r.abs() < REST) && self.tilt.iter().all(|t| t.angle_between(Quat::IDENTITY) < 0.002)
     }
 }
 
@@ -136,6 +153,13 @@ pub struct FootIkStats {
     pub total: std::time::Duration,
     pub frames: u32,
     described: HashSet<String>,
+    /// The test aid `NVF_PLAY_TEST_FOOT_SKATE`: the player's planted feet's speeds over the
+    /// ground, as animated and as shown, since the last report, and seconds since it.
+    skate: (Vec<f32>, Vec<f32>, f32),
+    pub locks: u64,
+    /// With `NVF_PLAY_TEST_FOOT_SKATE=<file>.csv`: one line a frame and foot.
+    skate_csv: Option<std::io::BufWriter<std::fs::File>>,
+    skate_clock: f32,
 }
 
 pub struct FootIkPlugin {
@@ -338,8 +362,25 @@ fn place(
     mut states: Query<&mut FootIk>,
     mut transforms: Query<&mut Transform>,
     mut stats: ResMut<FootIkStats>,
-    mut land: Local<LandCache>,
+    (mut land, inertia): (Local<LandCache>, Option<Res<nvf_play::inertia::MovementInertia>>),
 ) {
+    let dt = time.delta_secs();
+    let lock_on = inertia.as_deref().is_some_and(|i| i.matches_motion()) && std::env::var_os("NVF_MM_NO_LOCK").is_none();
+    let skate_aid = std::env::var("NVF_PLAY_TEST_FOOT_SKATE").ok();
+    let skating = skate_aid.is_some();
+    if let Some(path) = skate_aid.filter(|p| p.ends_with(".csv") && stats.skate_clock == 0.0 && stats.skate_csv.is_none()) {
+        use std::io::Write;
+        match std::fs::File::create(&path) {
+            Ok(f) => {
+                let mut w = std::io::BufWriter::new(f);
+                let _ = writeln!(w, "time,dt,side,lift,animated_speed,shown_speed,locked,lock_weight,root_x,root_y");
+                info!("foot skate: writing {path}");
+                stats.skate_csv = Some(w);
+            }
+            Err(e) => warn!("NVF_PLAY_TEST_FOOT_SKATE: {path}: {e}"),
+        }
+    }
+    stats.skate_clock += dt;
     let t0 = std::time::Instant::now();
     let ease = 1.0 - (-EASE_RATE * time.delta_secs()).exp();
     let cam = camera.iter().next().map(|g| g.translation());
@@ -347,13 +388,14 @@ fn place(
         p.world.update_queries();
     }
 
-    // The player's body first, then the NPCs: (root, rig, may stand, the character's key).
-    let mut todo: Vec<(Entity, ActorRig, bool, Option<Key>)> = Vec::new();
+    // The player's body first, then the NPCs: (root, rig, may stand, the character's key,
+    // the player's: its feet locked and measured).
+    let mut todo: Vec<(Entity, ActorRig, bool, Option<Key>, bool)> = Vec::new();
     if let Some((root, rig)) = body.as_deref().and_then(PlayerBody::third_rig) {
         let ch = phys.as_deref().and_then(|p| p.player.as_ref());
         let alive = !is_dead(script.as_deref(), FormId::PLAYER_REF.0);
         let stands = alive && ch.is_none_or(|c| c.grounded && !c.swimming) && !player_use.as_deref().is_some_and(PlayerUse::in_use);
-        todo.push((root, rig, stands, ch.map(|c| c.key())));
+        todo.push((root, rig, stands, ch.map(|c| c.key()), true));
     }
     for (e, rig, _, vis, dying, corpse, seated) in &actors {
         let ch = phys.as_deref().and_then(|p| p.npcs.get(&rig.reference)).map(|b| &b.ch);
@@ -363,10 +405,10 @@ fn place(
         if let Some(k) = [!alive, seated, !grounded].iter().position(|&b| b) {
             stats.out[k] += 1;
         }
-        todo.push((e, rig.clone(), stands, ch.map(|c| c.key())));
+        todo.push((e, rig.clone(), stands, ch.map(|c| c.key()), false));
     }
 
-    for (root, rig, stands, key) in todo {
+    for (root, rig, stands, key, player) in todo {
         let Ok(mut st) = states.get_mut(root) else { continue };
         let st = &mut *st;
         let Some(legs) = st.legs else { continue };
@@ -375,7 +417,9 @@ fn place(
         // Actor space (the root's own frame, z up, skeleton units) to Bevy world.
         let to_world = parent * root_t.compute_affine();
         let near = cam.is_none_or(|c| c.distance(to_world.translation.into()) <= ACTIVE_RADIUS);
-        let active = settings.enabled && stands && near;
+        let locking = player && lock_on && stands && near;
+        let placing = settings.enabled && stands && near;
+        let active = placing || locking;
         if stands && !near {
             stats.out[3] += 1;
         }
@@ -429,7 +473,7 @@ fn place(
         // The ground under each ankle, against the root.
         let mut want_h = [0.0; 2];
         let mut want_tilt = [Quat::IDENTITY; 2];
-        if active {
+        if placing {
             let from_world = to_world.inverse();
             let root_game = space::to_game(to_world.translation.into());
             for s in 0..2 {
@@ -480,6 +524,51 @@ fn place(
             continue;
         }
 
+        // Foot locking: each animated ankle's place over the ground, whether it is down,
+        // and where it is held (actor space).
+        let from_world = to_world.inverse();
+        let lock_ease = 1.0 - (-LOCK_RATE * dt).exp();
+        let mut held = [None; 2];
+        let mut down = [false; 2];
+        let (mut lifts, mut animated_speed) = ([0.0f32; 2], [0.0f32; 2]);
+        for s in 0..2 {
+            let ankle = Vec3::from(joints[s][2].translation);
+            let world = to_world.transform_point3(ankle);
+            let moving = st.last_ankle[s].filter(|_| dt > 0.0).map_or(0.0, |l| {
+                let d = from_world.transform_vector3(world - l);
+                Vec2::new(d.x, d.y).length() / dt
+            });
+            st.last_ankle[s] = Some(world);
+            down[s] = ankle.z - legs.ankle_bind[s] < LOCK_LIFT;
+            if skating && player && down[s] && dt > 0.0 {
+                stats.skate.0.push(moving);
+            }
+            lifts[s] = ankle.z - legs.ankle_bind[s];
+            animated_speed[s] = moving;
+            if !locking {
+                st.locked[s] = false;
+            } else if down[s] && moving < LOCK_SPEED {
+                if !st.locked[s] {
+                    st.lock_at[s] = Some(world);
+                    st.locked[s] = true;
+                    stats.locks += 1;
+                }
+            } else {
+                st.locked[s] = false;
+            }
+            if let (true, Some(at)) = (st.locked[s], st.lock_at[s]) {
+                let d = from_world.transform_point3(at) - ankle;
+                if Vec2::new(d.x, d.y).length() > LOCK_DRIFT {
+                    st.locked[s] = false;
+                }
+            }
+            st.lock_w[s] += (f32::from(u8::from(st.locked[s])) - st.lock_w[s]) * lock_ease;
+            if st.lock_w[s] < REST && !st.locked[s] {
+                st.lock_w[s] = 0.0;
+            }
+            held[s] = st.lock_at[s].map(|at| (from_world.transform_point3(at), st.lock_w[s]));
+        }
+
         // Lower the body.
         let lower = Vec3::Z * st.drop;
         let body_t = body_local.translation + body_parent.matrix3.inverse() * lower;
@@ -492,7 +581,35 @@ fn place(
             let [thigh, calf, foot] = joints[s];
             let rot = |m: &Affine3A| m.to_scale_rotation_translation().1;
             let (h, k, a) = (Vec3::from(thigh.translation) + lower, Vec3::from(calf.translation) + lower, Vec3::from(foot.translation) + lower);
-            let target = a + Vec3::Z * st.raise[s];
+            let mut target = a + Vec3::Z * st.raise[s];
+            // Held where it came down: over the ground the held place, its height the
+            // animation's and the ground's.
+            if let Some((at, w)) = held[s].filter(|(_, w)| *w > 0.0) {
+                let at = at + lower;
+                target.x += (at.x - target.x) * w;
+                target.y += (at.y - target.y) * w;
+            }
+            if skating && player {
+                let shown = to_world.transform_point3(target);
+                let shown_speed = st.shown_last[s].filter(|_| dt > 0.0).map(|prev| {
+                    let d = from_world.transform_vector3(shown - prev);
+                    Vec2::new(d.x, d.y).length() / dt
+                });
+                if let (Some(v), true) = (shown_speed, down[s]) {
+                    stats.skate.1.push(v);
+                }
+                st.shown_last[s] = Some(shown);
+                let clock = stats.skate_clock;
+                if let Some(w) = stats.skate_csv.as_mut() {
+                    use std::io::Write;
+                    let r = to_world.translation;
+                    let _ = writeln!(
+                        w,
+                        "{:.4},{:.4},{},{:.2},{:.1},{:.1},{},{:.3},{:.1},{:.1}",
+                        clock, dt, SIDES[s], lifts[s], animated_speed[s], shown_speed.unwrap_or(0.0), u8::from(st.locked[s]), st.lock_w[s], r.x, r.z
+                    );
+                }
+            }
             let (leg_turn, calf_turn) = two_bone(h, k, a, target, Vec3::Y);
             let thigh_r = (leg_turn * rot(&thigh)).normalize();
             let calf_r = (leg_turn * calf_turn * rot(&calf)).normalize();
@@ -521,6 +638,22 @@ fn place(
     }
     stats.total += t0.elapsed();
     stats.frames += 1;
+    if skating {
+        stats.skate.2 += dt;
+        if stats.skate.2 >= 10.0 {
+            stats.skate.2 = 0.0;
+            let summary = |v: &mut Vec<f32>| {
+                v.sort_by(f32::total_cmp);
+                let at = |q: f32| v.get(((v.len().max(1) - 1) as f32 * q) as usize).copied().unwrap_or(0.0);
+                let mean = if v.is_empty() { 0.0 } else { v.iter().sum::<f32>() / v.len() as f32 };
+                let out = format!("mean {mean:.0}, median {:.0}, 90th percentile {:.0}", at(0.5), at(0.9));
+                v.clear();
+                out
+            };
+            let (a, b) = (summary(&mut stats.skate.0), summary(&mut stats.skate.1));
+            info!("foot skate: planted feet over the ground, units/s: animated {a}; shown {b}; {} locks so far", stats.locks);
+        }
+    }
 }
 
 /// The run's foot placement when the app exits (smoke tests read it).
