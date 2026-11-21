@@ -3796,6 +3796,22 @@ expect = [
 ]
 
 [[scenario]]
+name = "modern-feel-kick"
+source = "the fork owner's Modern Feel experiment (2026-11-20; docs/design/modern-feel-kick.md): the camera kick of the player's shots, the damage-direction arcs of hits on the player and the kill tick"
+note = "[design] combat-dogs' two Goodsprings dogs are set on the player at 5 s, whose health the console sets to 5000 at 3 s; the player draws the hunting shotgun (0008ED0B, 12 ga 0008ECF5) at 4 s and from 8 s aims at the nearest actor and fires (a press and a let-go) every 1.4 s; screenshots of the HUD while the dogs bite (modern-feel-kick-*.png)"
+areas = ["combat", "hud"]
+paths = ["engine/nvf-play/src/camera_kick.rs", "engine/nvf-play/src/damage_direction.rs", "engine/nvf-play/src/modern_feel.rs"]
+env = { NVF_PLAY_TEST_SCRIPT_MENUS = "1", NVF_PLAY_TEST_CONSOLE = "3:player.setav health 5000;3.3:close", NVF_PLAY_TEST_SCRIPT = "5:combat:0x000F573F:player,5:combat:0x0013E5BB:player", NVF_PLAY_TEST_EQUIP = "0008ED0B", NVF_PLAY_TEST_GIVE = "0008ECF5:40", NVF_PLAY_TEST_CONTROL = "4:weapon,8:aimactor,8.05:fire,8.25:fire,9.4:aimactor,9.45:fire,9.65:fire,10.8:aimactor,10.85:fire,11.05:fire,12.2:aimactor,12.25:fire,12.45:fire,13.6:aimactor,13.65:fire,13.85:fire,15:aimactor,15.05:fire,15.25:fire", NVF_PLAY_TEST_SHOTS = "8.1:modern-feel-kick-shot.png,9:modern-feel-kick-a.png,10.3:modern-feel-kick-b.png,11.6:modern-feel-kick-c.png,13:modern-feel-kick-d.png,14.4:modern-feel-kick-e.png" }
+args = ["--cell", "Goodsprings", "--pos=-45600,65000,7000", "--play", "--hour", "12", "--no-voice", "--no-messages", "--npc-packages", "000F573F,0013E5BB"]
+run_seconds = 20
+expect = [
+  { re = 'modern feel: on true .*camera-kick true damage-direction true', label = "the switches are on" },
+  { re = 'camera kick: weapon WeapNVHuntingShotgun .* strength (?P<n>[0-9.]+)', range = [1.6, 2.4], label = "the hunting shotgun kicks hard" },
+  { re = 'camera kick: weapon WeapNVHuntingShotgun .* fov \+(?P<n>[0-9.]+) deg', range = [1.0, 6.0], label = "and punches the field of view" },
+  { re = 'damage direction: hit by [0-9A-F]{8}, -?\d+ deg from the view', label = "a dog's bite is marked" },
+]
+
+[[scenario]]
 name = "melee-reach-lead-pipe"
 source = "#1334 (part 1): NPC melee reach refit to the original's 45 + 107 x Reach (AI observer campaign o14_reach, 2026-11-01: NCR troopers with a lead pipe, Reach 1.25, began their swings a median 180 units from the player, centre to centre; docs/spec-notes/combat-rules.md §10)"
 note = "Violet (FiendVioletRef) is given a lead pipe (WeapLeadPipe 0x00004337) in place of her rifle and set on the god-mode player: she is put 300 units from the player at 3 s, on the open ground where combat-dogs is (by her camp's rocks her way round them ended 150 units off; on Goodsprings' street she went for the brahmin); only she is run on her packages. She holds her rifle's model (models are not swapped live), so the pipe's clips play with it. Ours: fCombatDistance 107 x 1.25 + two people's radii (44) = 178"

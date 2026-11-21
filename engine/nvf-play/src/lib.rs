@@ -64,6 +64,8 @@ pub mod grab;
 pub mod hitvol;
 pub mod inertia;
 pub mod modern_feel;
+pub mod camera_kick;
+pub mod damage_direction;
 pub mod holotape;
 pub mod interface;
 pub mod intro;
@@ -413,6 +415,8 @@ impl Plugin for PlayPlugin {
             .add_plugins((script::ScriptPlugin, hitvol::HitVolumePlugin, combat::CombatPlugin, sfx::SfxPlugin, music::MusicPlugin, ambient::AmbientPlugin, radio::RadioPlugin, voice::VoicePlugin, holotape::HolotapePlugin, loading::LoadingPlugin, dialogue_look::DialogueLookPlugin, hud::HudPlugin, compass::CompassPlugin))
             .add_plugins((world_sounds::WorldSoundsPlugin, effect_sounds::EffectSoundsPlugin, reticle::ReticlePlugin, quick_loot::QuickLootPlugin, xp_meter::XpMeterPlugin, radiation::RadiationPlugin, borders::BordersPlugin))
             .add_plugins((ui_sounds::UiSoundsPlugin, pad::PadPlugin, key_repeat::KeyRepeatPlugin, rumble::RumblePlugin, shake::ShakePlugin, script_input::ScriptInputPlugin, aim_assist::AimAssistPlugin))
+            // Modern Feel's camera kick and damage direction (docs/design/modern-feel-kick.md).
+            .add_plugins((camera_kick::CameraKickPlugin, damage_direction::DamageDirectionPlugin))
             .add_plugins(script_switches::ScriptSwitchesPlugin)
             .add_plugins(script_texture_filter::ScriptTextureFilterPlugin)
             .add_plugins((chargen::ChargenPlugin, creator::CreatorPlugin, fade::FadePlugin))

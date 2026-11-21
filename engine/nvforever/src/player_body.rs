@@ -3189,7 +3189,7 @@ fn drive_weapon_emitters(state: Res<PlayerBody>, mut emitters: Query<&mut crate:
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn drive_body(
     mut commands: Commands,
-    (time, turbo, sim, mut told_scale, sequences, mut trace, stance_motion): (Res<Time>, Option<Res<nvf_play::script::PlayerTimeScale>>, Option<Res<nvf_play::sim::SimState>>, Local<Option<f32>>, Res<crate::script_sequences::PlayerSequences>, Local<MotionTrace>, Option<Res<nvf_play::stance::StanceMotion>>),
+    (time, turbo, sim, mut told_scale, sequences, mut trace, stance_motion, camera_kick): (Res<Time>, Option<Res<nvf_play::script::PlayerTimeScale>>, Option<Res<nvf_play::sim::SimState>>, Local<Option<f32>>, Res<crate::script_sequences::PlayerSequences>, Local<MotionTrace>, Option<Res<nvf_play::stance::StanceMotion>>, Option<Res<nvf_play::camera_kick::CameraKick>>),
     d: Res<PlayWorld>,
     intent: Res<MoveIntent>,
     control: Res<PlayerControl>,
@@ -3694,6 +3694,12 @@ fn drive_body(
         })
     });
     let sway = crate::view_sway::rescale(sway, sway_share);
+    // Modern Feel's camera kick turns the arms rig with the view, about the eye, so the gun
+    // stays put on the screen while the world kicks (`nvf_play::camera_kick`).
+    let sway = match camera_kick.as_deref().map(|k| k.arms_rotation()).filter(|q| *q != Quat::IDENTITY) {
+        Some(q) if body.first.is_some() => SwayPose { rotation: q * sway.rotation, offset: q * sway.offset },
+        _ => sway,
+    };
     let mut moved = [sway != SwayPose::NONE, false];
     // The head bob in first person moves the whole arms rig, camera node, arms and
     // weapon together (`head_bob.rs`).
