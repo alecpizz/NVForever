@@ -159,10 +159,12 @@ pub fn components() -> (TemporalAa, TemporalJitter, MipBias) {
 
 #[derive(Resource)]
 pub(crate) struct TaaPipelines {
-    layout: BindGroupLayoutDescriptor,
+    /// Without and with the motion-vector prepass (Modern Feel's object motion blur puts it
+    /// on the camera; object_blur.rs): with it, a pixel's history is found by its own motion.
+    layouts: [BindGroupLayoutDescriptor; 2],
     sampler: Sampler,
     base: RenderPipelineDescriptor,
-    by_format: HashMap<TextureFormat, CachedRenderPipelineId>,
+    by_format: HashMap<(TextureFormat, bool), CachedRenderPipelineId>,
 }
 
 /// Which history texture holds the last frame, whether it was written, and its size.
@@ -174,6 +176,8 @@ pub(crate) struct TaaView {
     pipeline: CachedRenderPipelineId,
     /// The picture's format the pipeline was built for.
     format: TextureFormat,
+    /// The pipeline reads the motion-vector prepass.
+    motion: bool,
     read: CachedTexture,
     write: CachedTexture,
     uniform: UniformBuffer<TaaUniform>,
@@ -195,6 +199,20 @@ fn init_pipelines(mut commands: Commands, device: Res<RenderDevice>, assets: Res
             ),
         ),
     );
+    let motion_layout = BindGroupLayoutDescriptor::new(
+        "taa_motion_layout",
+        &BindGroupLayoutEntries::sequential(
+            ShaderStages::FRAGMENT,
+            (
+                texture_2d(TextureSampleType::Float { filterable: true }),
+                texture_2d(TextureSampleType::Float { filterable: true }),
+                texture_depth_2d(),
+                sampler(SamplerBindingType::Filtering),
+                uniform_buffer::<TaaUniform>(false),
+                texture_2d(TextureSampleType::Float { filterable: false }),
+            ),
+        ),
+    );
     let sampler = device.create_sampler(&SamplerDescriptor {
         mag_filter: FilterMode::Linear,
         min_filter: FilterMode::Linear,
@@ -209,7 +227,7 @@ fn init_pipelines(mut commands: Commands, device: Res<RenderDevice>, assets: Res
         fragment: Some(FragmentState { shader: assets.load("embedded://nvforever/taa.wesl"), ..default() }),
         ..default()
     };
-    commands.insert_resource(TaaPipelines { layout, sampler, base, by_format: HashMap::default() });
+    commands.insert_resource(TaaPipelines { layouts: [layout, motion_layout], sampler, base, by_format: HashMap::default() });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -227,18 +245,23 @@ fn prepare(
     for (entity, view, msaa, taa, prepass) in &views {
         seen.push(entity);
         let format = view.target_format;
-        let pipeline = match pipelines.by_format.get(&format) {
+        let motion = prepass.is_some_and(|p| p.motion_vectors.is_some());
+        let pipeline = match pipelines.by_format.get(&(format, motion)) {
             Some(id) => *id,
             None => {
                 let mut d = pipelines.base.clone();
+                d.layout = vec![pipelines.layouts[motion as usize].clone()];
                 if let Some(f) = d.fragment.as_mut() {
+                    if motion {
+                        f.shader_defs.push("MOTION_VECTORS".into());
+                    }
                     f.targets = vec![
                         Some(ColorTargetState { format, blend: None, write_mask: ColorWrites::ALL }),
                         Some(ColorTargetState { format: HISTORY_FORMAT, blend: None, write_mask: ColorWrites::ALL }),
                     ];
                 }
                 let id = cache.queue_render_pipeline(d);
-                pipelines.by_format.insert(format, id);
+                pipelines.by_format.insert((format, motion), id);
                 id
             }
         };
@@ -273,7 +296,7 @@ fn prepare(
             blend: Vec4::new(BLEND, BLEND_MOVING, FAST, 0.0),
         });
         uniform.write_buffer(&device, &queue);
-        commands.entity(entity).insert(TaaView { pipeline, format, read, write, uniform });
+        commands.entity(entity).insert(TaaView { pipeline, format, motion, read, write, uniform });
     }
     histories.0.retain(|e, _| seen.contains(e));
 }
@@ -298,12 +321,13 @@ pub(crate) fn taa_pass(
     let diagnostics = diagnostics.as_deref();
     let span = diagnostics.time_span(ctx.command_encoder(), "nvf_taa");
     let post = target.post_process_write();
-    let layout = cache.get_bind_group_layout(&pipelines.layout);
-    let bind_group = device.create_bind_group(
-        "taa_bind_group",
-        &layout,
-        &BindGroupEntries::sequential((post.source, &taa.read.default_view, depth, &pipelines.sampler, uniform)),
-    );
+    let layout = cache.get_bind_group_layout(&pipelines.layouts[taa.motion as usize]);
+    let bind_group = if taa.motion {
+        let Some(motion) = prepass.motion_vectors_view() else { return };
+        device.create_bind_group("taa_bind_group", &layout, &BindGroupEntries::sequential((post.source, &taa.read.default_view, depth, &pipelines.sampler, uniform, motion)))
+    } else {
+        device.create_bind_group("taa_bind_group", &layout, &BindGroupEntries::sequential((post.source, &taa.read.default_view, depth, &pipelines.sampler, uniform)))
+    };
     let attachment = |view| Some(RenderPassColorAttachment { view, depth_slice: None, resolve_target: None, ops: Operations::default() });
     let mut pass = ctx.command_encoder().begin_render_pass(&RenderPassDescriptor {
         label: Some("taa_pass"),

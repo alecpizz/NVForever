@@ -171,7 +171,7 @@ pub fn fade_prepass(descriptor: &mut RenderPipelineDescriptor, mesh_key: MeshPip
     if !mesh_key.contains(MeshPipelineKey::VISIBILITY_RANGE_DITHER) {
         return;
     }
-    depth_prepass_fragment(descriptor, FADE_PREPASS_SHADER);
+    depth_prepass_fragment(descriptor, FADE_PREPASS_SHADER, false);
 }
 
 /// The depth-only prepass fragment of NIF shapes (module docs, "Vertex alpha"): the
@@ -182,17 +182,21 @@ fn nif_prepass(descriptor: &mut RenderPipelineDescriptor, mesh_key: MeshPipeline
     if !mesh_key.intersects(MeshPipelineKey::VISIBILITY_RANGE_DITHER | MeshPipelineKey::MAY_DISCARD) {
         return;
     }
-    depth_prepass_fragment(descriptor, NIF_PREPASS_SHADER);
+    depth_prepass_fragment(descriptor, NIF_PREPASS_SHADER, false);
 }
 
 /// Give a depth-only or motion-vector prepass pipeline `shader` as its fragment stage.
 /// NIF alpha/holes and first-person depth must be identical with and without FSR.
-fn depth_prepass_fragment(descriptor: &mut RenderPipelineDescriptor, shader: Handle<Shader>) {
+/// `coverage`: called for [`prepass_coverage`], whose fade shader also has a motion
+/// variant (a multisampled view with a motion-vector prepass: Modern Feel's object motion
+/// blur, nvforever object_blur.rs).
+fn depth_prepass_fragment(descriptor: &mut RenderPipelineDescriptor, shader: Handle<Shader>, coverage: bool) {
     let defs = &descriptor.vertex.shader_defs;
     let has = |d: &'static str| defs.contains(&ShaderDefVal::from(d));
     // The fade-only shader is depth-only; Bevy already handles its dither with colour
     // targets. NIF's motion variant also preserves its custom alpha and squeezed depth.
-    let nif_motion = shader == NIF_PREPASS_SHADER && has("MOTION_VECTOR_PREPASS") && !has("NORMAL_PREPASS") && !has("DEFERRED_PREPASS");
+    let motion_shader = shader == NIF_PREPASS_SHADER || (coverage && shader == FADE_PREPASS_SHADER);
+    let nif_motion = motion_shader && has("MOTION_VECTOR_PREPASS") && !has("NORMAL_PREPASS") && !has("DEFERRED_PREPASS");
     if !has("PREPASS_PIPELINE") || (has("PREPASS_FRAGMENT") && !nif_motion) {
         return;
     }
@@ -223,7 +227,7 @@ fn first_person_depth(descriptor: &mut RenderPipelineDescriptor, mesh_key: MeshP
         {
             return;
         }
-        depth_prepass_fragment(descriptor, NIF_PREPASS_SHADER);
+        depth_prepass_fragment(descriptor, NIF_PREPASS_SHADER, false);
     }
     if let Some(fragment) = descriptor.fragment.as_mut() {
         fragment.shader_defs.push("FIRST_PERSON_DEPTH".into());
@@ -293,13 +297,13 @@ fn alpha_to_coverage_edges(descriptor: &mut RenderPipelineDescriptor, mesh_key: 
 
 /// Whether [`prepass_coverage`] holds for a pipeline with this key and sample count: the
 /// same answer for a view's prepass pipeline and its main-pass pipeline, which must agree.
-/// The prepass must be depth-only: with normals or motion vectors Bevy's own prepass
-/// fragment runs (TAA and FSR, which turn multisampling off anyway). A shadow pass has no
-/// multisampling.
+/// The prepass must be depth-only or depth and motion vectors (both prepass shaders have a
+/// motion variant with the mask: Modern Feel's object motion blur keeps multisampling); with
+/// normals Bevy's own prepass fragment runs. A shadow pass has no multisampling.
 fn prepass_coverage_applies(mesh_key: MeshPipelineKey, samples: u32) -> bool {
     mesh_key.contains(MeshPipelineKey::MAY_DISCARD | MeshPipelineKey::DEPTH_PREPASS)
         && matches!(samples, 2 | 4 | 8)
-        && !mesh_key.intersects(MeshPipelineKey::NORMAL_PREPASS | MeshPipelineKey::MOTION_VECTOR_PREPASS | MeshPipelineKey::DEFERRED_PREPASS)
+        && !mesh_key.intersects(MeshPipelineKey::NORMAL_PREPASS | MeshPipelineKey::DEFERRED_PREPASS)
 }
 
 /// Prepass coverage: the soft edge of an alpha-tested shape, written by the depth prepass.
@@ -329,7 +333,7 @@ fn prepass_coverage(descriptor: &mut RenderPipelineDescriptor, mesh_key: MeshPip
         return false;
     }
     if descriptor.vertex.shader_defs.contains(&ShaderDefVal::from("PREPASS_PIPELINE")) {
-        depth_prepass_fragment(descriptor, shader);
+        depth_prepass_fragment(descriptor, shader, true);
         if let Some(fragment) = descriptor.fragment.as_mut() {
             fragment.shader_defs.push("COVERAGE_MASK".into());
             fragment.shader_defs.push(match samples {
@@ -1338,9 +1342,18 @@ mod tests {
         soft_edges(&mut shadow, key);
         assert!(shadow.fragment.is_none());
         assert!(!grass_edges(&mut prepass_pipeline(1), key));
-        // A view whose prepass also writes motion vectors or normals (TAA, FSR), and a view
-        // without a prepass: the main pass draws the edge with alpha to coverage, as before.
-        for key in [key | MeshPipelineKey::MOTION_VECTOR_PREPASS, key | MeshPipelineKey::NORMAL_PREPASS, MeshPipelineKey::MAY_DISCARD] {
+        // A multisampled view whose prepass also writes motion vectors (Modern Feel's object
+        // motion blur): the prepass still writes the edge, with its motion.
+        let mut prepass = prepass_pipeline(4);
+        prepass.vertex.shader_defs.push("MOTION_VECTOR_PREPASS".into());
+        soft_edges(&mut prepass, key | MeshPipelineKey::MOTION_VECTOR_PREPASS);
+        assert!(has(&prepass, "COVERAGE_MASK") && has(&prepass, "MOTION_VECTOR_PREPASS"));
+        let mut main = main_pipeline(4, None);
+        soft_edges(&mut main, key | MeshPipelineKey::MOTION_VECTOR_PREPASS);
+        assert!(has(&main, "PREPASS_COVERAGE") && !main.multisample.alpha_to_coverage_enabled);
+        // A view whose prepass also writes normals, and a view without a prepass: the main
+        // pass draws the edge with alpha to coverage, as before.
+        for key in [key | MeshPipelineKey::NORMAL_PREPASS, MeshPipelineKey::MAY_DISCARD] {
             let mut prepass = prepass_pipeline(4);
             soft_edges(&mut prepass, key);
             assert!(prepass.fragment.is_none(), "{key:?}");
