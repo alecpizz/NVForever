@@ -33779,3 +33779,18 @@ expect = [
   { re = 'combat: swing reaches 1 actors .*1 of them out of the fan of rays at eye height', label = "the level knife swing reaches the low creature through the ground fallback" },
   { re = 'combat: .*, 1 swings \(0 chained, 0 power, 1 hits\)', label = "the short weapon hits once at the widened blocking stop" },
 ]
+
+[[scenario]]
+name = "modern-feel-hit-reactions"
+source = "Modern Feel, hit reactions (docs/design/modern-feel-hit.md) [design]"
+note = "the player, in god mode, shoots Chet (held in place) with a pistol 130 units off in the general store, then kills him with a shotgun (his health set to 15 first): each hit springs the struck bone over his animation, and the killing shot shoves his ragdoll at the struck part. The screenshots fall just after shots; look at them for the jolt"
+areas = ["combat"]
+paths = ["engine/nvforever/src/hit_react.rs"]
+env = { NVF_PLAY_TEST_GOD = "1", NVF_PLAY_TEST_SCRIPT_MENUS = "0.05", NVF_PLAY_TEST_EQUIP = "000E3778", NVF_PLAY_TEST_GIVE = "0008ED03:50,001735E3:1,0015367E:20", NVF_PLAY_TEST_GOTO = "3:-583:440:700", NVF_PLAY_TEST_SCRIPT = "4:call:GSChetRef:SetRestrained:1,4.2:moveto:GSChetRef:player:0:130:0", NVF_PLAY_TEST_CONSOLE = "20:GSChetRef.setav health 15;20.3:close", NVF_PLAY_TEST_LOOK = "5:0:-24,11.5:0:-3,13.5:0:-36,17.5:0:-24", NVF_PLAY_TEST_CONTROL = "6:weapon,8:fire,8.3:fire,10:fire,10.3:fire,12:fire,12.3:fire,14:fire,14.3:fire,16:fire,16.3:fire,18:fire,18.3:fire,21:equip=001735E3,24:fire,24.3:fire,27:fire,27.3:fire", NVF_PLAY_TEST_SHOTS = "7.8:hit_react_0.png,8.2:hit_react_torso_a.png,8.35:hit_react_torso_b.png,12.2:hit_react_head_a.png,12.35:hit_react_head_b.png,14.2:hit_react_leg_a.png,14.35:hit_react_leg_b.png,24.2:hit_react_kill_a.png,24.5:hit_react_kill_b.png,25:hit_react_kill_c.png,29:hit_react_end.png" }
+args = ["--cell", "GSGeneralStore", "--play", "--hour", "12", "--no-voice"]
+run_seconds = 30
+expect = [
+  { re = 'hit reaction: 00104C79 bone .+ strength \d+', label = "Chet's struck bone springs" },
+  { re = 'hit reactions: (?P<n>\d+) reactions', range = [2, 1000], label = "the shots jolt him more than once" },
+  { re = 'hit reaction: 00104C79 killed by \S+, ragdoll shoved', label = "the killing shot shoves his ragdoll" },
+]
