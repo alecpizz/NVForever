@@ -90,6 +90,8 @@ struct Playing {
     entity: Entity,
     level: Arc<[AtomicU32; 3]>,
     pan: Option<Pan>,
+    /// Where a placed loop sounds (`crate::occlusion` reads it).
+    at: [f32; 3],
 }
 
 impl Playing {
@@ -110,6 +112,13 @@ struct Bed {
 
 #[derive(Component)]
 struct AmbientSound;
+
+impl Ambient {
+    /// The placed loops playing: entity, pan and place (`crate::occlusion`).
+    pub fn placed(&self) -> impl Iterator<Item = (Entity, &Pan, [f32; 3])> {
+        self.loops.values().filter_map(|p| p.pan.as_ref().map(|pan| (p.entity, pan, p.at)))
+    }
+}
 
 #[derive(Resource, Default)]
 pub struct Ambient {
@@ -235,7 +244,7 @@ fn start_loop(commands: &mut Commands, amb: &mut Ambient, sfx: &mut Sfx, setting
         }
         None => commands.spawn((AudioPlayer::<LayeredMusic>(assets.0.add(music)), playback, AmbientSound)).id(),
     };
-    Some((Playing { entity, level, pan }, static_gain(&s)))
+    Some((Playing { entity, level, pan, at: [0.0; 3] }, static_gain(&s)))
 }
 
 /// The loops' stream assets: as they are (background loops) and panned (placed ones).
@@ -363,7 +372,8 @@ fn play(
                 cover.note(Some(SoundCover::key(crate::sound_cover::AMBIENT_KIND, m.key)), static_gain(s) * distance_gain(s, dist), dist, crate::sound_cover::LOOP_HOLD, cover_now);
             }
             sounding.push(m.key);
-            if let Some(p) = amb.loops.get(&m.key) {
+            if let Some(p) = amb.loops.get_mut(&m.key) {
+                p.at = m.at;
                 p.set(gain);
                 if let Some(pan) = &p.pan {
                     pan.set(pan_gains(eye, player.heading, m.at));
@@ -374,7 +384,8 @@ fn play(
                 if file_pending(amb, sfx, &data.vfs, m.sound) {
                     continue;
                 }
-                let Some((p, _)) = start_loop(&mut commands, amb, sfx, &settings, &data.vfs, &mut streams, m.sound, pan) else { continue };
+                let Some((mut p, _)) = start_loop(&mut commands, amb, sfx, &settings, &data.vfs, &mut streams, m.sound, pan) else { continue };
+                p.at = m.at;
                 p.set(gain);
                 amb.loops.insert(m.key, p);
                 if m.source {

@@ -3626,6 +3626,7 @@ pub(crate) fn fire(
                         info!("combat: {} shoots its silenced sound {}", w.edid.as_deref().unwrap_or("?"), sound_edid(sfx.as_deref(), sound));
                     }
                     c.silenced_logged = shoot.silenced.then_some((id, sound));
+                    crate::gun_audio::mark_shot(sound, None, crate::gun_audio::ShotKind { player: true, silenced: shoot.silenced, near_max: 0.0, layer: false });
                     shot_sound(&mut sounds, &mut scaled, sound, None, true);
                 }
                 let effects: Vec<&AmmoEffect> = chain.ammo_effects.iter().filter_map(|e| c.forms.ammo_effects.get(e)).collect();
@@ -4957,7 +4958,13 @@ fn actor_attacks(
             let (sound, far) = shoot.heard_at(distance, near_max);
             if let Some(sound) = sound {
                 debug!("combat: npc {} shot sound {} ({}, {})", s.shooter, sound_edid(sfx.as_deref(), sound), if shoot.silenced { "silenced" } else { "plain" }, if far { "distant" } else { "3D" });
+                crate::gun_audio::mark_shot(sound, Some(seen_from), crate::gun_audio::ShotKind { player: false, silenced: shoot.silenced, near_max, layer: false });
                 shot_sound(&mut sounds, &mut scaled, sound, Some(seen_from), false);
+            }
+            // Modern Feel's layered gunshots: the distant shot under a mid-range 3D one.
+            if let Some((layer, gain)) = crate::gun_audio::distant_layer(&shoot, distance, near_max).filter(|_| !far) {
+                crate::gun_audio::mark_shot(layer, Some(seen_from), crate::gun_audio::ShotKind { player: false, silenced: shoot.silenced, near_max, layer: true });
+                scaled.write(ScaledSound { sound: layer, at: Some(seen_from), gain: gain * shot_gain(false).unwrap_or(1.0) });
             }
         }
         let (tracer_chance, force) = projectile.map_or((0.0, 0.0), |p| (p.tracer_chance, p.impact_force));

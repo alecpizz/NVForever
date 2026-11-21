@@ -297,13 +297,23 @@ pub fn pan_gains(eye: [f32; 3], heading: f32, at: [f32; 3]) -> [f32; 2] {
 }
 
 /// Left and right gains shared with the audio thread while a sound plays: the targets
-/// the main thread sets; the sound eases to them ([`PanEase`]).
+/// the main thread sets; the sound eases to them ([`PanEase`]). The third is how much the
+/// sound is occluded (Modern Feel, [`crate::occlusion`]; 0 clear).
 #[derive(Clone, Debug)]
-pub struct Pan(Arc<[AtomicU32; 2]>);
+pub struct Pan(Arc<[AtomicU32; 3]>);
 
 impl Pan {
     pub fn new(gains: [f32; 2]) -> Pan {
-        Pan(Arc::new([AtomicU32::new(gains[0].to_bits()), AtomicU32::new(gains[1].to_bits())]))
+        Pan(Arc::new([AtomicU32::new(gains[0].to_bits()), AtomicU32::new(gains[1].to_bits()), AtomicU32::new(0)]))
+    }
+
+    /// Set how occluded the sound is ([`crate::occlusion::muffle`]; 0 clear).
+    pub fn set_occlusion(&self, o: f32) {
+        self.0[2].store(o.max(0.0).to_bits(), Ordering::Relaxed);
+    }
+
+    pub fn occlusion(&self) -> f32 {
+        f32::from_bits(self.0[2].load(Ordering::Relaxed))
     }
 
     pub fn set(&self, gains: [f32; 2]) {
@@ -347,11 +357,13 @@ pub const PAN_EASE: Duration = Duration::from_millis(20);
 struct PanEase {
     now: Option<[f32; 2]>,
     step: f32,
+    /// The occlusion's filter ([`crate::occlusion::Muffle`]).
+    muffle: crate::occlusion::Muffle,
 }
 
 impl PanEase {
     fn new(rate: u32) -> PanEase {
-        PanEase { now: None, step: 1.0 / (rate.max(1) as f32 * PAN_EASE.as_secs_f32()) }
+        PanEase { now: None, step: 1.0 / (rate.max(1) as f32 * PAN_EASE.as_secs_f32()), muffle: crate::occlusion::Muffle::new(rate) }
     }
 
     /// The gains of the next frame, for `target`.
@@ -382,6 +394,7 @@ fn pan_frame(frame: impl Iterator<Item = Sample>, channels: usize, pan: &Pan, ea
     if let Some(f) = filter {
         m = f.run(m);
     }
+    m = ease.muffle.run(m, pan.occlusion());
     let [l, r] = ease.next(pan.get());
     Some((m * l, m * r))
 }
@@ -479,6 +492,8 @@ pub struct PcmSound {
     pan: Option<Pan>,
     /// Played through this environment's reverb, in stereo ([`crate::reverb`]).
     reverb: Option<RoomSend>,
+    /// A shot's tail and distance shaping, in stereo ([`crate::gun_audio`]).
+    shot: Option<crate::gun_audio::ShotShape>,
 }
 
 pub struct PcmDecoder {
@@ -488,6 +503,7 @@ pub struct PcmDecoder {
     ease: PanEase,
     right: Option<Sample>,
     reverb: Option<Reverb>,
+    shot: Option<crate::gun_audio::ShotDsp>,
 }
 
 impl PcmDecoder {
@@ -509,7 +525,7 @@ impl Iterator for PcmDecoder {
     type Item = Sample;
 
     fn next(&mut self) -> Option<Sample> {
-        if self.sound.pan.is_none() && self.reverb.is_none() {
+        if self.sound.pan.is_none() && self.reverb.is_none() && self.shot.is_none() {
             let s = self.sound.samples.get(self.at).copied();
             self.at += 1;
             return s;
@@ -517,7 +533,11 @@ impl Iterator for PcmDecoder {
         if let Some(r) = self.right.take() {
             return Some(r);
         }
-        let frame = self.stereo_frame();
+        let frame = match (self.stereo_frame(), self.shot.as_mut()) {
+            (Some((l, r)), Some(shot)) => Some(shot.process(l, r)),
+            (None, Some(shot)) => shot.tail(),
+            (frame, None) => frame,
+        };
         let (l, r) = with_reverb(frame, &mut self.reverb)?;
         self.right = Some(r);
         Some(l)
@@ -530,7 +550,7 @@ impl Source for PcmDecoder {
     }
 
     fn channels(&self) -> ChannelCount {
-        let c = if self.sound.pan.is_some() || self.reverb.is_some() { 2 } else { self.sound.channels };
+        let c = if self.sound.pan.is_some() || self.reverb.is_some() || self.shot.is_some() { 2 } else { self.sound.channels };
         NonZero::new(c).unwrap_or(NonZero::<u16>::MIN)
     }
 
@@ -539,7 +559,7 @@ impl Source for PcmDecoder {
     }
 
     fn total_duration(&self) -> Option<Duration> {
-        let tail = self.reverb.as_ref().map_or(0.0, Reverb::seconds_left);
+        let tail = self.reverb.as_ref().map_or(0.0, Reverb::seconds_left) + self.shot.as_ref().map_or(0.0, crate::gun_audio::ShotDsp::seconds_left);
         Some(Duration::from_secs_f64(self.sound.seconds() + tail as f64))
     }
 }
@@ -549,7 +569,8 @@ impl Decodable for PcmSound {
 
     fn decoder(&self) -> PcmDecoder {
         let reverb = self.reverb.map(|p| p.reverb(self.rate));
-        PcmDecoder { sound: self.clone(), at: 0, ease: PanEase::new(self.rate), right: None, reverb }
+        let shot = self.shot.map(|s| crate::gun_audio::ShotDsp::new(&s, self.rate));
+        PcmDecoder { sound: self.clone(), at: 0, ease: PanEase::new(self.rate), right: None, reverb, shot }
     }
 }
 
@@ -615,7 +636,7 @@ impl PcmSound {
 
     /// Interleaved samples (`channels` per frame, `rate` frames per second), unplaced.
     pub fn from_samples(samples: Vec<f32>, channels: u16, rate: u32) -> PcmSound {
-        PcmSound { samples: samples.into(), channels, rate, pan: None, reverb: None }
+        PcmSound { samples: samples.into(), channels, rate, pan: None, reverb: None, shot: None }
     }
 
     pub fn samples(&self) -> &[f32] {
@@ -636,7 +657,7 @@ impl PcmSound {
         let (channels, rate) = (d.channels().get(), d.sample_rate().get());
         format_ok(channels, rate)?;
         let samples: Vec<f32> = d.take(MAX_DECODED_SAMPLES).map(|x| if x.is_finite() { x } else { 0.0 }).collect();
-        Ok(PcmSound { samples: samples.into(), channels, rate, pan: None, reverb: None })
+        Ok(PcmSound { samples: samples.into(), channels, rate, pan: None, reverb: None, shot: None })
     }
 
     /// Decode a WAV file: the `fmt ` and `data` chunks of a RIFF/WAVE file [documented:
@@ -674,7 +695,7 @@ impl PcmSound {
                         _ => return Err(format!("format tag {tag} with {bits} bits is not decoded")),
                     };
                     format_ok(channels, rate)?;
-                    return Ok(PcmSound { samples: samples.into(), channels, rate, pan: None, reverb: None });
+                    return Ok(PcmSound { samples: samples.into(), channels, rate, pan: None, reverb: None, shot: None });
                 }
                 _ => {}
             }
@@ -2092,11 +2113,14 @@ fn one_shot_ready(out: &mut Out, sfx: &mut Sfx, r: &Resolved, handle: Handle<Pcm
         sfx.reverb_send_sum += p.send;
         debug!("sfx: {name} through reverb {} (send {:.2})", p.preset.name, p.send);
     }
-    let own = |pcm: PcmSound, pan: Option<Pan>| PcmSound { pan, reverb, ..pcm };
+    // A shot's tail and distance shaping (Modern Feel, `crate::gun_audio`), if combat
+    // marked this sound as a shot's.
+    let shot = crate::gun_audio::take(sound, at, distance, sfx.room_reverb);
+    let own = |pcm: PcmSound, pan: Option<Pan>| PcmSound { pan, reverb, shot, ..pcm };
     let mut e = match (placed, out.assets.get(&handle).cloned()) {
         // This playing's own asset: the samples are shared, the pan and reverb are its own.
         (Some(placed), Some(pcm)) => out.commands.spawn((AudioPlayer::<PcmSound>(out.assets.add(own(pcm, Some(placed.pan.clone())))), playback, placed, SfxSound, category)),
-        (None, Some(pcm)) if reverb.is_some() => out.commands.spawn((AudioPlayer::<PcmSound>(out.assets.add(own(pcm, None))), playback, SfxSound, category)),
+        (None, Some(pcm)) if reverb.is_some() || shot.is_some() => out.commands.spawn((AudioPlayer::<PcmSound>(out.assets.add(own(pcm, None))), playback, SfxSound, category)),
         _ => out.commands.spawn((AudioPlayer::<PcmSound>(handle), playback, SfxSound, category)),
     };
     if interface {
@@ -2213,6 +2237,8 @@ impl Plugin for SfxPlugin {
             .add_systems(Last, (release_files, report));
         add_late_start(app);
         crate::reverb::build(app);
+        crate::gun_audio::build(app);
+        crate::occlusion::build(app);
     }
 }
 
@@ -2287,13 +2313,13 @@ mod tests {
     #[test]
     fn a_panned_sound_is_stereo() {
         let pan = Pan::new([1.0, 0.5]);
-        let mono = PcmSound { samples: vec![0.8, -0.4].into(), channels: 1, rate: 22050, pan: Some(pan.clone()), reverb: None };
+        let mono = PcmSound { samples: vec![0.8, -0.4].into(), channels: 1, rate: 22050, pan: Some(pan.clone()), reverb: None, shot: None };
         let d = mono.decoder();
         assert_eq!(d.channels().get(), 2);
         assert_eq!(d.collect::<Vec<_>>(), vec![0.8, 0.4, -0.4, -0.2]);
         // Stereo in: the two channels are mixed to one, then placed; a frame cut short
         // at the end is dropped.
-        let stereo = PcmSound { samples: vec![0.2, 0.6, 1.0, 1.0, 0.5].into(), channels: 2, rate: 22050, pan: Some(pan.clone()), reverb: None };
+        let stereo = PcmSound { samples: vec![0.2, 0.6, 1.0, 1.0, 0.5].into(), channels: 2, rate: 22050, pan: Some(pan.clone()), reverb: None, shot: None };
         assert_eq!(stereo.decoder().collect::<Vec<_>>(), vec![0.4, 0.2, 1.0, 0.5]);
         // Not placed: as it is.
         let plain = PcmSound { pan: None, ..mono.clone() };
@@ -2309,7 +2335,7 @@ mod tests {
     fn pan_gains_ease_in_both_decoders() {
         const RATE: u32 = 48_000;
         let step = 1.0 / (RATE as f32 * PAN_EASE.as_secs_f32());
-        let ones = |pan: Option<Pan>| PcmSound { samples: vec![1.0; RATE as usize].into(), channels: 1, rate: RATE, pan, reverb: None };
+        let ones = |pan: Option<Pan>| PcmSound { samples: vec![1.0; RATE as usize].into(), channels: 1, rate: RATE, pan, reverb: None, shot: None };
         // A placed PCM sound, and another module's source panned (the same file unplaced
         // under `Panned`): a constant 1, so each frame plays its gains as they are.
         let pcm_pan = Pan::new([1.0, 0.3]);
@@ -2354,7 +2380,7 @@ mod tests {
     #[test]
     fn a_sound_through_reverb_is_stereo_with_a_tail() {
         let room = crate::reverb::preset(Some("Small Room"));
-        let mono = PcmSound { samples: vec![0.5; 100].into(), channels: 1, rate: 22050, pan: None, reverb: room.map(RoomSend::full) };
+        let mono = PcmSound { samples: vec![0.5; 100].into(), channels: 1, rate: 22050, pan: None, reverb: room.map(RoomSend::full), shot: None };
         let d = mono.decoder();
         assert_eq!(d.channels().get(), 2);
         let tail = crate::reverb::Reverb::tail_seconds(room.unwrap());

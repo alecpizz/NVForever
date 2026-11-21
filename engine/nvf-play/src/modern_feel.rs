@@ -10,9 +10,9 @@
 //! - **Hit reactions** (nvforever `hit_react.rs`): the struck bone of a living actor is
 //!   pushed on a spring laid over its animation; a killing hit hands over to the ragdoll
 //!   with the shot's push.
-//! - **Layered gunshots** (`gun_audio`): a shot's tail by the place's acoustic space
+//! - **Layered gunshots** (`gun_audio`, `crate::gun_audio`): a shot's tail by the place's acoustic space
 //!   (outdoors a rolling echo, indoors a short slap), its loudness and brightness by distance.
-//! - **Sound occlusion**: world sounds behind walls are muffled and quieter.
+//! - **Sound occlusion** (`crate::occlusion`): world sounds behind walls are muffled and quieter.
 //! - **Camera kick**: each shot kicks and rolls the view by the weapon (damage, rate, weight)
 //!   and recovers; heavy shots punch the field of view.
 //! - **Shell casings**: spent cases fly from the gun as physical bodies with their sounds.

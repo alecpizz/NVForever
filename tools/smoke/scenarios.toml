@@ -33857,3 +33857,55 @@ expect = [
   { re = 'shell casings summary: .* (?P<n>\d+) by other actors', range = [1, 1000] },
   { re = 'impact effects summary: (?P<n>\d+) shots smoked', range = [1, 100000] },
 ]
+
+[[scenario]]
+name = "modern-feel-gun-audio-outdoors"
+source = "[design] Modern Feel, layered gunshots and sound occlusion (docs/design/modern-feel-audio.md): Violet's hunting rifle shots from about 1,600 units get the open air's rolling echo, air absorption and the distant layer; the player's SMG burst its own echo with the punch; placed sounds behind Goodsprings' rocks and houses are muffled"
+note = "combat-violet's setup (god mode) with the player firing a 10mm SMG burst into the sky at 8-10 s (each `fire` press toggles the trigger)"
+areas = ["audio", "combat"]
+paths = ["engine/nvf-play/src/gun_audio.rs", "engine/nvf-play/src/occlusion.rs"]
+env = { NVF_PLAY_TEST_GOD = "1", NVF_PLAY_TEST_SCRIPT_MENUS = "1", NVF_PLAY_TEST_EQUIP = "00004321", NVF_PLAY_TEST_GIVE = "00004241:60", NVF_PLAY_TEST_CONTROL = "4:weapon,8:fire,10:fire" }
+args = ["--cell", "Goodsprings", "--pos=-43900,64896,7000", "--play", "--hour", "12", "--no-voice", "--npc-packages", "FiendVioletRef"]
+run_seconds = 40
+expect = [
+  "gun audio: layered gunshots on",
+  "occlusion: sound occlusion on",
+  { re = 'gun audio: player shot \S+ at the listener: open \(rolling echo\), tail (1\.00|0\.25), air 20000 Hz, punch', label = "the player's own shot: the open air's echo (a quarter of it within an automatic burst) and the punch" },
+  { re = 'gun audio: npc shot \S+ \d+ units off: open \(rolling echo\), tail (?P<n>[0-9.]+)', range = [1.01, 2.0], label = "Violet's shots: the echo, louder against the direct sound with distance" },
+  { re = 'gun audio summary: (?P<n>\d+) shots with a rolling echo', range = [10, 100000], label = "the burst and Violet's shots echo" },
+  { re = 'occlusion summary: (?P<n>\d+) rays cast \(at most (\d+) in a frame\)', range = [1, 100000], label = "placed sounds are tested" },
+  { re = 'occlusion summary: \d+ rays cast \(at most (?P<n>\d+) in a frame\)', range = [1, 20], label = "within the frame's budget of rays" },
+]
+
+[[scenario]]
+name = "modern-feel-gun-audio-room"
+source = "[design] Modern Feel, layered gunshots (docs/design/modern-feel-audio.md): a shot inside gets the room's short slap, not the rolling echo"
+note = "the player fires a 10mm SMG burst in Doc Mitchell's house at 6-7 s (god mode)"
+areas = ["audio", "combat"]
+paths = ["engine/nvf-play/src/gun_audio.rs", "engine/nvf-play/src/occlusion.rs"]
+env = { NVF_PLAY_TEST_GOD = "1", NVF_PLAY_TEST_SCRIPT_MENUS = "1", NVF_PLAY_TEST_EQUIP = "00004321", NVF_PLAY_TEST_GIVE = "00004241:60", NVF_PLAY_TEST_CONTROL = "3:weapon,6:fire,7:fire" }
+args = ["--cell", "GSDocMitchellHouse", "--play", "--no-voice", "--no-messages"]
+run_seconds = 14
+expect = [
+  { re = 'gun audio: player shot \S+ at the listener: room \(slap\), tail 1\.00', label = "the shot inside: the room's slap" },
+  { re = 'gun audio summary: \d+ shots with a rolling echo, (?P<n>\d+) with a room', range = [3, 100000], label = "the burst's shots slap" },
+  { re = 'audio mix: pre peak (?P<n>[0-9.]+),', range = [0, 1.8], label = "the burst's mix before the limiter stays near the original's (1.3-1.45 with the rows off; 1.6 on, 2.2 before the burst's tails were cut)" },
+]
+forbid = [{ re = 'gun audio: player shot .*rolling echo', label = "no open-air echo inside" }]
+
+[[scenario]]
+name = "modern-feel-gun-audio-off"
+source = "[design] Modern Feel (docs/design/modern-feel-audio.md): with layered gunshots and sound occlusion switched off at run time the shots play as recorded (no mark, no tail) and no sound is tested; modern-feel-gun-audio-room's burst, its mix peak the baseline for that scenario's"
+note = "the two rows switched off on the settings page at 1.5-1.8 s, then modern-feel-gun-audio-room's burst"
+areas = ["audio", "combat"]
+paths = ["engine/nvf-play/src/gun_audio.rs", "engine/nvf-play/src/occlusion.rs"]
+env = { NVF_PLAY_TEST_GOD = "1", NVF_PLAY_TEST_SCRIPT_MENUS = "1", NVF_PLAY_TEST_PAUSE = "1:2.5", NVF_PLAY_TEST_SETTINGS = "1.5:feel-gun-audio,1.8:feel-sound-occlusion", NVF_PLAY_TEST_EQUIP = "00004321", NVF_PLAY_TEST_GIVE = "00004241:60", NVF_PLAY_TEST_CONTROL = "3:weapon,6:fire,7:fire" }
+args = ["--cell", "GSDocMitchellHouse", "--play", "--no-voice", "--no-messages"]
+run_seconds = 14
+expect = [
+  "gun audio: layered gunshots off",
+  "occlusion: sound occlusion off",
+  { re = 'combat: (?P<n>\d+) shots \(', range = [3, 100000], label = "the burst fires" },
+  { re = 'occlusion summary: (?P<n>\d+) rays cast', range = [0, 120], label = "sounds are no longer tested once off (on, this run casts 230-360)" },
+]
+forbid = [{ re = 'gun audio: (player|npc) shot', label = "no shot shaped while off" }]
