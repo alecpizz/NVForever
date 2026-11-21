@@ -677,6 +677,9 @@ struct Pose {
     /// A melee fighter's: feet to feet when its body touches its target's (units); a
     /// lunge carries it no nearer ([`Fighters::lunge_room`]).
     contact: Option<f32>,
+    /// A gunman's: its target's chest (game space), where its shots are aimed
+    /// (`npc_feel.rs` bends its body so the barrel points there).
+    aim: Option<V3>,
 }
 
 #[derive(Resource, Default)]
@@ -722,6 +725,11 @@ impl Fighters {
     /// The pitch from a fighting actor's eyes to its target's chest, while it fights.
     pub fn pitch(&self, actor: u32) -> Option<f32> {
         self.poses.get(&actor).map(|p| p.pitch)
+    }
+
+    /// Where a fighting gunman aims: its target's chest, game space.
+    pub fn aim_at(&self, actor: u32) -> Option<V3> {
+        self.poses.get(&actor).and_then(|p| p.aim)
     }
 
     /// The weapon drawn on a fighting actor.
@@ -2727,7 +2735,7 @@ pub(crate) fn fight(
             } else {
                 g.awareness.aiming.remove(&me);
             }
-            f.poses.insert(id, Pose { pitch, weapon: weapons.get(&id).copied(), sights, crouched, blocking: fighter.block.is_some(), distance: away, stop: None, contact: None });
+            f.poses.insert(id, Pose { pitch, weapon: weapons.get(&id).copied(), sights, crouched, blocking: fighter.block.is_some(), distance: away, stop: None, contact: None, aim: matches!(arm, Arm::Gun(_)).then_some(tchest) });
             if grenade_probe.actor() == Some(me) {
                 grenade_probe.observe(g, &c.forms, nvf_play::combat::held_grenade_probe::Frame {
                     clock, dt, actor: me, target, selected: g.held_weapon(me).map(|(w, _)| w), held: weapons.get(&id).copied(),

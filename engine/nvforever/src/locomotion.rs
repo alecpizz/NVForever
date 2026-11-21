@@ -496,6 +496,10 @@ pub struct Locomotion {
     under: Under,
     /// Times "moves with no movement clip" was logged for this actor (once).
     clipless_logged: u8,
+    /// Modern Feel's grounded footsteps (`npc_feel.rs`): the turn rate its planted feet
+    /// turn at (radians per second, positive = left), chosen by instead of [`Self::turn`],
+    /// the turn clip played at the rate that matches it; `None`: [`Self::turn`] at rate 1.
+    pub feel_turn: Option<f32>,
 }
 
 /// [design, #2352] The creature set's pose-only idle below movement, stance, aim,
@@ -545,7 +549,7 @@ fn under_clip(idle: &BoundClip) -> BoundClip {
 
 impl Locomotion {
     pub fn new(set: Arc<ClipSet>, phase: f32) -> Locomotion {
-        Locomotion { stand: set.clone(), set, blend: Blend::new(Move::Idle, phase), prev_set: None, velocity: [0.0; 2], turn: 0.0, hold: false, sneak: None, hurt: None, hurt_alert: None, sneaking: false, limping: false, swim: None, swimming: false, alert: None, alerted: false, pace: 1.0, gait_speed: 0.0, in_air: false, jump: Default::default(), armed: None, armed_on: false, armed_logged: Vec::new(), idle_under: false, under: Under::default(), clipless_logged: 0 }
+        Locomotion { stand: set.clone(), set, blend: Blend::new(Move::Idle, phase), prev_set: None, velocity: [0.0; 2], turn: 0.0, hold: false, sneak: None, hurt: None, hurt_alert: None, sneaking: false, limping: false, swim: None, swimming: false, alert: None, alerted: false, pace: 1.0, gait_speed: 0.0, in_air: false, jump: Default::default(), armed: None, armed_on: false, armed_logged: Vec::new(), idle_under: false, under: Under::default(), clipless_logged: 0, feel_turn: None }
     }
 
     /// The standing set now (kNVSE's SetActorAnimationPath swaps it, anim_paths.rs).
@@ -663,7 +667,7 @@ impl Locomotion {
         };
         let fade_time = to.map_or(0.0, |t| t.blend_time);
         let fading = from.is_some() && fade_time > 0.0;
-        self.blend = Blend { cur: Slot { mv, phase, rate: cur.rate }, prev: fading.then_some(cur), fade: 0.0, fade_time, set_off_at_once: self.blend.set_off_at_once };
+        self.blend = Blend { cur: Slot { mv, phase, rate: cur.rate }, prev: fading.then_some(cur), fade: 0.0, fade_time, set_off_at_once: self.blend.set_off_at_once, stride_match: self.blend.stride_match };
         self.prev_set = fading.then_some(old);
     }
 
@@ -728,7 +732,10 @@ impl Locomotion {
         let v = [self.velocity[0] / pace, self.velocity[1] / pace];
         let speed = v[0].hypot(v[1]);
         self.gait_speed += (speed - self.gait_speed) * (1.0 - (-dt.max(0.0) / GAIT_SMOOTHING).exp());
-        let mut choice = choose(|m| set.info(m), v, self.turn);
+        let mut choice = choose(|m| set.info(m), v, self.feel_turn.unwrap_or(self.turn));
+        if let (Some(t), Move::TurnLeft | Move::TurnRight) = (self.feel_turn, choice.mv) {
+            choice.rate = crate::npc_feel::turn_clip_rate(t);
+        }
         let cur = self.blend.cur.mv;
         if let Some(kept) = held_gait(set, cur, choice.mv, v, self.gait_speed) {
             choice = kept;

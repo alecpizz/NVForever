@@ -19,9 +19,9 @@
 //! - **Impact effects**: muzzle smoke, barrel heat and debris and sparks by surface.
 //! - **Damage direction**: the HUD marks where a hit on the player came from; a kill has its
 //!   own confirming sound.
-//! - **Grounded footsteps**: actors' walk clips play at the speed they move, feet stay put in
-//!   a turn, and standing actors turn in place.
-//! - **NPC aim**: an armed actor's spine and arms bend so the gun points at its target.
+//! - **Grounded footsteps** (nvforever `npc_feel.rs`): actors' walk clips play at the speed they
+//!   move, feet stay put in a turn, and standing actors turn in place.
+//! - **NPC aim** (nvforever `npc_feel.rs`): a gunman's spine bends so the barrel points at its target.
 //! - **Volumetric fog**: light shafts and haze in dusty air from the sun and lamps.
 //! - **Object motion blur**: moving things blur by their own motion, not only the camera's.
 

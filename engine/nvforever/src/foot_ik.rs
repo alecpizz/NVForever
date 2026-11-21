@@ -300,7 +300,7 @@ type Ground = Option<(f32, Vec3)>;
 
 /// The drawn landscape surface of exterior cells (smoothed or stored), without `--play`.
 #[derive(Default)]
-struct LandCache(HashMap<(i32, i32), Option<fnv_world::land_surface::Surface>>);
+pub(crate) struct LandCache(HashMap<(i32, i32), Option<fnv_world::land_surface::Surface>>);
 
 impl LandCache {
     fn height(&mut self, world: &WorldData, x: f32, y: f32) -> Option<f32> {
@@ -323,7 +323,7 @@ impl LandCache {
 type Actor = (Entity, &'static ActorRig, &'static ChildOf, &'static InheritedVisibility, Has<Dying>, Has<Corpse>, Has<OnFurniture>);
 
 #[allow(clippy::too_many_arguments)]
-fn place(
+pub(crate) fn place(
     time: Res<Time>,
     settings: Res<FootIkSettings>,
     script: Option<Res<ScriptState>>,

@@ -119,6 +119,7 @@ mod combat_stance;
 mod combat_tactics;
 mod console_toggles;
 mod npc_combat;
+mod npc_feel;
 mod destroyed;
 mod npc_grenades;
 mod npc_stimpaks;
@@ -2011,6 +2012,8 @@ fn main() -> AppExit {
         app.add_plugins(turret_aim::TurretAimPlugin);
         // Also with --no-foot-ik: the settings page can switch it on.
         app.add_plugins(foot_ik::FootIkPlugin { enabled: !args.no_foot_ik });
+        // Modern Feel: grounded footsteps and NPC aim (npc_feel.rs).
+        app.add_plugins(npc_feel::NpcFeelPlugin);
         // Actors jumping and falling: their jump and landing clips (actor_jumps.rs); the
         // --npc-travel walkers' too, without --play.
         app.add_plugins(actor_jumps::ActorJumpsPlugin { physics: play.is_some() });

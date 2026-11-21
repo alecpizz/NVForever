@@ -473,6 +473,12 @@ pub struct Blend {
     /// waiting for a running fade ([`Blend::step`]): creatures only (issue #1073); people
     /// keep the eased fade [design].
     pub set_off_at_once: bool,
+    /// While two walk or run clips fade, advance them at the cycle rate that makes the
+    /// blended pose cover the ground at the speed the current clip's rate asks for
+    /// (the strides, root speed × length, blended by weight), instead of the
+    /// weight-blended cycle rate: the feet do not slide during the fade (Modern Feel,
+    /// grounded footsteps, docs/design/modern-feel-npc.md) [design].
+    pub stride_match: bool,
 }
 
 fn smoothstep(x: f32) -> f32 {
@@ -492,7 +498,7 @@ pub fn wrap01(x: f32) -> f32 {
 
 impl Blend {
     pub fn new(mv: Move, phase: f32) -> Blend {
-        Blend { cur: Slot { mv, phase: wrap01(phase), rate: 1.0 }, prev: None, fade: 0.0, fade_time: 0.0, set_off_at_once: false }
+        Blend { cur: Slot { mv, phase: wrap01(phase), rate: 1.0 }, prev: None, fade: 0.0, fade_time: 0.0, set_off_at_once: false, stride_match: false }
     }
 
     /// Weight of `cur`; `prev` has the rest.
@@ -542,7 +548,12 @@ impl Blend {
         match self.prev.as_mut() {
             Some(p) if p.mv.is_moving() && self.cur.mv.is_moving() => {
                 let pc = cycles(p);
-                let c = pc + (cur_c - pc) * w;
+                let mut c = pc + (cur_c - pc) * w;
+                if self.stride_match {
+                    if let Some(m) = stride_matched_cycles(info(p.mv), info(self.cur.mv), self.cur.rate, w) {
+                        c = m;
+                    }
+                }
                 p.phase = wrap01(p.phase + c * dt);
                 self.cur.phase = wrap01(self.cur.phase + c * dt);
             }
@@ -553,6 +564,20 @@ impl Blend {
             None => self.cur.phase = wrap01(self.cur.phase + cur_c * dt),
         }
     }
+}
+
+/// Cycles per second at which two walk or run clips in step (`prev`, `cur`, `cur` at
+/// weight `w`) cover the ground at `cur`'s root speed × `rate`: that speed over the
+/// weight-blended stride (root speed × length, units per cycle). `None` when either
+/// clip has no root motion.
+pub fn stride_matched_cycles(prev: Option<ClipInfo>, cur: Option<ClipInfo>, rate: f32, w: f32) -> Option<f32> {
+    let (p, c) = (prev?, cur?);
+    let (sp, sc) = (p.speed * p.duration, c.speed * c.duration);
+    if sp <= 0.0 || sc <= 0.0 || c.speed <= 0.0 {
+        return None;
+    }
+    let stride = sp + (sc - sp) * w.clamp(0.0, 1.0);
+    Some(rate * c.speed / stride)
 }
 
 #[cfg(test)]
