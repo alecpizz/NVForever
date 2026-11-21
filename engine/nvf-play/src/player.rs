@@ -388,6 +388,8 @@ impl Plugin for PlayerPlugin {
         app.add_plugins(crate::stance::StancePlugin);
         // Sprint (`crate::sprint`): between the frame's walk rules and the physics steps.
         app.add_plugins(crate::sprint::SprintPlugin);
+        // Modern Feel's switches (NVF Features › Modern Feel; the fork's experiment).
+        app.add_plugins(crate::modern_feel::ModernFeelPlugin);
         // The Advanced Movement section's switches kept here (NVF Features; Weapon Inertia and
         // Camera Motion are nvforever's `settings.rs`): the Global Toggle, then Gameplay's and
         // Animation Smoothing [design: the owner, 2026-11-15, the menu's names and order].

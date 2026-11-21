@@ -306,7 +306,19 @@ mod tests {
     /// resolution row, Gore Shake and #2670's Cloud shadows; #2661's mesh terrain blend row, the
     /// Quick Loot rows; #2965's heat haze row; #2675's desert haze row; Sprint; #2671's terrain
     /// shadows row), by the group it registers with.
-    const KNOWN: [(&str, &str); 140] = [
+    const KNOWN: [(&str, &str); 152] = [
+        ("modern-feel", "Gameplay"),
+        ("feel-hit-reactions", "Gameplay"),
+        ("feel-camera-kick", "Gameplay"),
+        ("feel-damage-direction", "Gameplay"),
+        ("feel-gun-audio", "Gameplay"),
+        ("feel-sound-occlusion", "Gameplay"),
+        ("feel-shell-casings", "Gameplay"),
+        ("feel-impact-effects", "Gameplay"),
+        ("feel-grounded-footsteps", "Gameplay"),
+        ("feel-npc-aim", "Gameplay"),
+        ("feel-volumetric-fog", "Gameplay"),
+        ("feel-motion-blur", "Gameplay"),
         ("detached-camera", "Gameplay"),
         ("gore-shake", "Gameplay"),
         ("advanced-movement", "Gameplay"),
@@ -648,7 +660,7 @@ mod tests {
         assert_eq!(keys(&list, &l, "Controls")[..6], ["[Input]", "@device", "button-style", "@automatic-input", "@rumble", ""]);
         assert_eq!(
             keys(&list, &l, NVF_FEATURES_TAB),
-            ["[Advanced Movement]", "advanced-movement", "movement-weight", "", "[Gameplay]", "movement-inertia", "weapon-handling", "advanced-recoil", "sprint", "", "[Visual Only]", "weapon-inertia", "animation-smoothing", "camera-motion", "", "[World Interaction]", "grass-fire", "", "[Quick Loot]", "quick-loot", "quick-loot-scale", "quick-loot-background", "quick-loot-weight", "quick-loot-value", "quick-loot-value-per-weight"]
+            ["[Advanced Movement]", "advanced-movement", "movement-weight", "", "[Gameplay]", "movement-inertia", "weapon-handling", "advanced-recoil", "sprint", "", "[Visual Only]", "weapon-inertia", "animation-smoothing", "camera-motion", "", "[World Interaction]", "grass-fire", "", "[Modern Feel]", "modern-feel", "", "[Combat Feel]", "feel-hit-reactions", "feel-camera-kick", "feel-damage-direction", "feel-shell-casings", "feel-impact-effects", "", "[Sound Feel]", "feel-gun-audio", "feel-sound-occlusion", "", "[Animation and Graphics]", "feel-grounded-footsteps", "feel-npc-aim", "feel-volumetric-fog", "feel-motion-blur", "", "[Quick Loot]", "quick-loot", "quick-loot-scale", "quick-loot-background", "quick-loot-weight", "quick-loot-value", "quick-loot-value-per-weight"]
         );
         assert_eq!(keys(&list, &l, "Debug"), ["overlay", "hit-markers", "god-mode", "navmesh", "terrain-wireframe", "scope-3d"]);
         assert!(keys(&list, &l, "Tweaks").is_empty(), "an empty tab is still a tab");

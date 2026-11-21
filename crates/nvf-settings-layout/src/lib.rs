@@ -72,7 +72,7 @@ pub const fn group_section(subgroup: &'static str, heading: &'static str, keys: 
 /// The rows the NVF Features tab may hold: only what the owner named there [design: owner
 /// 2026-11-15]. Adding a key needs the owner's word; a bigger gameplay change is offered to
 /// the owner for this tab, never moved here unasked (docs/design/settings-page.md).
-pub const NVF_FEATURES_KEYS: [&str; 16] = [
+pub const NVF_FEATURES_KEYS: [&str; 28] = [
     "advanced-movement",
     "movement-weight",
     "movement-inertia",
@@ -90,6 +90,19 @@ pub const NVF_FEATURES_KEYS: [&str; 16] = [
     "quick-loot-weight",
     "quick-loot-value",
     "quick-loot-value-per-weight",
+    // Modern Feel (the fork owner's experiment, feat/modern-feel, 2026-11-20).
+    "modern-feel",
+    "feel-hit-reactions",
+    "feel-camera-kick",
+    "feel-damage-direction",
+    "feel-gun-audio",
+    "feel-sound-occlusion",
+    "feel-shell-casings",
+    "feel-impact-effects",
+    "feel-grounded-footsteps",
+    "feel-npc-aim",
+    "feel-volumetric-fog",
+    "feel-motion-blur",
 ];
 
 /// Every named row's tab and category, in the order the page shows them [design: the
@@ -216,6 +229,11 @@ pub const SECTIONS: &[Section] = &[
     section(NVF_FEATURES_TAB, Some("Gameplay"), &["movement-inertia", "weapon-handling", "advanced-recoil", "sprint"]),
     section(NVF_FEATURES_TAB, Some("Visual Only"), &["weapon-inertia", "animation-smoothing", "camera-motion"]),
     section(NVF_FEATURES_TAB, Some("World Interaction"), &["grass-fire"]),
+    // Modern Feel (the fork owner's experiment, feat/modern-feel, 2026-11-20).
+    section(NVF_FEATURES_TAB, Some("Modern Feel"), &["modern-feel"]),
+    section(NVF_FEATURES_TAB, Some("Combat Feel"), &["feel-hit-reactions", "feel-camera-kick", "feel-damage-direction", "feel-shell-casings", "feel-impact-effects"]),
+    section(NVF_FEATURES_TAB, Some("Sound Feel"), &["feel-gun-audio", "feel-sound-occlusion"]),
+    section(NVF_FEATURES_TAB, Some("Animation and Graphics"), &["feel-grounded-footsteps", "feel-npc-aim", "feel-volumetric-fog", "feel-motion-blur"]),
     // The Quick Loot menu (docs/design/quick-loot.md) [design, #2933].
     section(NVF_FEATURES_TAB, Some("Quick Loot"), &["quick-loot", "quick-loot-scale", "quick-loot-background", "quick-loot-weight", "quick-loot-value", "quick-loot-value-per-weight"]),
     // The Tweaks tab (#1892), placed ahead of it: Stewie's Tweaks' groups, each in its
@@ -934,6 +952,17 @@ pub const SECTIONS: &[Section] = &[
 /// "rows that can't apply: grey them out"]. `crate::settings::Settings::disabled_status`
 /// reads it; a row of a missing module is passed over.
 pub const NEEDS: &[(&str, &str, &str)] = &[
+    ("feel-hit-reactions", "modern-feel", "Needs the Modern Feel Global Toggle."),
+    ("feel-camera-kick", "modern-feel", "Needs the Modern Feel Global Toggle."),
+    ("feel-damage-direction", "modern-feel", "Needs the Modern Feel Global Toggle."),
+    ("feel-gun-audio", "modern-feel", "Needs the Modern Feel Global Toggle."),
+    ("feel-sound-occlusion", "modern-feel", "Needs the Modern Feel Global Toggle."),
+    ("feel-shell-casings", "modern-feel", "Needs the Modern Feel Global Toggle."),
+    ("feel-impact-effects", "modern-feel", "Needs the Modern Feel Global Toggle."),
+    ("feel-grounded-footsteps", "modern-feel", "Needs the Modern Feel Global Toggle."),
+    ("feel-npc-aim", "modern-feel", "Needs the Modern Feel Global Toggle."),
+    ("feel-volumetric-fog", "modern-feel", "Needs the Modern Feel Global Toggle."),
+    ("feel-motion-blur", "modern-feel", "Needs the Modern Feel Global Toggle."),
     ("dialogue-recentre", "dialogue-look", "Needs Turn to Each Other."),
     ("volume-music", "music", "Needs Play Music."),
     ("volume-voice", "voice", "Needs Dialogue Voice."),

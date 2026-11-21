@@ -1397,6 +1397,86 @@ stretches drift downstream. Vanilla leaves the switch off. Enhanced turns it on.
   leave the area. Off: fire stays where it hits, as in the original.
 - Registered in `engine/nvf-play/src/grass_fire.rs`
 
+## NVF Features › Modern Feel
+
+### `modern-feel`: Global Toggle
+
+- On the page: On: the switches below modernize how fights look, sound and feel. Off: none of them acts, as in the original; each keeps its own choice.
+- On by default (the fork's Modern Feel experiment, feat/modern-feel).
+- Registered in `engine/nvf-play/src/modern_feel.rs`
+
+## NVF Features › Combat Feel
+
+### `feel-hit-reactions`: Hit reactions
+
+- On the page: On: a hit jolts the part of the body it strikes on top of what the actor is doing, and a killing shot throws the body with it.
+- On by default (the fork's Modern Feel experiment, feat/modern-feel).
+- Registered in `engine/nvf-play/src/modern_feel.rs`
+
+### `feel-camera-kick`: Camera kick
+
+- On the page: On: each shot kicks and rolls the view by the weapon's power and weight, then recovers; heavy shots punch the field of view.
+- On by default (the fork's Modern Feel experiment, feat/modern-feel).
+- Registered in `engine/nvf-play/src/modern_feel.rs`
+
+### `feel-damage-direction`: Damage direction
+
+- On the page: On: the HUD marks the direction a hit on you came from, and a kill plays a short confirming sound.
+- On by default (the fork's Modern Feel experiment, feat/modern-feel).
+- Registered in `engine/nvf-play/src/modern_feel.rs`
+
+### `feel-shell-casings`: Shell casings
+
+- On the page: On: spent cases fly from the gun, bounce and clink on the ground.
+- On by default (the fork's Modern Feel experiment, feat/modern-feel).
+- Registered in `engine/nvf-play/src/modern_feel.rs`
+
+### `feel-impact-effects`: Impact effects
+
+- On the page: On: muzzle smoke after shots and dust, chips and sparks where bullets strike, by the surface.
+- On by default (the fork's Modern Feel experiment, feat/modern-feel).
+- Registered in `engine/nvf-play/src/modern_feel.rs`
+
+## NVF Features › Sound Feel
+
+### `feel-gun-audio`: Layered gunshots
+
+- On the page: On: shots echo by the place: a rolling tail outdoors, a short slap indoors; far shots are duller and quieter.
+- On by default (the fork's Modern Feel experiment, feat/modern-feel).
+- Registered in `engine/nvf-play/src/modern_feel.rs`
+
+### `feel-sound-occlusion`: Sound occlusion
+
+- On the page: On: sounds behind walls and floors are muffled and quieter.
+- On by default (the fork's Modern Feel experiment, feat/modern-feel).
+- Registered in `engine/nvf-play/src/modern_feel.rs`
+
+## NVF Features › Animation and Graphics
+
+### `feel-grounded-footsteps`: Grounded footsteps
+
+- On the page: On: people and creatures step at the speed they move, keep their feet planted in turns and turn in place.
+- On by default (the fork's Modern Feel experiment, feat/modern-feel).
+- Registered in `engine/nvf-play/src/modern_feel.rs`
+
+### `feel-npc-aim`: NPC aim
+
+- On the page: On: armed people bend their spine and arms so their weapons point at what they shoot.
+- On by default (the fork's Modern Feel experiment, feat/modern-feel).
+- Registered in `engine/nvf-play/src/modern_feel.rs`
+
+### `feel-volumetric-fog`: Volumetric fog
+
+- On the page: On: sunlight and lamps light the haze and dust in the air, with shafts through gaps.
+- On by default (the fork's Modern Feel experiment, feat/modern-feel).
+- Registered in `engine/nvf-play/src/modern_feel.rs`
+
+### `feel-motion-blur`: Object motion blur
+
+- On the page: On: moving things blur by their own motion as well as the camera's.
+- On by default (the fork's Modern Feel experiment, feat/modern-feel).
+- Registered in `engine/nvf-play/src/modern_feel.rs`
+
 ## NVF Features › Quick Loot
 
 ### `quick-loot`: Enabled

@@ -63,6 +63,7 @@ pub mod furniture;
 pub mod grab;
 pub mod hitvol;
 pub mod inertia;
+pub mod modern_feel;
 pub mod holotape;
 pub mod interface;
 pub mod intro;
