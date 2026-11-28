@@ -82,20 +82,20 @@ type Shown = (
 );
 
 /// A bone's world position, by name.
-fn bone(rig: &ActorRig, globals: &Query<&GlobalTransform>, name: &str) -> Option<Vec3> {
+pub(crate) fn bone(rig: &ActorRig, globals: &Query<&GlobalTransform>, name: &str) -> Option<Vec3> {
     let &i = rig.skel.by_name.get(name)?;
     globals.get(*rig.nodes.get(i)?).ok().map(|g| g.translation())
 }
 
 /// The pelvis and the head (world space).
-fn pelvis_head(rig: &ActorRig, globals: &Query<&GlobalTransform>) -> Option<(Vec3, Vec3)> {
+pub(crate) fn pelvis_head(rig: &ActorRig, globals: &Query<&GlobalTransform>) -> Option<(Vec3, Vec3)> {
     Some((bone(rig, globals, "Bip01 Pelvis")?, bone(rig, globals, "Bip01 Head")?))
 }
 
 /// Whether the body lies face up: its front, (left upper arm − right upper arm) ×
 /// (head − pelvis) in game space (z up), points up. `None` for a skeleton without those
 /// bones.
-fn face_up(rig: &ActorRig, globals: &Query<&GlobalTransform>) -> Option<bool> {
+pub(crate) fn face_up(rig: &ActorRig, globals: &Query<&GlobalTransform>) -> Option<bool> {
     let g = |n: &str| bone(rig, globals, n).map(|p| Vec3::from(nvf_play::space::to_game(p)));
     let (l, r) = (g("Bip01 L UpperArm")?, g("Bip01 R UpperArm")?);
     let (p, h) = (g("Bip01 Pelvis")?, g("Bip01 Head")?);

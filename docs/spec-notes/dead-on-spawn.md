@@ -243,8 +243,22 @@ resting pose it feeds. Surveyed with a private script over FalloutNV.esm (not co
   out of the ground [observed: `dead-on-spawn` run, 2026-10-12]; before, they fell from the
   death pose.
 - Not checked against the original: whether its bodies show exactly this pose (no capture
-  taken). Creature corpses follow the same rule, checked only by the entry count against
-  their skeleton's bodies; `REFR` ragdolls (clutter skeletons): §5.1.
+  taken). `REFR` ragdolls (clutter skeletons): §5.1.
+- **Creature corpses** (#3408): the reading above does not hold for every skeleton
+  [observed 2026-11-25, the brahmin, `creatures\brahmin\skeleton.nif`, 31 bodies, root body
+  `Bip01 Spine0`, corpses 0x00094BCF in FalloutNV.esm and 0x0601D3CA in TTW's
+  Fallout3.esm]: entries 1 to 30 match their bone's bind translation under its parent node
+  within 0.2 units, except the two thighs (stored (0, ∓9.2, 0) against a bind (0, 0, ±9.3)
+  under `Bip01 Pelvis`, a body-less node, as if turned 90° about x) and `Bip01 Tail1`
+  (under `Bip01 Tail`, also body-less). So read, the Arefu dead brahmin (TTW) hung in the
+  air upside down and the Mojave's started up to 51 units under the ground. What the
+  entries of a bone under a body-less node mean is not worked out [hypothesis: another
+  frame than the parent node's]. **In NVForever** [design, #3408]: a stored pose is held
+  at rest only on a skeleton whose root body is `Bip01 NonAccum` (the human one, where
+  the reading was checked: `authored_pose::CHECKED_ROOT`); on any other the corpse starts
+  awake in that pose and settles under physics, as one lifted out of the ground already
+  did. The three Arefu brahmin then lie on their sides on the ground (trunk 22 to 24 units
+  over the lowest bone) [observed: same day].
 
 ### 5.1 Clutter skeletons (`REFR` with `XRGD`) [2026-10-16, playtest list 5 item 71]
 

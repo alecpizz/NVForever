@@ -478,12 +478,104 @@ fn batch_five_answers() {
     assert_eq!(n(&mut g, "(RefMapArrayGetValue \"*rm\" PlayerREF)[0]"), 5.0);
     assert_eq!(n(&mut g, "ar_Size (RefMapArrayGetValue \"*rm\" NpcRef)"), -1.0, "no value: no array");
     assert_eq!(n(&mut g, "ar_Size (PlayerREF.GetEquippedArmorRefs)"), 0.0);
-    assert_eq!(n(&mut g, "NpcRef.HasActionRef"), 1.0);
+    assert_eq!(n(&mut g, "PlayerREF.HasActionRef"), 0.0, "standing player has no active action state");
+    assert_eq!(n(&mut g, "NpcRef.HasActionRef"), 0.0, "standing NPC without furniture/action state returns 0");
     assert_eq!(n(&mut g, "BoxRef.HasActionRef"), 0.0);
     assert_eq!(n(&mut g, "GetRaceVoice TestGun 0"), 0.0, "not a race");
     for call in ["SetWindSpeedMult 1", "ResetClouds", "NpcRef.ToggleNoZPosReset 0", "SuppressQuestMessages", "EnableImprovedRecipeMenu"] {
         assert_eq!(n(&mut g, call), 0.0, "{call}");
     }
+}
+
+#[test]
+fn has_action_ref_tracks_active_action_furniture_and_scripted_doors() {
+    use fnv_game::game::FurnitureUse;
+
+    const SCPT_DOOR: u32 = 0x950;
+    const DOOR_SCR: u32 = 0x951;
+    const DOOR_PLAIN: u32 = 0x952;
+    const DOOR_SCR_REF: u32 = 0x953;
+    const DOOR_PLAIN_REF: u32 = 0x954;
+    const FURN_BASE: u32 = 0x955;
+    const FURN_REF: u32 = 0x956;
+
+    let mut raw = plugin_bytes();
+    let scpt = edid(b"SCPT", SCPT_DOOR, "TestDoorScript", &unit(0, &script(&[(0x0002, None, Vec::new())]), &[], &[]));
+    let doors = [
+        edid(b"DOOR", DOOR_SCR, "TestScriptedDoor", &[sub(b"SCRI", SCPT_DOOR.to_le_bytes().to_vec())]),
+        edid(b"DOOR", DOOR_PLAIN, "TestPlainDoor", &[]),
+    ]
+    .concat();
+    let furn = edid(b"FURN", FURN_BASE, "TestChair", &[]);
+    let extra_refs = [
+        placed(b"REFR", DOOR_SCR_REF, "ScriptedDoorRef", DOOR_SCR, [10.0, 0.0, 0.0]),
+        placed(b"REFR", DOOR_PLAIN_REF, "PlainDoorRef", DOOR_PLAIN, [20.0, 0.0, 0.0]),
+        placed(b"REFR", FURN_REF, "ChairRef", FURN_BASE, [30.0, 0.0, 0.0]),
+    ]
+    .concat();
+    let extra_cell = edid(b"CELL", 0x201, "HasActionCell", &[sub(b"FULL", z("Action Room")), sub(b"DATA", vec![1])]);
+    let extra_children = group(0x201u32.to_le_bytes(), 6, &group(0x201u32.to_le_bytes(), 9, &extra_refs));
+    raw.extend_from_slice(&top(b"SCPT", &scpt));
+    raw.extend_from_slice(&top(b"DOOR", &doors));
+    raw.extend_from_slice(&top(b"FURN", &furn));
+    raw.extend_from_slice(&top(b"CELL", &group(0i32.to_le_bytes(), 2, &group(0i32.to_le_bytes(), 3, &[extra_cell, extra_children].concat()))));
+
+    let plugins = vec![Plugin::parse(&raw, "HasAction.esm".into()).unwrap()];
+    let lo = LoadOrder::new(&plugins).unwrap();
+    let schema = Schema::load_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../../schemas/fnv")).unwrap();
+    let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schemas/script/functions.json");
+    let j: Json = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+    let table = FunctionTable::load(&p).unwrap();
+    let forms = FormStore::build(&lo, &schema);
+    let refs = RefTable::build(&lo, &schema);
+    let data = GameData::build(&lo, &schema, table, &j, &refs);
+    assert_eq!(data.script_of_base(FormId(DOOR_SCR)), Some(FormId(SCPT_DOOR)), "synthetic door script must be admitted");
+    let mut g = Game::new(&data, World::new(&forms, &refs, SimConfig::default()), GameConfig::default());
+
+    // Standing Player, standing NPC, unscripted door, furniture, and container all return 0.
+    assert_eq!(n(&mut g, "PlayerREF.HasActionRef"), 0.0);
+    assert_eq!(n(&mut g, "NpcRef.HasActionRef"), 0.0);
+    assert_eq!(n(&mut g, "PlainDoorRef.HasActionRef"), 0.0);
+    assert_eq!(n(&mut g, "ChairRef.HasActionRef"), 0.0);
+    assert_eq!(n(&mut g, "BoxRef.HasActionRef"), 0.0);
+
+    // Scripted door returns 1 (generalizing observed front door 0x00103E61;
+    // see docs/spec-notes/ext-unlisted-rest.md).
+    assert_eq!(n(&mut g, "ScriptedDoorRef.HasActionRef"), 1.0);
+
+    // Actor sitting in furniture returns 1, then returns 0 upon standing up
+    // [observed: w4c_a03c_has_action_ref_doc_real].
+    g.set_furniture_use(FormId(NPC_REF), Some(FurnitureUse { reference: FormId(FURN_REF), marker_id: 0, state: 3 }));
+    assert_eq!(n(&mut g, "NpcRef.HasActionRef"), 1.0);
+    g.set_furniture_use(FormId(NPC_REF), None);
+    assert_eq!(n(&mut g, "NpcRef.HasActionRef"), 0.0);
+
+    // Freshly spawned/idle NPC transitions 0 -> 1 once an AI package becomes active
+    // (generalizing `spawn(0,1)` in w4d_02_has_action_ref_triggers; see docs/spec-notes/ext-unlisted-rest.md),
+    // while Player stays 0.
+    g.extra.entry(FormId(NPC_REF)).or_default().current_package = Some(FormId(0x999));
+    assert_eq!(n(&mut g, "NpcRef.HasActionRef"), 1.0);
+    assert_eq!(n(&mut g, "PlayerREF.HasActionRef"), 0.0);
+    g.extra.entry(FormId(NPC_REF)).or_default().current_package = None;
+    assert_eq!(n(&mut g, "NpcRef.HasActionRef"), 0.0);
+
+    // Unscripted door starts at 0, acquires HasActionRef = 1 upon `Activate Player 1`, and
+    // retains 1 on the next tick [observed: w4d_02_has_action_ref_triggers (#3802 / PR #3803):
+    // `unscr(001062AC:0,1,1)`]. Container acquires 1 upon `Activate Player 1` (in the original
+    // game `cont(001062C6:0,1,0)` clears to 0 once ContainerMenu closes; NVForever's headless
+    // `action_refs` entry retains 1 until cleared; see docs/spec-notes/ext-unlisted-rest.md).
+    assert_eq!(n(&mut g, "PlainDoorRef.HasActionRef"), 0.0);
+    q(&mut g, "PlainDoorRef.Activate PlayerREF 1");
+    assert_eq!(n(&mut g, "PlainDoorRef.HasActionRef"), 1.0);
+    g.tick();
+    assert_eq!(n(&mut g, "PlainDoorRef.HasActionRef"), 1.0, "unscripted door retains HasActionRef next tick");
+
+    assert_eq!(n(&mut g, "BoxRef.HasActionRef"), 0.0);
+    q(&mut g, "BoxRef.Activate PlayerREF 1");
+    assert_eq!(n(&mut g, "BoxRef.HasActionRef"), 1.0);
+    g.tick();
+    assert_eq!(n(&mut g, "BoxRef.HasActionRef"), 1.0, "container retains headless action_refs entry");
+    assert_eq!(n(&mut g, "ScriptedDoorRef.HasActionRef"), 1.0, "scripted door remains 1");
 }
 
 #[test]

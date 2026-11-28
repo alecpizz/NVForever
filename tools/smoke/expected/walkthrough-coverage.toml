@@ -16,10 +16,15 @@ completed = 166
 
 [summary.stages]
 total = 1405
-reached = 941
+# 941 -> 940 (missing_settable 102 -> 103): VMQTops 45, Benny's escape passage, is no longer
+# reached. 6136429a9 (round 15 chain fixes) took the passage's trigger out of
+# fail-benny-fled: talked out of the ambush, Benny is disabled by his line's script and only
+# his flee package unlocks the passage's elevator, so a player on that path finds it locked
+# (the chain's note); the passage's end in 2EOVault21 has no navmesh either. #3522.
+reached = 940
 settable = 1043
 by_variable = 0
-missing_settable = 102
+missing_settable = 103
 missing_by_variable = 0
 reached_unsettable = 0
 set_calls_quest_by_variable = 0
@@ -34,7 +39,14 @@ total = 3488
 # teacher and Dog say the extra lines. Every chain's own mq-* scenario passes.
 # 1194 -> 1195: #2687's new chain there-stands-the-grass-spore-purge (Keely's line 0x000F43F8 said,
 # V22TrapGasSCRIPT 0x000EF405's OnHitWith and OnDestructionStageChange run on the purge gas).
-touched = 1195
+# 1195 -> 1208 (blocks.run 1649 -> 1662, lines.said 2491 -> 2507, actors.touched 268 -> 269,
+# results info 1666 -> 1673, terminal 46 -> 48): a rise measured on main 21c22cbe2 against
+# 807cf2304 (1203 / 1657 there, #3522), from the merges since the last update (the quest
+# pilot's chain stand-ins among them); written as measured, each chain's mq-* scenario keeps
+# its own milestones.
+# lines.said 2507 -> 2508, results info 1673 -> 1675 (#1113): that-lucky-old-sun says goodbye
+# to Fantastic, whose GOODBYE line 0x000E360D (begin and end scripts) gives the password note.
+touched = 1208
 
 [summary.blocks]
 total = 5690
@@ -47,7 +59,7 @@ total = 5690
 # (+4) and Mobius's (+3) lines, and NVDLC03MobiusIntercomSCRIPT runs one more block.
 # 1647 -> 1649: #2687's new chain there-stands-the-grass-spore-purge (Keely's line 0x000F43F8 said,
 # V22TrapGasSCRIPT 0x000EF405's OnHitWith and OnDestructionStageChange run on the purge gas).
-run = 1649
+run = 1662
 
 [summary.lines]
 total = 28896
@@ -70,20 +82,20 @@ total = 28896
 # same with and without the change [measured 2026-11-14, lonesome-road-launch, fnvtool script run].
 # 2489 -> 2491: #2687's new chain there-stands-the-grass-spore-purge (Keely's line 0x000F43F8 said,
 # V22TrapGasSCRIPT 0x000EF405's OnHitWith and OnDestructionStageChange run on the purge gas).
-said = 2491
+said = 2508
 
 [summary.actors]
 with_lines = 704
 # 267 -> 268: #2687's new chain there-stands-the-grass-spore-purge (Keely's line 0x000F43F8 said,
 # V22TrapGasSCRIPT 0x000EF405's OnHitWith and OnDestructionStageChange run on the purge gas).
-touched = 268
+touched = 269
 
 [summary.results.info]
 total = 8639
 # 1662 -> 1663: the begin script of ED-E's first greeting (EnablePlayerControls, #2378).
 # 1663 -> 1666: #2687's new chain there-stands-the-grass-spore-purge (Keely's line 0x000F43F8 said,
 # V22TrapGasSCRIPT 0x000EF405's OnHitWith and OnDestructionStageChange run on the purge gas).
-run = 1666
+run = 1675
 
 [summary.results.package]
 total = 558
@@ -95,7 +107,7 @@ run = 830
 
 [summary.results.terminal]
 total = 384
-run = 46
+run = 48
 
 [summary.untouched_quests]
 main = 4

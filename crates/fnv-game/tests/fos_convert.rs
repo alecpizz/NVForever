@@ -3888,8 +3888,8 @@ fn v5_destructible_intermediate_stage_0x56_hp_and_hypothesis_field_tracking() {
         ROOM_ID,      // 1
         DEST_MID_REF, // 2 (intermediate non-destroy stage: 0x56=40.0 + 0x5B=stage 0, NO FORM_DESTROYED)
         DEST_REF,     // 3 (destroyed stage: 0x56=0.0 + 0x5B=stage 1 with DESTROY flag, NO FORM_DESTROYED)
-        TERM_REF,     // 4 (0x50 0xFE script-unlock [hypothesis])
-        PGRE_REF,     // 5 (bit-3 cell-change placement [hypothesis])
+        TERM_REF,     // 4 (0x50 0xFE script-unlock; see docs/spec-notes/save-files.md)
+        PGRE_REF,     // 5 (bit-3 cell-change placement; see docs/spec-notes/save-files.md)
     ];
 
     let mut h = Build { b: Vec::new() };

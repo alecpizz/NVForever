@@ -26,11 +26,61 @@ from NVIDIA: see [docs/dlss.md](docs/dlss.md).
 - **Mod Organizer 2:** add `nvforever.exe` to MO2's executables (the drop-down beside
   **Run**, then **<Edit…>**) and start it from there. It loads the plugins ticked in MO2,
   in MO2's order, and the game folder MO2 manages. See
-  [docs/mod-organizer-2.md](docs/mod-organizer-2.md).
+  [docs/mod-organizer-2.md](docs/mod-organizer-2.md). `--mo2` only reads that instance.
 - **Without a mod manager:** put the mod in the game's `Data` folder, then turn its plugin
   on in `Documents\My Games\NVForever\plugins.txt` with a `*` in front of its line. The
   order of the lines is the load order. NVForever keeps its own list, so the original
-  game's mod list is not changed.
+  game's mod list is not changed. A plugin, archive, or loose file in `Data` is still read.
+
+The launcher's Mods page is its own manager. Mod folders live in the launcher
+home's `mods` folder, not in the game folder: `Documents\My Games\NVForever\mods`
+on Windows, `~/.local/share/nvforever/mods` on Linux, or under `NVFOREVER_HOME`
+when it is set.
+
+- Drop a folder or an archive on the mod list. An installer that needs a choice
+  opens its own window. New plugins from that folder appear in the list.
+- Drag a folder to move it. The bottom checked folder wins when two share a file.
+  **Conflicts** marks a shared file green when this folder's copy is used, and red
+  when a lower folder's copy wins (**Hide conflicts** turns the marks off).
+- Drag plugins the same way. **Apply** writes the plugin list and the folder
+  order the launcher uses. It does not link or copy files into the game folder.
+  The base game and a mod installed in `Data` are still read from there. A file
+  of the same name in the mods folder is the one opened.
+
+A profile is a name you type, plus the folder order and the plugin order on the
+page. The name is one folder name, not a path.
+
+- **Save** updates the open profile. **Add profile**, or Enter in the name, stores
+  the same lists under that name in `profiles` next to the mods folder, and asks
+  before it replaces one that already exists. There is no save-location picker.
+  **Save backup** keeps a dated copy of the mod list and the load order.
+  Lowering how many are kept asks before the oldest backups are deleted.
+  The mods themselves stay. **Load backup** writes that copy into a profile.
+  None of these copy mod files.
+  A profile folder holds:
+  - `modlist.txt` — one mod a line, in Mod Organizer 2's form, so MO2 can read it.
+    `+` is enabled, `-` is disabled, and a separator is `-Name_separator`.
+    Right-click a row for a separator above or below it. Double-click a separator to
+    rename it. The winning mod is first in the file. The page shows that mod last.
+  - `locks.txt` — the locked mods, one a line (MO2's list has no lock mark).
+  - `plugins.txt` — plugins that are enabled, a `*` before the name.
+  - `loadorder.txt` — every plugin on the page, first loaded first.
+  - `note.txt` — the note on the profile.
+  - `archives.txt` — archive names stored with the profile, one a line.
+- **Load** puts that profile's mod list and load order on the page. It does not
+  copy a mod. Profiles are saved only in the launcher's `profiles` folder. A
+  profiles folder dropped on the path line (an older instance's) can be read and
+  loaded, and nothing is written into it.
+
+**Apply** and **Load** do not write the game `Data` folder. Loose files in the
+launcher's Overwrite folder become a mod from the mod list's right-click menu,
+**Make mod below**. The new mod sits under that row. The game folder is not
+used. Reading another program's instance with `--mo2` stays read-only.
+
+You can still drop an archive onto the Mods page. **Quick Install** opens.
+OK uses the archive as it is. Manual lists the files, and `<data>` is the
+folder that becomes the mod. Nothing is copied until OK, and it is not copied
+into Data.
 
 Script extenders (xNVSE, JIP LN, JohnnyGuitar and several smaller ones) are built into the
 engine: their script functions run without the plugin `.dll` files, which NVForever never
@@ -44,6 +94,16 @@ Needs [Rust](https://rustup.rs) and Python 3.11+.
 cd engine
 cargo run --release --bin nvforever -- --data "<path to Fallout New Vegas>/Data"
 ```
+
+The launcher is a separate program, from the repository root:
+
+```bash
+cargo build --release --locked -p nvf-launcher
+```
+
+The program is `target/release/nvforever-launcher` (`nvforever-launcher.exe` on Windows).
+
+Experimental Android source builds: [docs/android.md](docs/android.md) (device qualification pending).
 
 More: [docs/development.md](docs/development.md) (build, test, options, tools) ·
 [docs/status.md](docs/status.md) (what's built and what's left) ·

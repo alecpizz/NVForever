@@ -441,7 +441,7 @@ pub fn menu_event(cmd: Command, before: &MenuBefore, after: &MenuModel, a: &Appl
         Command::Select(..) if acted_on_selected => act(after, before, a),
         Command::Up | Command::Down | Command::PageUp | Command::PageDown | Command::Scroll(_) | Command::Focus(_) | Command::Select(..) | Command::Hover(..) => moved().then_some(UiEvent::Focus),
         Command::Category(..) => (after.category != before.category).then_some(UiEvent::Switch),
-        Command::One | Command::Stack => act(after, before, a),
+        Command::One | Command::OneSingle | Command::Stack => act(after, before, a),
         // Ok on "How many?": what asked is done now (a drop sounds when it lands).
         Command::AmountOk if !matches!(after.mode, Mode::Inventory) => act(after, before, a),
         Command::TakeAll if matches!(after.mode, Mode::Container(_)) => Some(if a.changed { UiEvent::TakeAll } else { UiEvent::Refused }),

@@ -1316,6 +1316,10 @@ From the ESM audit (docs/handoff/esm-full-audit-2026-10-24.md, gaps 7, 15, 17). 
     high-pass and a 3,200 Hz low-pass would take 3 dB at 350 Hz and about 8 dB at 5 kHz.
     The tilt is unexplained (the room, the game's mix) [hypothesis]; no band filter is
     applied to the line. Above 6 kHz the file holds too little to measure.
+    2026-11-27 (#4486): with a face-to-face control in the same room, which played flat, the
+    same tilt came back through the REPCONN intercom. So it comes with the talking
+    activator [observed], a mild EQ rather than a band; the dry file 0x000CECF7 is still to
+    record (observer check 4486-talking-activator-voice-eq).
   - *Built*: a talking activator's lines play as their files; the voice filter is only for
     armour that modulates the voice. The TACT "No Voice Filter" flag is read but changes
     nothing heard [hypothesis: it may name the pre-processing done to the files, or

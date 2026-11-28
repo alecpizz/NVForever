@@ -1,5 +1,21 @@
 # Spec note: weapon mods
 
+## Android touch presentation (source increment)
+
+[design] The compact Android maintenance sheet follows the touch ownership and
+late-confirmation contract in `repair.md`, "Android touch presentation". It reuses
+the existing mod session's offered slots, installed flags, effect descriptions
+and attach/detach rules. A row tap selects only; a separate Install or
+Remove confirmation acts on the painted weapon unit and mod choice. Back and
+Cancel consume no mod. List scroll does not silently select or install a choice.
+
+[design] A refreshed weapon, mod count, slot/installed state, session, modal or
+input owner invalidates an old confirmation before the existing mod consumer
+changes inventory. A successful action refreshes the actual session; it does not
+predict effects in a disconnected display model. Native-file and hand-built menu
+configurations use the same alternate mobile sheet, while their existing hardware
+input behavior is preserved. Source/App/device validation are reported separately.
+
 Tags as in `nif.md`: `[documented]` cites a page or file, `[observed]` says what was
 looked at, `[hypothesis]` is a reading that nothing has confirmed yet. `[design]` marks
 what is NVForever's own.
@@ -445,11 +461,12 @@ for each effect, and how it fits a long description.
   and 13 (`ZNAM`) with `GetWeaponSound` / `SetWeaponSound`, while keeping `SetPickupSound`
   and `SetPutdownSound`'s observed rule that a null sound leaves the existing sound intact
   [observed: `plugins2`].
-- **`TempCloneForm` isolation**: cloning a `WEAP` snapshots any active session overrides
-  (both replacements and clears) onto the clone (`Game::snapshot_weapon_sounds`), so
-  pre-clone edits carry over while later edits on the original or the clone stay isolated
-  [design, matching `TempCloneForm` sound-trait isolation]. `TempCloneForm` `SOUN` aliases
-  are accepted as valid replacement sounds.
+- **`TempCloneForm` isolation**: cloning a `WEAP` carries over any active session
+  overrides (both replacements and clears) onto the clone while later edits on the
+  original or the clone stay isolated, and `TempCloneForm` `SOUN` aliases are accepted
+  as valid replacement sounds [hypothesis: external JIP LN / xNVSE `TempCloneForm`
+  behavior not yet directly probed on `WEAP` sound slots]. NVForever implements this
+  snapshot internally via `Game::snapshot_weapon_sounds` [design].
 - **Consumer view**: `fnv_game::Game::weapon_sound`, `Game::weapon_sound_override`,
   `Game::set_weapon_sound`, `Game::weapon_sound_changes`, and `Game::weapon_sound_stamp`
   expose the effective and session-changed weapon sound slots in the same pattern as

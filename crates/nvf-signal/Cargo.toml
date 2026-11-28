@@ -1,0 +1,16 @@
+[package]
+name = "nvf-signal"
+description = "Co-op matchmaking, the game's side: lobby codes, the wire messages of coop.nv-forever.com (REST and WebSocket), sans-IO host and guest state machines, and an in-process stand-in service for tests and self-hosting (#3795 sections 5 and 6)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+nvf-nat = { path = "../nvf-nat" }
+serde.workspace = true
+serde_json.workspace = true
+# Lobby password hashes (wire::password_hash). MIT/Apache-2.0.
+sha2 = "0.10"
+
+[dev-dependencies]
+nvf-nat = { path = "../nvf-nat", features = ["natsim"] }

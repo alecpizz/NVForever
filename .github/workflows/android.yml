@@ -1,0 +1,116 @@
+name: android-test-apk
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'android/**'
+      - 'engine/nvf-android/**'
+      - 'tools/android/**'
+      - '.github/workflows/android.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: engine -> target-android
+          shared-key: android-arm64-dev
+      - name: Java 17 and pinned Android SDK/NDK
+        shell: bash
+        run: |
+          echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-35' 'build-tools;35.0.1' 'ndk;28.2.13676358'
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
+      - name: Verified Gradle 8.11.1
+        shell: bash
+        run: |
+          curl --fail --location --retry 3 https://services.gradle.org/distributions/gradle-8.11.1-bin.zip --output "$RUNNER_TEMP/gradle.zip"
+          echo "f397b287023acdba1e9f6fc5ea72d22dd63669d59ed4a289a29b1a76eee151c6  $RUNNER_TEMP/gradle.zip" | sha256sum --check
+          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gradle-8.11.1/bin" >> "$GITHUB_PATH"
+      - name: Import and APK tooling controls
+        shell: bash
+        run: |
+          python3 -m unittest discover -s tools/android/tests
+          "$JAVA_HOME/bin/java" -Djava.awt.headless=true tools/android/LauncherIcons.java --check
+          mkdir -p "$RUNNER_TEMP/java-tests"
+          "$JAVA_HOME/bin/javac" -d "$RUNNER_TEMP/java-tests" android/app/src/main/java/org/nvforever/android/InstallConfig.java android/app/src/test/java/org/nvforever/android/InstallConfigTest.java
+          "$JAVA_HOME/bin/java" -cp "$RUNNER_TEMP/java-tests" org.nvforever.android.InstallConfigTest
+      - name: Loading handoff, gyro math, markdown, updater and thermal state controls
+        shell: bash
+        run: |
+          "$JAVA_HOME/bin/javac" -encoding UTF-8 -d "$RUNNER_TEMP/java-tests" android/app/src/main/java/org/nvforever/android/HandoffCoordinator.java android/app/src/main/java/org/nvforever/android/LoadingState.java android/app/src/main/java/org/nvforever/android/GyroMotion.java android/app/src/main/java/org/nvforever/android/PerformanceThermals.java android/app/src/main/java/org/nvforever/android/MarkdownParser.java android/app/src/main/java/org/nvforever/android/UpdatePolicy.java android/tests/HandoffCoordinatorTest.java android/tests/GyroMotionTest.java android/tests/AndroidPerformanceTest.java android/tests/MarkdownParserTest.java android/tests/UpdatePolicyTest.java
+          for control in HandoffCoordinatorTest GyroMotionTest AndroidPerformanceTest MarkdownParserTest UpdatePolicyTest; do
+            "$JAVA_HOME/bin/java" -cp "$RUNNER_TEMP/java-tests" "org.nvforever.android.$control"
+          done
+      - name: Independent native-window loading cover controls
+        shell: bash
+        run: |
+          "$JAVA_HOME/bin/javac" -encoding UTF-8 -source 17 -target 17 -cp "$ANDROID_HOME/platforms/android-35/android.jar" -d "$RUNNER_TEMP/cover-tests" android/app/src/main/java/org/nvforever/android/LoadingUi.java android/app/src/main/java/org/nvforever/android/LoadingState.java android/app/src/main/java/org/nvforever/android/HandoffCoordinator.java android/app/src/main/java/org/nvforever/android/LoadingReveal.java android/tests/LoadingWindowTest.java android/tests/LoadingRevealTest.java
+          "$JAVA_HOME/bin/java" -cp "$RUNNER_TEMP/cover-tests" org.nvforever.android.LoadingWindowTest
+          timeout 30s "$JAVA_HOME/bin/java" -cp "$RUNNER_TEMP/cover-tests" org.nvforever.android.LoadingRevealTest
+      - name: Cross-check engine and authored input tests
+        shell: bash
+        run: python3 tools/android/build.py --check --tests --jobs 2
+      - name: Android launcher consumer controls
+        shell: bash
+        run: cargo test -p nvf-launcher --no-default-features --features mobile --lib --locked --jobs 2 mobile::tests
+      - name: Skinning WESL, SPIR-V and matrix layout controls
+        shell: bash
+        run: cargo test --manifest-path tools/android/skinning-check/Cargo.toml --target-dir target-android-cpu --locked --jobs 6
+      - name: Build the signed development APK
+        shell: bash
+        run: python3 tools/android/build.py --jobs 2
+      - name: Build the unsigned release package and verify Android privacy policy
+        shell: bash
+        run: |
+          gradle -p android --no-daemon --max-workers=2 :app:lintDebug :app:assembleRelease
+          tools="$ANDROID_HOME/build-tools/35.0.1"
+          debug=android/app/build/outputs/apk/debug/app-debug.apk
+          release=android/app/build/outputs/apk/release/app-release-unsigned.apk
+          "$tools/apksigner" verify --verbose "$debug"
+          for apk in "$debug" "$release"; do
+            manifest=$("$tools/aapt2" dump xmltree --file AndroidManifest.xml "$apk")
+            grep -Eq '^[[:space:]]*A: (http://schemas\.android\.com/apk/res/)?android:usesCleartextTraffic\(0x010104ec\)=false[[:space:]]*$' <<< "$manifest"
+            if grep -Eq 'android:networkSecurityConfig|DIAGNOSTICS_REQUESTED' <<< "$manifest"; then
+              echo "Unexpected network security override or private test metadata: $apk" >&2
+              exit 1
+            fi
+          done
+          python3 tools/android/verify_apk.py "$debug" > android-apk-verification.json
+          python3 tools/android/verify_apk.py "$release" > android-release-apk-verification.json
+          expected=$(sha256sum engine/nvf-play/assets/dialogue/classic.png | cut -d ' ' -f 1)
+          actual=$(python3 -c 'import json, sys; print(json.load(sys.stdin)["classicCasingSha256"])' < android-apk-verification.json)
+          if [[ "$actual" != "$expected" ]]; then
+            echo "Packaged Classic artwork SHA-256 $actual does not match source $expected" >&2
+            exit 1
+          fi
+      - name: Verify the packaged launcher JNI entry point
+        shell: bash
+        run: |
+          unzip -p android/app/build/outputs/apk/debug/app-debug.apk lib/arm64-v8a/libnvf_android.so > "$RUNNER_TEMP/libnvf-launcher-check.so"
+          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" --dynamic --defined-only "$RUNNER_TEMP/libnvf-launcher-check.so" |
+            grep -E ' T Java_org_nvforever_android_MobileLauncher_request$'
+      - uses: actions/upload-artifact@v7
+        with:
+          name: NVForever-Android-arm64-test
+          path: |
+            android/app/build/outputs/apk/debug/app-debug.apk
+            android-apk-verification.json
+            android-release-apk-verification.json
+          if-no-files-found: error

@@ -240,10 +240,12 @@ fn caster_candidates(
     // the slots (a few dozen), not by going over every entity with a place.
     let out = &mut *out;
     out.lights.clear();
-    for &e in hold.slots.keys().chain(hold.spot_slots.keys()) {
+    // (The far texture's lamps too: left out until 2026-11-25, they fell back to the search
+    // of every caster on each draw.)
+    for &e in hold.slots.keys().chain(hold.far_slots.keys()).chain(hold.spot_slots.keys()) {
         let Ok((t, point, spot)) = lights.get(e) else { continue };
         let (on, range) = match (point, spot) {
-            (Some(p), _) if hold.slots.contains_key(&e) => (p.shadow_maps_enabled, p.range),
+            (Some(p), _) if hold.slots.contains_key(&e) || hold.far_slots.contains_key(&e) => (p.shadow_maps_enabled, p.range),
             (None, Some(s)) if hold.spot_slots.contains_key(&e) => (s.shadow_maps_enabled, s.range),
             _ => continue,
         };

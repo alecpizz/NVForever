@@ -772,6 +772,31 @@ average either way, but 60–140 in the original. A container's CNTO count is ta
     does not block the ray [hypothesis]. Nor does the Invisible Wall layer (27): "the
     player can activate / loot objects through this layer" [documented: GECK wiki
     "Collision layer", INVISIBLE WALL; #1602, docs/spec-notes/cells-refs.md].
+  - **Inside the target** (#3351; `activate/pick.rs` `choose_inside`): when the target
+    chosen so has a render box, an activatable reference the ray reaches within that box
+    takes its place: its collision hit lying between the box's entry and exit, or its own
+    box (not a rough one) lying wholly between them, the nearest first, and so on inwards
+    [design]. What a collision hit hides stays hidden, so a closed door or lid covers
+    what is behind it. The case: the open locker in the Sloan barracks (QJLocker01
+    0x000E7610, `clutter\lockercabinet02.nif`, a CONT at 2736.6, -735.1, 16282.8) with a
+    first aid kit (0x000E7612, a CONT with collision of its own, at 2774.2, -736.6,
+    16359.6) on its upper shelf and Duck and Cover! (0x000E7613, at 2771.6, -731.4,
+    16324.6) with burned books on the lower one [observed: `fnvtool world refs --cell
+    0x000E5CCE`, FalloutNV.esm]. The locker's collision is hollow: rays from 135 units
+    in front, straight in, hit the kit at 132.5 units, a burned book (0x000E7615) at
+    125.3, the back wall at 149.2 where a shelf is empty, and the closed half's door at
+    114.6 [observed: `fnvtool phys cell --cell 0x000E5CCE --ray 2774,-600,16362,0,-1,0,400`
+    and the same at x 2756 and 2771 with z 16327, and x 2700]. The ray enters the
+    locker's own render box at its front, before anything on the shelves, so by the
+    nearest rule alone the locker was always the target [observed: player reports
+    R-BHSP2X8C and R-C6VJTJFT]. What the original picks there is not captured
+    [hypothesis: the things on an open shelf, as the reports expect]. Only a container
+    gives way to anything inside it; an activator gives way only to an item (a reference
+    whose prompt is Take) lying in its box, never to another activator (#3323) [design,
+    #3937]. The case: a note on top of a table radio (0x0301057F) in an Old World Blues
+    interior (0x030086CB); the radio's box reaches over the note, so the radio was the
+    target wherever the crosshair was on the note [observed: player report R-FQ39PUHZ,
+    every pick `target 0x0301057F Radio (Activate) by Bounds at 55-87`].
   - **Talking through bars** (#3233; `engine/nvf-play/src/activate/see_through.rs`): when
     the ray's first hit is a reference's collision on a see-through layer, Transparent (3),
     Transparent Small (26) or Transparent Small Anim (28), and nothing is offered (no

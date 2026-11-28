@@ -314,6 +314,10 @@ fn response_text(g: &Game) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
+pub(crate) fn observe_classic(state: &mut crate::dialogue_touch::classic_state::State, game: &Game) {
+    state.observe(game, response_text);
+}
+
 /// The subtitle of the response being said in the conversation: "Speaker: text".
 pub fn subtitle(g: &Game, sim: &SimState) -> Option<String> {
     let c = g.dialogue.as_ref()?;
@@ -705,12 +709,15 @@ pub struct ViewInput {
     pub pick: Option<usize>,
     /// A click meant to skip the line being said.
     pub skip: bool,
+    /// A quick-exit action (such as tapping the Pip-Boy power button) that leaves
+    /// dialogue only when a normal exit/goodbye option is available.
+    pub leave: bool,
 }
 
 impl ViewInput {
     /// This input if it was for the list `now`, else nothing: the list on screen was replaced
     /// after the view read it.
-    fn for_list(self, now: Option<&ListId>) -> ViewInput {
+    pub(crate) fn for_list(self, now: Option<&ListId>) -> ViewInput {
         if self.list.as_ref() == now {
             self
         } else {
@@ -804,11 +811,20 @@ pub(crate) fn input(
     mut script: ResMut<ScriptState>,
     mut sim: ResMut<SimState>,
     mut view_input: ResMut<ViewInput>,
+    touch: Option<ResMut<crate::dialogue_touch::TouchFrame>>,
+    classic: Option<ResMut<crate::dialogue_touch::classic_state::State>>,
+    classic_menus: crate::dialogue_touch::classic_state::Menus,
 ) {
     let keys = keys.snapshot();
     use KeyCode::*;
     // Taken whatever happens below: what a view asked is for this frame only.
-    let asked = std::mem::take(&mut *view_input);
+    let mut asked = std::mem::take(&mut *view_input);
+    let touch_active = touch.as_ref().is_some_and(|t| t.active);
+    let mut barter = false;
+    if let Some(mut touch) = touch.filter(|t| t.active) {
+        barter = std::mem::take(&mut touch.barter);
+        asked = std::mem::take(&mut touch.asked);
+    }
     // Like the scripts: not under the pause menu, not before the player stands in the
     // world.
     if paused.0 || phys.player.is_none() {
@@ -818,7 +834,19 @@ pub(crate) fn input(
     let st = &mut *script;
     // The aids' clock: it goes on while the picture stands still (`crate::pause`).
     let now = time.0.elapsed_secs();
+    if barter && st.held {
+        return;
+    }
     let Some(rt) = st.rt.as_mut() else { return };
+    if let Some(mut classic) = classic {
+        observe_classic(&mut classic, &rt.game);
+    }
+    if barter {
+        if *state.get() == PlayState::Dialogue && !classic_menus.blocked() {
+            with_world(rt, &mut sim, |rt| crate::dialogue_touch::classic_state::request(&mut rt.game, asked.list.as_ref()));
+        }
+        return;
+    }
     let mut notes: Vec<serde_json::Value> = Vec::new();
 
     // The aid's conversations whose time has come, on the world aids' clock
@@ -892,7 +920,7 @@ pub(crate) fn input(
     let list_now = list_id(&rt.game);
     let mut asked = asked.for_list(list_now.as_ref());
     // What the view asked is held to its list; the hand-built buttons carry theirs below.
-    let by_tiles = asked.list.is_some();
+    let by_tiles = asked.list.is_some() && !touch_active;
     let offered = offers(&rt.game, &conv.choices);
     let chosen_for = |since: Option<f32>, limit: f32| since.is_some_and(|t| now - t >= limit);
 
@@ -976,7 +1004,7 @@ pub(crate) fn input(
             let wheel = scroll.delta.y;
             // The hand-built buttons ask as the tiles do, for the list they were spawned or last
             // brought up to date for.
-            for (i, b) in clicks.iter().filter(|(_, b)| b.1 == list_now) {
+            for (i, b) in clicks.iter().filter(|(_, b)| !touch_active && b.1 == list_now) {
                 match i {
                     PointerState::Pressed => asked.pick = Some(b.0),
                     PointerState::Hovered => asked.hover = Some(b.0),
@@ -1000,8 +1028,8 @@ pub(crate) fn input(
                 act = Some((Act::Choose(i), if by_tiles { "tile click" } else { "click" }));
             } else if confirm {
                 act = Some((Act::Choose(selected), "Enter"));
-            } else if keys.just_pressed(Tab) {
-                act = Some((Act::Leave { force: false }, "Tab"));
+            } else if asked.leave || keys.just_pressed(Tab) {
+                act = Some((Act::Leave { force: false }, if asked.leave { "power button" } else { "Tab" }));
             }
         }
     }
@@ -1098,6 +1126,16 @@ fn draw(script: Option<Res<ScriptState>>, sim: Res<SimState>, screen: Res<Dialog
     if menu.list != list {
         menu.list = list;
     }
+}
+
+#[cfg(test)]
+pub(crate) fn install_classic_input_fixture(app: &mut App) {
+    app.init_resource::<DialogueScreen>()
+        .init_resource::<ViewInput>()
+        .init_resource::<Paused>()
+        .init_resource::<crate::pause::PlayClock>()
+        .add_systems(Update, input.in_set(PlaySet::Scripts))
+        .add_systems(Update, draw.in_set(PlaySet::Ui).before(crate::dialogue_menu::DrawMenu));
 }
 
 #[cfg(test)]

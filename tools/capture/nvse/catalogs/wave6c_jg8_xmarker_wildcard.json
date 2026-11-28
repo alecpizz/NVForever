@@ -1,0 +1,131 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6c_jg8_xmarker_wildcard",
+  "description": "Read-only console-only probe verifying XMarker (0x3B) form-filter wildcard behavior in JohnnyGuitar batch-8 event handlers.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)",
+    "JohnnyGuitarNVSE": "528"
+  },
+  "batches": [
+    {
+      "id": "w6c_jg8_xmarker",
+      "title": "Wave 6C - JohnnyGuitar Batch 8 XMarker Wildcard",
+      "extender": "xNVSE 6.4.9 + JIP LN 57.30 + JohnnyGuitar 528",
+      "required_plugins": [
+        "jip_nvse.dll",
+        "johnnyguitar.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6t2p2_12_jg_reputation_and_crosshair_xmarker",
+          "bucket": "B",
+          "extender": "JohnnyGuitar 528",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "johnnyguitar.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-jg8.md",
+          "spec_line": 20,
+          "functions_tested": [
+            "SetJohnnyOnCrosshairEventHandler",
+            "SetOnReputationChangeEventHandler"
+          ],
+          "claim": "Verify XMarker (0x3B) registration with SetJohnnyOnCrosshairEventHandler + form type 21 and wildcard matching on SetOnReputationChangeEventHandler.",
+          "expected": "xh(0,0)|fame(n=0,rOk=0,ax=0,v=0.0)|inf(n=1,ax=1.08423e+09,v=3.0)|xm=1",
+          "script_lines": [
+            "ref rRep = GetFormFromMod \"FalloutNV.esm\" \"104C22\"",
+            "ref rXm = GetFormFromMod \"FalloutNV.esm\" \"3B\"",
+            "ref cbR = CompileScript \"nvseprobe_s_p2_12_rep.gek\"",
+            "ref cbX = CompileScript \"nvseprobe_s_p2_12_repx.gek\"",
+            "ref cbC = CompileScript \"nvseprobe_s_p2_12_xh.gek\"",
+            "Player.AuxVarSetRef \"*p2_12_cbr\" cbR",
+            "Player.AuxVarSetRef \"*p2_12_cbx\" cbX",
+            "Player.AuxVarSetFlt \"*p2_12_n\" 0",
+            "Player.AuxVarSetFlt \"*p2_12_nx\" 0",
+            "int xhAdd = SetJohnnyOnCrosshairEventHandler 1 cbC 0 rXm 21",
+            "int xhRem = SetJohnnyOnCrosshairEventHandler 0 cbC 0 rXm 21",
+            "Player.AuxVarSetFlt \"*p2_12_xha\" xhAdd",
+            "Player.AuxVarSetFlt \"*p2_12_xhr\" xhRem",
+            "SetOnReputationChangeEventHandler 1 cbR 0",
+            "SetOnReputationChangeEventHandler 1 cbX 0 rXm",
+            "AddReputationExact rRep 1 5"
+          ],
+          "wait_ticks_after": 2,
+          "helper_scripts": {
+            "nvseprobe_s_p2_12_rep.gek": [
+              "begin Function { ref rR, int iAx, float fV }",
+              "Player.AuxVarSetFlt \"*p2_12_n\" ((Player.AuxVarGetFlt \"*p2_12_n\") + 1)",
+              "Player.AuxVarSetRef \"*p2_12_r\" rR",
+              "Player.AuxVarSetFlt \"*p2_12_ax\" iAx",
+              "Player.AuxVarSetFlt \"*p2_12_v\" fV"
+            ],
+            "nvseprobe_s_p2_12_repx.gek": [
+              "begin Function { ref rR, int iAx, float fV }",
+              "Player.AuxVarSetFlt \"*p2_12_nx\" ((Player.AuxVarGetFlt \"*p2_12_nx\") + 1)"
+            ],
+            "nvseprobe_s_p2_12_xh.gek": [
+              "begin Function { ref rT }",
+              "Player.AuxVarSetRef \"*p2_12_xht\" rT"
+            ]
+          },
+          "extra_steps": [
+            {
+              "suffix": "inf",
+              "wait_ticks": 2,
+              "script_lines": [
+                "ref rRep = GetFormFromMod \"FalloutNV.esm\" \"104C22\"",
+                "Player.AuxVarSetFlt \"*p2_12_n1\" (Player.AuxVarGetFlt \"*p2_12_n\")",
+                "Player.AuxVarSetFlt \"*p2_12_r1\" ((Player.AuxVarGetRef \"*p2_12_r\") == rRep)",
+                "Player.AuxVarSetFlt \"*p2_12_ax1\" (Player.AuxVarGetFlt \"*p2_12_ax\")",
+                "Player.AuxVarSetFlt \"*p2_12_v1\" (Player.AuxVarGetFlt \"*p2_12_v\")",
+                "AddReputationExact rRep 0 3"
+              ]
+            },
+            {
+              "suffix": "read",
+              "wait_ticks": 0,
+              "script_lines": [
+                "ref rRep = GetFormFromMod \"FalloutNV.esm\" \"104C22\"",
+                "ref rXm = GetFormFromMod \"FalloutNV.esm\" \"3B\"",
+                "int n1 = Player.AuxVarGetFlt \"*p2_12_n1\"",
+                "int r1 = Player.AuxVarGetFlt \"*p2_12_r1\"",
+                "int ax1 = Player.AuxVarGetFlt \"*p2_12_ax1\"",
+                "float v1 = Player.AuxVarGetFlt \"*p2_12_v1\"",
+                "int n2 = Player.AuxVarGetFlt \"*p2_12_n\"",
+                "int ax2 = Player.AuxVarGetFlt \"*p2_12_ax\"",
+                "float v2 = Player.AuxVarGetFlt \"*p2_12_v\"",
+                "int nx = Player.AuxVarGetFlt \"*p2_12_nx\"",
+                "int xha = Player.AuxVarGetFlt \"*p2_12_xha\"",
+                "int xhr = Player.AuxVarGetFlt \"*p2_12_xhr\"",
+                "SetOnReputationChangeEventHandler 0 (Player.AuxVarGetRef \"*p2_12_cbr\") 0",
+                "SetOnReputationChangeEventHandler 0 (Player.AuxVarGetRef \"*p2_12_cbx\") 0 rXm",
+                "RemoveReputationExact rRep 1 5",
+                "RemoveReputationExact rRep 0 3",
+                "PrintToConsole \"PROBE|w6t2p2_12_jg_reputation_and_crosshair_xmarker|xh(%g,%g)|fame(n=%g,rOk=%g,ax=%g,v=%.1f)|inf(n=%g,ax=%g,v=%.1f)|xm=%g\" xha xhr n1 r1 ax1 v1 n2 ax2 v2 nx"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

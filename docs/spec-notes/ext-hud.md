@@ -32,8 +32,10 @@ Plain-language notes for `crates/fnv-game/src/nvse_hud.rs` and the control funct
   `BodyLocation` code (0 torso, 1–2 head, 3–4 left arm, 5–6 right arm, 7–9 left leg,
   10–12 right leg, 13 brain, 14 held weapon) [documented: GetReticleTargetLimb,
   GetHitLocation], honouring the optional `maxRange` cap (0 or omitted uses the full
-  reticle reach). Non-actors, misses, gore pieces, and actors without posed body parts
-  (single-capsule fallback) read -1 [design].
+  reticle reach). Actors without posed body parts (single-capsule fallback,
+  `fnv_phys::actors::WHOLE`) read 0 (Torso, default body location) while respecting
+  `maxRange`, so scripts distinguish hitting an actor from a miss; non-actors, misses,
+  and detached gore pieces (`fnv_phys::gore::GORE_PART`) read -1 [design].
 
 ## 3. Corner messages
 

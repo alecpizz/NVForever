@@ -200,6 +200,47 @@ impl ActorDrawing<'_, '_> {
     }
 
     fn sync(&mut self, targets: impl IntoIterator<Item = ActorTarget>) {
+        // Fast path: when no actor currently has an active stealth field, check whether
+        // any target requests one before scanning world-wide Changed<Children/ChildOf/Material>
+        // queries or walking ancestor chains [design, #2557].
+        if self.fields.0.is_empty() {
+            let mut active_targets: Vec<ActorTarget> = Vec::new();
+            for target in targets {
+                if !target.dead && target.chameleon >= 1.0 {
+                    active_targets.push(target);
+                }
+            }
+            if active_targets.is_empty() {
+                // Drain removed-children events so they do not accumulate across idle frames.
+                for _ in self.removed_children.read() {}
+                return;
+            }
+            // Fall through with only the actors requesting a fresh stealth field; no existing
+            // fields need dirty-ancestor tracking yet.
+            for _ in self.removed_children.read() {}
+            for target in active_targets {
+                let ActorTarget { root, reference, name, chameleon, .. } = target;
+                let mut field = ActorField { reference, name, originals: HashMap::new(), pending: false };
+                let descendants: HashSet<_> = std::iter::once(root).chain(self.children.iter_descendants(root)).collect();
+                for e in descendants {
+                    let mut meshes = self.meshes.p1();
+                    let Ok(mut current) = meshes.get_mut(e) else {
+                        continue;
+                    };
+                    let Some(copy) = self.materials.get(&current.0).map(see_through) else {
+                        field.pending = true;
+                        continue;
+                    };
+                    let copy = self.materials.add(copy);
+                    let original = std::mem::replace(&mut current.0, copy.clone());
+                    self.commands.entity(e).insert(MaterialOverride { source: original.clone(), copy: copy.clone() });
+                    field.originals.insert(e, (original, copy));
+                }
+                info!("stealth field: {} 0x{reference:08X} on (Chameleon {chameleon:.0})", field.name);
+                self.fields.0.insert(root, field);
+            }
+            return;
+        }
         // [design, #2557] Hierarchy edits and new/replaced material handles dirty only
         // their ancestors. Idle actors never walk descendants or access materials.
         let mut dirty = HashSet::new();
@@ -308,13 +349,14 @@ fn apply_actors(script: Option<Res<ScriptState>>, actors: Query<(Entity, &ActorR
     let game = script.as_ref().and_then(|s| s.rt.as_ref()).map(|rt| &rt.game);
     drawing.sync(actors.iter().filter(|(_, rig)| rig.reference != FormId::PLAYER_REF.0).map(|(root, rig)| {
         let reference = FormId(rig.reference);
-        ActorTarget {
-            root,
-            reference: rig.reference,
-            name: game.map_or_else(|| format!("0x{:08X}", rig.base), |g| g.data.name(FormId(rig.base))),
-            chameleon: game.map_or(0.0, |g| fnv_game::functions::actor_value_temporary(g, reference, CHAMELEON)),
-            dead: game.is_some_and(|g| g.is_dead(reference)),
-        }
+        let dead = game.is_some_and(|g| g.is_dead(reference));
+        let chameleon = if dead { 0.0 } else { game.map_or(0.0, |g| fnv_game::functions::actor_value_temporary(g, reference, CHAMELEON)) };
+        let name = if !dead && chameleon >= 1.0 {
+            game.map_or_else(|| format!("0x{:08X}", rig.base), |g| g.data.name(FormId(rig.base)))
+        } else {
+            String::new()
+        };
+        ActorTarget { root, reference: rig.reference, name, chameleon, dead }
     }));
 }
 
@@ -657,8 +699,8 @@ mod tests {
             let old_cloak = worn(&app, body);
             app.world_mut().resource_mut::<Alphas>().0.insert(FormId(reference), 0.5);
             app.update();
-            let faded = app.world().get::<crate::effect_shaders::Faded>(body).unwrap();
-            assert_eq!(faded.original, original);
+            let faded = app.world().get::<nvf_play::fade::Fading>(body).unwrap();
+            assert_eq!(faded.original(), &original);
             let plain = app.world().get::<MaterialOverride>(body).unwrap().source.clone();
             let materials = app.world().resource::<Assets<NifMaterial>>();
             assert!(!materials.contains(old_cloak.id()));
@@ -686,7 +728,7 @@ mod tests {
                 assert_eq!(worn(&app, body), original);
                 assert!(!refracts(&app, body));
                 assert_eq!(app.world().resource::<Assets<NifMaterial>>().get(&original).unwrap().base.base_color.alpha(), 1.0);
-                assert!(app.world().get::<crate::effect_shaders::Faded>(body).is_none());
+                assert!(app.world().get::<nvf_play::fade::Fading>(body).is_none());
                 app.update();
             }
         }
@@ -927,5 +969,28 @@ mod tests {
         assert!((c.extension.alpha_cut - 0.4).abs() < 1e-6);
         let hair = nvf_assets::nif_material::nif_material(StandardMaterial { alpha_mode: AlphaMode::Blend, ..default() });
         assert!((see_through(&hair).extension.alpha_cut - BLEND_CUT).abs() < 1e-6);
+    }
+
+    #[test]
+    fn idle_fast_path_skips_writes_and_transitions_cleanly_on_chameleon_activation() {
+        let mut app = app();
+        let a = actor(&mut app, 0.0);
+        let (body, original) = mesh(&mut app, a);
+        app.update();
+        assert!(app.world().resource::<ActorFields>().0.is_empty());
+        assert_eq!(worn(&app, body), original);
+        // Second idle frame must perform zero material writes.
+        app.update();
+        assert_eq!(app.world().resource::<Writes>().0, 0);
+        // Enabling Chameleon from the idle fast path cloaks the actor and records originals.
+        app.world_mut().resource_mut::<Targets>().0[0].chameleon = 80.0;
+        app.update();
+        assert_eq!(app.world().resource::<ActorFields>().0.len(), 1);
+        assert_ne!(worn(&app, body), original);
+        // Turning Chameleon back off restores original material and returns to idle state.
+        app.world_mut().resource_mut::<Targets>().0[0].chameleon = 0.0;
+        app.update();
+        assert!(app.world().resource::<ActorFields>().0.is_empty());
+        assert_eq!(worn(&app, body), original);
     }
 }

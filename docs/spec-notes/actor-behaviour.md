@@ -315,17 +315,31 @@ the sneak HUD's extra follower exclusion is not this query. The allocation-free
 scan stops at its first matching pair and costs O(cached pairs) in the worst case.
 No native opcode, sensing pass, cache or save field is added.
 
-[hypothesis: selected portable query convention] Missing or nonactor receivers
-return numeric zero, matching neighboring implemented queries. This is a selected
-portable policy, not preservation of an old IsActorDetected zero: actual compiled
-public99 source calls refused the unsupported function. That authored CPU result
-is process evidence, not native invalid-input evidence. Native invalid-input
-behavior remains unknown. Unmeasured/cold state reads zero. The query neither refreshes nor
-expires detections and does not add an immediate dead/disabled check. The existing
-engine measurement round owns pruning: it runs every quarter-second and forgets
-pairs older than one game-time second. In a headless Game, merely advancing time
-does not prune pairs; snapshot restoration starts with an empty detection cache.
-These are repository lifecycle choices, not measured native timing.
+[observed: Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 + JIP LN 57.30, 2026-11-24,
+GSDocMitchellHouse (`0x00103DF9`), 10 official base masters, isolated staging copy
+(read-only), committed probe `w4g_05_isactordetected_and_setclass_invalid` in
+`tools/capture/nvse/catalogs/wave4g_f2_extenders.json` (companion catalog PR #3803);
+no DLL or source consulted] `IsActorDetected` on a non-actor door (`0x00103E61`) returns
+`0` and continues (`detDoor=1:0`), on an explicit null ref logs an xNVSE NULL-reference
+error while returning `0` and continuing (`detNull=1:0`), and on `Player` returns `0`
+even while two actors detect the player (`nDet=2`, `dP=1`, `a1P=1`). Killing a detecting
+actor with `KillActor` immediately drops it from `GetDetectingActors` on the **same
+tick** (`nDet=2 -> 1`), rather than waiting for deferred cache expiry. Verbatim probe
+output:
+- `Attempting to call a function on a NULL reference`
+- `PROBE|w4g_05_isactordetected_and_setclass_invalid|invalid(detDoor=1:0,detNull=1:0|scDoor=1,scNonClas=0,docCls=00015679->00015679,scNull=1)`
+- `PROBE|w4g_05_isactordetected_and_setclass_invalid|detLive(nDet=2,p=0,d=0,a1=0|gd:dP=1,a1P=1,dA1=0,a1D=0,pD=0|killSame:nDet=1,p=0,d=0,a1=0)`
+- `PROBE|w4g_05_isactordetected_and_setclass_invalid|detNext(nDet=1,p=0,d=0,a1=0)`
+
+[design] On actor death (`Game::die`, called by `KillActor` and fatal combat damage),
+NVForever immediately clears detections made by the dead actor. `GetDetectingActors`,
+`GetDetected`, `IsActorDetected`, and sneak-detection queries exclude the dead detector
+on the same tick. This cleanup preserves living observers' cached detections of
+that actor. Explicit null/non-form receivers on `IsActorDetected` log
+`no_reference_call` and return `0` without falling back to `self_ref`, continuing
+script execution. Missing receivers and cold/restored detection caches continue
+to read `0`. Normal cache expiry remains owned by the engine's measurement round
+(every quarter-second, forgetting pairs older than one game-time second).
 
 Process qualification: six authored shared VM controls cover explicit receiver
 precedence, incoming/outgoing pairs, player/self exclusion, teammates, mixed typed

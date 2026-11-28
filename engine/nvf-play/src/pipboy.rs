@@ -52,6 +52,12 @@ pub mod device_screen;
 pub mod frame;
 pub mod hotkey_panel;
 pub mod items;
+pub mod touch_items;
+pub mod touch_scroll;
+pub mod touch_presentation;
+pub mod tab_swipe;
+pub mod scrollbar;
+pub mod gesture;
 pub mod item_mod;
 pub mod labels;
 pub mod repair;
@@ -61,7 +67,6 @@ mod test_aid;
 pub mod transition;
 
 use crate::control::{PlayerControl, Pov};
-use crate::interface::u;
 use fnv_game::game::menus;
 use crate::menu::model::Mode;
 use crate::menu::ActiveMenu;
@@ -70,7 +75,6 @@ use bevy::asset::{uuid::Uuid, RenderAssetUsages};
 use bevy::camera::{ImageRenderTarget, RenderTarget};
 use bevy::input::ButtonState;
 use bevy::picking::pointer::{Location, PointerAction, PointerId, PointerInput};
-use bevy::picking::PickingSystems;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use bevy::window::{PrimaryWindow, WindowEvent};
@@ -116,6 +120,9 @@ pub const PIPBOY_POINTER: PointerId = PointerId::Custom(Uuid::from_u128(0x6e76_6
 /// device's system is nvforever's `pipboy_arm`; the flat image's is here.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PointerSet;
+/// Admission boundary for mobile projected pointer input before Bevy picking.
+#[derive(SystemSet,Debug,Clone,Copy,PartialEq,Eq,Hash)]
+pub struct TouchPointerSet;
 
 /// Hidden draws are arranged before the clip advances [design: nvforever/pipboy_arm.rs].
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -152,8 +159,10 @@ pub enum Page {
 impl Page {
     pub const ALL: [Page; 3] = [Page::Stats, Page::Items, Page::Data];
 
-    /// The page's title at the screen's top left [observed: the owner's screenshots]: its
-    /// setting's text when the load order defines it (`labels`, #1443).
+    /// The page's title at the screen's top left: its setting's text when the load order
+    /// defines it (`labels`, #1443), else the setting's name in capitals [design: headings
+    /// in capitals are NVForever's choice, the words the settings' names, #2984; the
+    /// built-in table's `sInventoryItems` and `sData` follow these, #2212].
     pub fn title(self) -> &'static str {
         use labels::label;
         match self {
@@ -163,8 +172,9 @@ impl Page {
         }
     }
 
-    /// The page's tabs, left to right [observed: the owner's screenshots]: each one's
-    /// setting's text when the load order defines it (`labels`, #1443).
+    /// The page's tabs, left to right: each one's setting's text when the load order
+    /// defines it (`labels`, #1443), else the words of the setting's name [design, #2984;
+    /// "S.P.E.C.I.A.L." as the data's own text spells it, #1740].
     pub fn tabs(self) -> [&'static str; 5] {
         use labels::label;
         match self {
@@ -277,6 +287,8 @@ pub struct PipBoy {
     /// Seconds into the clip: from 0 coming up to [`HOLD_SECONDS`], held there while up,
     /// on to [`CLIP_SECONDS`] going down.
     pub clip_time: f32,
+    /// Owned direct arm preview: rendered on the real rig, without menu input.
+    manual_pose: bool,
     pub page: Page,
     /// Where the menus are shown while up.
     pub frame: Frame,
@@ -312,6 +324,11 @@ pub struct Warming {
 }
 
 impl PipBoy {
+    /// Whether a direct arm gesture owns the clip clock and pose.
+    pub fn manual_pose(&self) -> bool {
+        self.manual_pose
+    }
+
     /// Whether to draw the Pip-Boy, including hidden warming [design: nvforever/pipboy_arm.rs].
     pub fn shown(&self) -> bool {
         self.warming.is_some() || self.phase != Phase::Down
@@ -319,12 +336,12 @@ impl PipBoy {
 
     /// Whether the menus take input (coming up or up, after hidden warming) [design: this file].
     pub fn open(&self) -> bool {
-        self.warming.is_none() && matches!(self.phase, Phase::Raising | Phase::Up)
+        !self.manual_pose && self.warming.is_none() && matches!(self.phase, Phase::Raising | Phase::Up)
     }
 
     /// [design: this file] A real opening reports its page and accepts Close during a hold.
     pub fn opening(&self) -> bool {
-        matches!(self.phase, Phase::Raising | Phase::Up) && !self.warming.as_ref().is_some_and(|w| w.covered)
+        !self.manual_pose && matches!(self.phase, Phase::Raising | Phase::Up) && !self.warming.as_ref().is_some_and(|w| w.covered)
     }
 
     /// Whether to draw the device on the arm, including hidden warming [design: this file].
@@ -353,7 +370,7 @@ impl PipBoy {
     /// Move the clip on by `dt` seconds; true when the Pip-Boy reached the top or the
     /// bottom in this step.
     pub fn advance(&mut self, dt: f32) -> bool {
-        if self.warming.is_some() {
+        if self.warming.is_some() || self.manual_pose {
             return false;
         }
         match self.phase {
@@ -529,12 +546,16 @@ impl KeysTaken {
 }
 
 /// [design, #2553] First runs once per frame, before any Update key handler.
-fn clear_keys_taken(mut taken: ResMut<KeysTaken>) {
+pub(crate) fn clear_keys_taken(mut taken: ResMut<KeysTaken>) {
     taken.0 = false;
 }
 
 impl Plugin for PipBoyPlugin {
     fn build(&self, app: &mut App) {
+        gesture::install(app);
+        app.add_plugins(touch_scroll::TouchPointerPlugin);
+        touch_presentation::install(app);
+        app.init_resource::<scrollbar::ItemsScroll>().add_plugins(scrollbar::ScrollbarPlugin);
         app.init_resource::<PipBoy>()
             .init_resource::<KeysTaken>()
             .init_resource::<UsePipBoy>()
@@ -566,7 +587,7 @@ impl Plugin for PipBoyPlugin {
             .add_systems(
                 Update,
                 (
-                    (apply_use, follow_menu.after(crate::menu::MenuSystems), follow_frame).chain(),
+                    (apply_use, follow_menu.after(crate::menu::MenuSystems), gesture::drive, follow_frame).chain(),
                     reset_manager,
                     close_keys.run_if(|pip: Res<PipBoy>| pip.opening()).run_if(takes_keys),
                     (keys, apply_input).chain().run_if(pipboy_open).run_if(takes_keys),
@@ -574,8 +595,7 @@ impl Plugin for PipBoyPlugin {
                     item_mod::keys.run_if(takes_keys).run_if(|hold: Res<hotkey_panel::HotkeyHold>| hold.controller.is_none()),
                     hotkey_panel::track,
                     items::keys.run_if(takes_keys),
-                    report_menu,
-                    advance,
+                    (report_menu, advance, sync_pipboy_mode).chain(),
                     camera_on,
                     (image_scale, flat_screen),
                     // With `MapMenu` on, the DATA page's preparation too, before the tile pages'
@@ -594,8 +614,8 @@ impl Plugin for PipBoyPlugin {
             )
             .configure_sets(Update, WarmSet.after(follow_frame).before(reset_manager))
             .configure_sets(Update, PointerSet.after(crate::player::BodySet).before(PlaySet::Activation))
-            .add_systems(Update, flat_pointer.in_set(PointerSet))
-            .add_systems(PreUpdate, drive_pointer.after(crate::pad::device::automatic).after(crate::pad::pointer::follow).before(PickingSystems::ProcessInput));
+            .add_systems(Update, flat_pointer.in_set(PointerSet));
+
         test_aid::setup(app);
         crate::save::add_save_hook(app, data::CUSTOM_MARKER_SAVE_HOOK);
         crate::settings::add_setting(
@@ -666,6 +686,38 @@ fn report_menu(pip: Res<PipBoy>, repair: Res<repair::PipRepair>, modding: Res<it
     }
 }
 
+/// The `GetPipBoyMode` transition override for the current Pip-Boy animation phase:
+/// `Some(2)` opening (`Phase::Raising`), `Some(4)` closing (`Phase::Lowering`), `Some(0)`
+/// while covered during hidden startup warming, and `None` in `Phase::Down`, `Phase::Up`,
+/// or `manual_pose` so `GetPipBoyMode` evaluates live `Game::menu_open(menus::PIPBOY)`
+/// (`3` / `0`) immediately on same-frame `TogglePipBoy` / `CloseAllMenus` calls
+/// [documented: GECK wiki GetPipBoyMode; observed: `w4c_b3_06_toggle_pipboy_tab`; design].
+pub fn pipboy_mode(pip: &PipBoy) -> Option<u8> {
+    if pip.warming.as_ref().is_some_and(|w| w.covered) {
+        return Some(0);
+    }
+    if pip.manual_pose {
+        return None;
+    }
+    match pip.phase {
+        Phase::Raising => Some(2),
+        Phase::Lowering => Some(4),
+        Phase::Down | Phase::Up => None,
+    }
+}
+
+/// Sync the Pip-Boy's animation phase into `fnv_game::Game` so scripts querying
+/// `GetPipBoyMode` see `2` while raising and `4` throughout the lowering/dismissal
+/// animation rather than dropping immediately to `0` when the menu closes, while resting
+/// phases defer to live `Game::menu_open(menus::PIPBOY)` [design].
+fn sync_pipboy_mode(pip: Res<PipBoy>, script: Option<ResMut<crate::script::ScriptState>>) {
+    let Some(rt) = script.and_then(|s| s.into_inner().rt.as_mut()) else { return };
+    rt.game.ui.pipboy_mode = pipboy_mode(&pip);
+}
+
+#[cfg(test)]
+mod mode_transition_tests;
+
 /// ResetPipboyManager (`fnv_game::functions::ui::reset_pipboy_manager`): the Pip-Boy's
 /// pages start again on their defaults (ITEMS, every page on its first tab) and its
 /// light (NVForever's flashlight, `crate::flashlight`) goes off [documented: GECK wiki
@@ -714,6 +766,7 @@ fn setup_screen(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
 /// The Pip-Boy is up while the player's inventory is open, and in first person (on the
 /// arm; the screen menu leaves the view alone).
 fn follow_menu(active: Res<ActiveMenu>, mut pip: ResMut<PipBoy>, mut control: ResMut<PlayerControl>, use_pipboy: Res<UsePipBoy>, sim: Option<Res<crate::sim::SimState>>, tweaks: Option<Res<crate::tweaks::TweakSettings>>) {
+    if pip.manual_pose { return; }
     let inventory = active.0.as_ref().is_some_and(|m| m.mode == Mode::Inventory);
     if inventory && !matches!(pip.phase, Phase::Raising | Phase::Up) {
         if pip.phase == Phase::Down {
@@ -933,7 +986,7 @@ fn keys(keys: crate::pad::ActionButtons<KeyCode>, prompt: Res<crate::menu::Promp
     }
 }
 
-fn apply_input(mut input: MessageReader<PipBoyInput>, mut pip: ResMut<PipBoy>, tweaks: Option<Res<crate::tweaks::TweakSettings>>, mut hud: Option<ResMut<crate::activate::HudMessage>>) {
+pub(crate) fn apply_input(mut input: MessageReader<PipBoyInput>, mut pip: ResMut<PipBoy>, tweaks: Option<Res<crate::tweaks::TweakSettings>>, mut hud: Option<ResMut<crate::activate::HudMessage>>) {
     for &i in input.read() {
         // The player's tweak: a click on the ITEMS tab already open changes the list's
         // order [design: docs/design/tweaks.md].
@@ -954,17 +1007,54 @@ fn apply_input(mut input: MessageReader<PipBoyInput>, mut pip: ResMut<PipBoy>, t
 }
 
 /// The image's scale the flat image's crop was made for.
-#[derive(Component, Clone, Copy)]
-struct FlatCrop(f32);
+#[derive(Component, Clone, Copy, PartialEq)]
+struct FlatCrop {
+    scale: f32,
+    dimensions: Vec2,
+    safe: crate::touch_safe_area::SafeInsets,
+    window: Option<Vec2>,
+    physical: Option<(UVec2, f32)>,
+    ui_scale: f32,
+    menu_scale: f32,
+}
+impl FlatCrop {
+    fn desired(scale: f32, zoom: f32, safe: crate::touch_safe_area::SafeInsets, window: Option<&Window>, ui_scale: f32, dismissal: touch_presentation::DismissalSpace) -> Self {
+        let logical = window.map(|w| w.resolution.size());
+        let safe = dismissal.padding(safe,logical);
+        Self { scale, dimensions: touch_presentation::flat_dimensions(zoom, logical, safe), safe, window: logical,
+            physical: window.map(|w| (UVec2::new(w.physical_width(), w.physical_height()), w.scale_factor())),
+            ui_scale, menu_scale: crate::interface::unit_scale() }
+    }
+    fn valid(&self) -> bool {
+        self.scale.is_finite() && self.scale > 0.0 && self.dimensions.is_finite() && self.dimensions.min_element() > 0.0
+            && self.window.is_some_and(|size| size.is_finite() && size.min_element() > 0.0
+                && self.safe.left + self.safe.right < size.x && self.safe.top + self.safe.bottom < size.y)
+            && self.physical.is_some_and(|(size, density)| size.min_element() > 0 && density.is_finite() && density > 0.0)
+            && self.ui_scale.is_finite() && self.ui_scale > 0.0
+            && self.menu_scale.is_finite() && self.menu_scale > 0.0
+            && crate::touch_safe_area::SafeInsets::from_array([self.safe.left, self.safe.top, self.safe.right, self.safe.bottom]).is_some()
+    }
+}
+
+type FlatNodes<'w, 's> = Query<'w, 's, (&'static ComputedNode, &'static UiGlobalTransform, Option<&'static FlatCrop>), With<FlatScreen>>;
+/// Read-only presentation metadata shared by the standalone flat display and
+/// pointer adapters. Crop ownership stays private to the display system.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct FlatPresentation<'w, 's> {
+    crops: Query<'w, 's, &'static FlatCrop, With<FlatScreen>>,
+    nodes: FlatNodes<'w, 's>,
+    shades: Query<'w, 's, Entity, With<ScreenShade>>,
+    dismissal: Option<Res<'w, touch_presentation::DismissalSpace>>,
+}
 
 /// The scale of the image for the frame in use: 1 on the device; in the screen menu as
 /// many of the window's pixels as the canvas is drawn over, so the picture is not
 /// magnified, at most [`MAX_SCALE`]. The image is made again at that size, and the
 /// camera told, so the menus still lay out on the canvas's units.
-fn image_scale(pip: Res<PipBoy>, screen: Option<ResMut<PipBoyScreen>>, windows: Query<&Window, With<PrimaryWindow>>, mut images: ResMut<Assets<Image>>, mut targets: Query<&mut RenderTarget>) {
+fn image_scale(pip: Res<PipBoy>, sizing: Option<Res<touch_presentation::PipBoySize>>, screen: Option<ResMut<PipBoyScreen>>, windows: Query<&Window, With<PrimaryWindow>>, mut images: ResMut<Assets<Image>>, mut targets: Query<&mut RenderTarget>) {
     let Some(mut screen) = screen else { return };
     let want = match (pip.shown() && pip.warming.is_none() && pip.frame == Frame::Screen, windows.single()) {
-        (true, Ok(w)) => (w.physical_height() as f32 * SCREEN_IMAGE_H / 960.0 / SCREEN_CROP.y).clamp(1.0, MAX_SCALE),
+        (true, Ok(w)) => (w.physical_height() as f32 * SCREEN_IMAGE_H * sizing.as_deref().map_or(1.0, touch_presentation::PipBoySize::ratio) / 960.0 / SCREEN_CROP.y).clamp(1.0, MAX_SCALE),
         _ => 1.0,
     };
     // Steps of an eighth, so a window dragged a pixel does not remake the image.
@@ -985,12 +1075,18 @@ fn image_scale(pip: Res<PipBoy>, screen: Option<ResMut<PipBoyScreen>>, windows: 
 /// Where nothing shows the model's screen, and always in the screen menu, the image is
 /// drawn flat in the middle of the window over the world blacked out, under the header's
 /// strip (docs/design/screen-menu.md §3); [`flat_pointer`] finds the pointer on it.
-fn flat_screen(
+/// Standalone consumers may pair this display system and ordinary Bevy UI layout
+/// with [`flat_pointer`]; the display alone owns the private crop metadata.
+#[allow(clippy::too_many_arguments)]
+pub fn flat_screen(
     mut commands: Commands,
     pip: Res<PipBoy>,
+    sizing: Option<Res<touch_presentation::PipBoySize>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    safe: Option<Res<crate::touch_safe_area::SafeInsets>>,
+    ui_scale: Option<Res<UiScale>>,
     screen: Option<Res<PipBoyScreen>>,
-    flat: Query<&FlatCrop, With<FlatScreen>>,
-    shades: Query<Entity, With<ScreenShade>>,
+    flat: FlatPresentation<'_, '_>,
 ) {
     let Some(screen) = screen else { return };
     // Only once the arm is all the way up: the body takes the screen a frame or more after
@@ -999,10 +1095,17 @@ fn flat_screen(
     // owner's playtest list 5, item 2).
     let want = pip.phase == Phase::Up && (pip.frame == Frame::Screen || !screen.on_model);
     // A change of the image's scale needs the image node's crop made again.
-    let stale = flat.iter().next().is_some_and(|crop| crop.0 != screen.scale);
-    match (want && !stale, flat.iter().next()) {
+    let zoom = sizing.as_deref().map_or(1.0, touch_presentation::PipBoySize::ratio);
+    let safe = safe.as_deref().copied().unwrap_or_default();
+    let wanted = FlatCrop::desired(screen.scale, zoom, safe, windows.single().ok(), ui_scale.as_deref().map_or(1.0, |s| s.0), flat.dismissal.as_deref().copied().unwrap_or_default());
+    let window = wanted.window;
+    let dimensions = wanted.dimensions;
+    let safe = wanted.safe;
+    let padding = window.map_or(UiRect::ZERO, |s| UiRect { left: Val::Vw(100.0 * safe.left / s.x), right: Val::Vw(100.0 * safe.right / s.x), top: Val::Vh(100.0 * safe.top / s.y), bottom: Val::Vh(100.0 * safe.bottom / s.y) });
+    let stale = flat.crops.iter().next().is_some_and(|crop| *crop != wanted);
+    match (want && wanted.valid() && !stale, flat.crops.iter().next()) {
         (true, None) => {
-            for e in &shades {
+            for e in &flat.shades {
                 commands.entity(e).despawn();
             }
             // The world blacked out; in it, the canvas's image, centred.
@@ -1013,16 +1116,16 @@ fn flat_screen(
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::Center,
+                padding,
                 ..default()
             };
-            let width = SCREEN_IMAGE_H * SCREEN_CROP.x / SCREEN_CROP.y;
             let crop = Rect::new(0.0, 0.0, SCREEN_CROP.x * screen.scale, SCREEN_CROP.y * screen.scale);
             commands.spawn((ScreenShade, shade, BackgroundColor(Color::BLACK.with_alpha(SHADE)), GlobalZIndex(90), Pickable::IGNORE, Name::new("Pip-Boy screen menu"))).with_children(|s| {
-                s.spawn((FlatScreen, FlatCrop(screen.scale), Node { width: u(width), height: u(SCREEN_IMAGE_H), flex_shrink: 0.0, ..default() }, ImageNode { rect: Some(crop), ..ImageNode::new(screen.image.clone()) }));
+                s.spawn((FlatScreen, wanted, Node { width: Val::Vh(dimensions.x), height: Val::Vh(dimensions.y), flex_shrink: 0.0, ..default() }, ImageNode { rect: Some(crop), ..ImageNode::new(screen.image.clone()) }));
             });
         }
         (false, Some(_)) => {
-            for e in &shades {
+            for e in &flat.shades {
                 commands.entity(e).despawn();
             }
         }
@@ -1047,6 +1150,13 @@ fn flat_point(aid: &PipBoyAid, windows: &Query<&Window, With<PrimaryWindow>>, sl
     crop_point(cursor, at.translation, computed.size())
 }
 
+type FlatPointerSizing<'w> = (Option<Res<'w, touch_presentation::PipBoySize>>, Option<Res<'w, crate::touch_safe_area::SafeInsets>>, Option<Res<'w, UiScale>>);
+type FlatPointerInput<'w,'s> = (
+    Option<Res<'w,crate::pad::pointer::PadPointer>>,Option<ResMut<'w,touch_items::TouchItems>>,
+    Option<ResMut<'w,data::touch_map::TouchMap>>,Query<'w,'s,Entity,With<PrimaryWindow>>,
+    Query<'w,'s,Entity,With<FlatScreen>>,
+    Option<Res<'w,crate::ui_pointer::TouchUiCapture>>,
+);
 /// The flat image's pointer for this frame's tile input ([`PointerSet`]), from the cursor now
 /// and the image's place as last laid out. Nothing while the device has the pointer
 /// ([`pointer_source`]). Until the image stands up the last place stays: the hand-built page
@@ -1055,17 +1165,51 @@ fn flat_point(aid: &PipBoyAid, windows: &Query<&Window, With<PrimaryWindow>>, sl
 pub fn flat_pointer(
     pip: Res<PipBoy>,
     screen: Option<ResMut<PipBoyScreen>>,
-    flat: Query<(&ComputedNode, &UiGlobalTransform), With<FlatScreen>>,
+    flat: FlatPresentation<'_, '_>,
     windows: Query<&Window, With<PrimaryWindow>>,
     aid: Res<PipBoyAid>,
-    pad_pointer: Option<Res<crate::pad::pointer::PadPointer>>,
+    (pad_pointer, mut touch, mut map, window_ids, flat_ids, overlay): FlatPointerInput<'_,'_>,
+    (sizing, safe, ui_scale): FlatPointerSizing<'_>,
 ) {
-    let Some(mut screen) = screen else { return };
+    let Some(mut screen) = screen else {if let Some(map)=map.as_deref_mut(){map.publish(None);}return};
     if pointer_source(pip.frame, screen.on_model) != PointerSource::Flat {
         return;
     }
-    let Some((computed, at)) = flat.iter().next().filter(|_| pip.phase == Phase::Up) else { return };
-    let now = flat_point(&aid, &windows, crate::pad::pointer::asleep(pad_pointer.as_deref()), computed, at);
+    let Some((computed, at, crop)) = flat.nodes.iter().next().filter(|_| pip.phase == Phase::Up) else {
+        if let Some(touch) = touch.as_deref_mut() { touch.cancel(); }
+        if let Some(map)=map.as_deref_mut(){map.publish(None);}
+        return;
+    };
+    let window = windows.single().ok();
+    let zoom=sizing.as_deref().map_or(1.0,touch_presentation::PipBoySize::ratio);
+    let safe=safe.as_deref().copied().unwrap_or_default();
+    let ui=ui_scale.as_deref().map_or(1.0,|s|s.0);
+    let wanted=FlatCrop::desired(screen.scale,zoom,safe,window,ui,flat.dismissal.as_deref().copied().unwrap_or_default());
+    let valid=wanted.valid() && crop==Some(&wanted) && computed.size().is_finite()
+        && computed.size().min_element()>0.0 && at.translation.is_finite();
+    if let Some(touch) = touch.as_deref_mut() {
+        if !valid {touch.cancel();}
+        else {
+            let scale=window.map_or(1.0,|w|w.scale_factor());
+            touch.flat_geometry(computed.size(),at.translation);
+            touch.project(|position|crop_point(position*scale,at.translation,computed.size()));
+        }
+    }
+    if let Some(map)=map.as_deref_mut() {
+        let projection=(|| {
+            use data::touch_map::{Presentation,Projection,ProjectionStamp};
+            if !valid || pip.phase!=Phase::Up || pip.page!=Page::Data || pip.tab()>data::WORLD {return None;}
+            let window=window?;
+            let stamp=ProjectionStamp::new(window_ids.single().ok()?,window,&screen,false,
+                Presentation{safe:wanted.safe,menu:crate::interface::unit_scale(),ui,size:zoom})
+                .with_flat(flat_ids.single().ok()?,computed.size(),at.translation)?;
+            let (centre,size,scale)=(at.translation,computed.size(),window.scale_factor());
+            Projection::new(stamp,move|point|crop_point(point*scale,centre,size))
+        })();
+        map.publish(projection);
+    }
+    let now = if overlay.as_ref().is_some_and(|o| o.pointer_suppressed()) { None }
+        else { flat_point(&aid, &windows, crate::pad::pointer::asleep(pad_pointer.as_deref()), computed, at) };
     if screen.pointer != now {
         screen.pointer = now;
     }
@@ -1073,8 +1217,13 @@ pub fn flat_pointer(
 
 /// Pass the pointer on the screen, and the mouse's buttons, to the menus' nodes (as Bevy's
 /// `render_ui_to_texture` example does).
+type TouchPointerContext<'w> = (
+    Option<ResMut<'w,touch_items::TouchItems>>,touch_items::Admission<'w>,
+    Option<ResMut<'w,touch_scroll::WheelFrame>>,touch_scroll::Routing<'w>,
+    Option<Res<'w,touch_scroll::PhysicalPriority>>,
+);
 #[allow(clippy::too_many_arguments)]
-fn drive_pointer(
+pub(crate) fn drive_pointer(
     mut commands: Commands,
     pip: Res<PipBoy>,
     screen: Option<Res<PipBoyScreen>>,
@@ -1084,15 +1233,56 @@ fn drive_pointer(
     mut out: MessageWriter<PointerInput>,
     mut aid: ResMut<PipBoyAid>,
     mut moved: ResMut<PointerMoved>,
+    (mut touch, touch_admission, mut touch_wheel, touch_routing, physical_priority): TouchPointerContext<'_>,
+    mut navigation: tab_swipe::Navigation,
 ) {
     moved.set_if_neq(PointerMoved(false));
-    let Some(screen) = screen else { return };
+    if let Some(wheel)=touch_wheel.as_deref_mut() {wheel.clear();}
+    if let Some(touch)=touch.as_deref_mut() {touch.begin_frame();}
+    let Some(screen) = screen else {if let Some(touch)=touch.as_deref_mut(){touch.cancel();} navigation.cancel();return };
+    if touch.as_ref().is_none_or(|t|t.contact_id().is_none()) {navigation.cancel();}
     if !*spawned {
         commands.spawn(PIPBOY_POINTER);
         *spawned = true;
     }
     let target = RenderTarget::Image(screen.target());
     let Some(target) = target.normalize(None) else { return };
+    if let Some(touch) = touch.as_deref_mut() {
+        touch.session(&pip,&screen);
+        if !touch_admission.allows_contact(touch.contact_id()) || physical_priority.as_ref().is_some_and(|p|p.active) {touch.cancel();navigation.cancel();}
+        // Spawning an existing PointerId twice would split press ownership.
+        // The independent touch entity is installed by the mobile plugin.
+        if touch.take_cancel() {
+            out.write(PointerInput::new(touch_items::POINTER, Location { target: target.clone(), position: Vec2::splat(-1.0) }, PointerAction::Cancel));
+        }
+        if let Some((point, at)) = touch.take_projected() {
+            let nav = navigation.observe(&pip,&screen,&point,touch.contact_id(),at,touch_routing.navigation_regions(&pip));
+            if nav {
+                touch.suppress_navigation();
+                out.write(PointerInput::new(touch_items::POINTER,Location {target:target.clone(),position:at.unwrap_or(Vec2::splat(-1.0))},PointerAction::Cancel));
+            } else {
+            let scroll=touch.take_scroll();
+            let position=scroll.map(|(anchor,_)|anchor).or(at).unwrap_or(Vec2::splat(-1.0));
+            moved.set_if_neq(PointerMoved(true));
+            out.write(PointerInput::new(touch_items::POINTER,Location{target:target.clone(),position},PointerAction::Move{delta:Vec2::ZERO}));
+            if let Some((anchor,pixels))=scroll.filter(|_|pip.page!=Page::Data || pip.tab()>data::WORLD) {
+                if let Some(wheel)=touch_wheel.as_deref_mut() {wheel.set(&pip,anchor,pixels);}
+                out.write(PointerInput::new(touch_items::POINTER,Location{target:target.clone(),position:anchor},PointerAction::Scroll {
+                    unit:bevy::input::mouse::MouseScrollUnit::Pixel,x:0.0,y:pixels,phase:point.phase,
+                }));
+            }
+            let native=touch.route_native(touch_routing.native_at(&pip,touch.pointer_frame().at));
+            let action=match point.phase {
+                _ if native=>Some(PointerAction::Cancel),
+                bevy::input::touch::TouchPhase::Started if at.is_some()=>Some(PointerAction::Press(PointerButton::Primary)),
+                bevy::input::touch::TouchPhase::Moved | bevy::input::touch::TouchPhase::Ended if touch.suppress_click()=>Some(PointerAction::Cancel),
+                bevy::input::touch::TouchPhase::Ended=>Some(PointerAction::Release(PointerButton::Primary)),
+                bevy::input::touch::TouchPhase::Canceled=>Some(PointerAction::Cancel),_=>None,
+            };
+            if let Some(action)=action {out.write(PointerInput::new(touch_items::POINTER,Location{target:target.clone(),position},action));}
+            }
+        }
+    }
     let at = screen.pointer.filter(|_| pip.open());
     // Off the screen the pointer goes to a corner no node is in.
     let position = at.unwrap_or(Vec2::new(TARGET.x as f32 - 1.0, TARGET.y as f32 - 1.0));
@@ -1416,4 +1606,32 @@ mod tests {
         p.apply(PipBoyInput::StepTab(3));
         assert_eq!(p.tab(), 0);
     }
+
+    #[test]
+    fn overlay_capture_cancels_real_preupdate_touch_pointer_before_press_and_keeps_physical_route(){
+        use bevy::input::{touch::{TouchInput,TouchPhase},mouse::MouseButtonInput};
+        let mut app=App::new();app.init_resource::<bevy::picking::pointer::PointerMap>()
+            .add_message::<PointerInput>().add_message::<WindowEvent>()
+            .init_resource::<PipBoyAid>().init_resource::<PointerMoved>()
+            .init_resource::<ButtonInput<KeyCode>>().init_resource::<touch_items::TouchItems>()
+            .insert_resource(touch_items::OverlayCapture(true))
+            .insert_resource(PipBoy{phase:Phase::Up,..default()})
+            .add_systems(PreUpdate,drive_pointer.in_set(TouchPointerSet));
+        let camera=app.world_mut().spawn_empty().id();
+        app.insert_resource(PipBoyScreen{image:Handle::default(),camera,on_model:false,pointer:Some(Vec2::splat(100.)),scale:1.0});
+        {let mut touch=app.world_mut().resource_mut::<touch_items::TouchItems>();
+            touch.event(&TouchInput {window:Entity::PLACEHOLDER,id:8,phase:TouchPhase::Started,position:Vec2::splat(100.),force:None},0);
+            touch.project(Some);
+        }
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyW);
+        app.world_mut().write_message(WindowEvent::MouseButtonInput(MouseButtonInput{window:Entity::PLACEHOLDER,button:MouseButton::Right,state:ButtonState::Pressed}));
+        app.update();
+        let events:Vec<_>=app.world_mut().resource_mut::<Messages<PointerInput>>().drain().collect();
+        assert!(events.iter().any(|p|p.pointer_id==touch_items::POINTER && matches!(p.action,PointerAction::Cancel)));
+        assert!(!events.iter().any(|p|p.pointer_id==touch_items::POINTER && matches!(p.action,PointerAction::Press(_)|PointerAction::Release(_))));
+        assert!(events.iter().any(|p|p.pointer_id==PIPBOY_POINTER && matches!(p.action,PointerAction::Press(PointerButton::Secondary))));
+        assert!(app.world().resource::<ButtonInput<KeyCode>>().pressed(KeyCode::KeyW));
+        assert!(!app.world().resource::<touch_items::TouchItems>().busy());
+    }
+
 }

@@ -186,14 +186,20 @@ impl World<'_> {
     }
 
     /// The player (at `player_level`) enters `zone`: it gets its level now if it has none,
-    /// reading live session `SetZoneMinLevel` / `SetZoneFlag` bit 2 overrides. `Some(level)`
-    /// when it was set by this call.
+    /// reading live session `SetZoneMinLevel` / `SetZoneFlag` bit 2 overrides. When
+    /// [`World::no_lock_encounter_zone_levels`] is enabled (`bNoLockEncounterZoneLevels`),
+    /// re-entering a visited zone recomputes and updates its level against `player_level`
+    /// instead of keeping the first-visit level frozen [design: docs/design/tweaks.md].
+    /// `Some(level)` when the zone's stored level was newly set or changed by this call.
     pub fn enter_zone(&mut self, zone: FormId, player_level: u16) -> Option<u16> {
-        if self.zone_levels.contains_key(&zone) {
+        if !self.no_lock_encounter_zone_levels && self.zone_levels.contains_key(&zone) {
             return None;
         }
         let def = self.effective_zone_def(zone).unwrap_or_default();
         let level = level_on_entry(&def, player_level);
+        if self.zone_levels.get(&zone).copied() == Some(level) {
+            return None;
+        }
         self.zone_levels.insert(zone, level);
         Some(level)
     }
@@ -205,16 +211,28 @@ impl World<'_> {
 
     /// The level `r` reads leveled lists at: the one fixed for it, else its effective
     /// zone's level (or the level the zone would take if entered now, including session
-    /// overrides), else `player_level`, changed by its level modifier.
-    pub fn level_at(&self, r: FormId, player_level: u16) -> LevelAt {
+    /// overrides), else `player_level`, changed by its level modifier. When `lock_zones`
+    /// is `false` (`bNoLockEncounterZoneLevels`), a previously recorded zone level is
+    /// recomputed from `player_level` and `effective_zone_def` instead of staying frozen
+    /// [design: docs/design/tweaks.md].
+    pub fn level_at_with_zone_lock(&self, r: FormId, player_level: u16, lock_zones: bool) -> LevelAt {
         if let Some(&l) = self.ref_levels.get(&r) {
             return l;
         }
         let base = match self.zone_of(r) {
-            Some(z) => self.zone_level(z).unwrap_or_else(|| level_on_entry(&self.effective_zone_def(z).unwrap_or_default(), player_level)),
+            Some(z) => self
+                .zone_level(z)
+                .filter(|_| lock_zones)
+                .unwrap_or_else(|| level_on_entry(&self.effective_zone_def(z).unwrap_or_default(), player_level)),
             None => player_level.max(1),
         };
         modified_by(base, self.placed.get(r).and_then(|p| p.level_modifier), |name| self.setting_f32(name))
+    }
+
+    /// The level `r` reads leveled lists at: [`World::level_at_with_zone_lock`] using this
+    /// world's `no_lock_encounter_zone_levels` setting.
+    pub fn level_at(&self, r: FormId, player_level: u16) -> LevelAt {
+        self.level_at_with_zone_lock(r, player_level, !self.no_lock_encounter_zone_levels)
     }
 
     /// The level fixed for `r`, if any.
@@ -236,6 +254,13 @@ impl World<'_> {
         let l = self.level_at(r, player_level);
         self.ref_levels.insert(r, l);
         Some(l)
+    }
+
+    /// Fix the level of `r` at `at`, fixed before or not (a co-op guest takes the level
+    /// the host's game reads `r`'s leveled lists at, so both pick alike); whether it
+    /// changed.
+    pub fn set_level(&mut self, r: FormId, at: LevelAt) -> bool {
+        self.ref_levels.insert(r, at) != Some(at)
     }
 
     /// Forget the level fixed for `r` (its cell was reset: it is made anew).

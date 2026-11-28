@@ -1,0 +1,95 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6d2_set_internal_marker_two_arg_return",
+  "description": "Wave 6D-2 read-only probe confirming 2-arg SetInternalMarker returns 0 while 1-arg returns current state.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "jip_ln_nvse": "57.30 (5730)"
+  },
+  "batches": [
+    {
+      "id": "w6d2_set_internal_marker",
+      "title": "Wave 6D-2: SetInternalMarker 2-arg return 0",
+      "extender": "JIP LN NVSE 57.30",
+      "required_plugins": [
+        "jip_nvse.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6d2p4_53_micro_precision_bounds",
+          "bucket": "A",
+          "extender": "JIP LN 57.30",
+          "required_plugins": [
+            "jip_nvse.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/jip-world-12.md",
+          "spec_line": 71,
+          "functions_tested": [
+            "SetClimateTraitNumeric",
+            "GetClimateTraitNumeric",
+            "SetSoundFlag",
+            "GetSoundFlag",
+            "SetMessageFlags",
+            "GetMessageFlags",
+            "SetInternalMarker",
+            "GetFactionRankNames",
+            "GetNthFactionRankName",
+            "SetNthFactionRankNameEx"
+          ],
+          "claim": "Nail exact bounds for SetClimateTraitNumeric negative (-10 from 300), SetSoundFlag bits 15/16/31, SetMessageFlags 3 vs 7, SetInternalMarker readback after toggle, and SetNthFactionRankNameEx -> GetFactionRankNames propagation.",
+          "expected": "Resolves remaining 5 micro-edge questions cleanly.",
+          "script_lines": [
+            "ref rClm = GetFormFromMod \"FalloutNV.esm\" \"17907\"",
+            "ref rSnd = GetFormFromMod \"FalloutNV.esm\" \"174325\"",
+            "ref rMsg = GetFormFromMod \"FalloutNV.esm\" \"16D\"",
+            "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+            "ref rBos = GetFormFromMod \"FalloutNV.esm\" \"1D3FE\"",
+            "int c0 = GetClimateTraitNumeric rClm 0",
+            "SetClimateTraitNumeric rClm 0 300",
+            "SetClimateTraitNumeric rClm 0 -10",
+            "int cNeg = GetClimateTraitNumeric rClm 0",
+            "SetClimateTraitNumeric rClm 0 c0",
+            "SetSoundFlag rSnd 16 1",
+            "int sf16 = GetSoundFlag rSnd 16",
+            "SetSoundFlag rSnd 16 0",
+            "int mf0 = GetMessageFlags rMsg",
+            "SetMessageFlags rMsg 3",
+            "int mf3 = GetMessageFlags rMsg",
+            "SetMessageFlags rMsg 7",
+            "int mf7 = GetMessageFlags rMsg",
+            "SetMessageFlags rMsg mf0",
+            "int imA = SetInternalMarker r10",
+            "int imB = SetInternalMarker r10 1",
+            "int imC = SetInternalMarker r10",
+            "int imD = SetInternalMarker r10 0",
+            "int imE = SetInternalMarker r10",
+            "SetNthFactionRankNameEx \"W6D2Rank0\" rBos 0 0",
+            "string_var rn1 = GetNthFactionRankName rBos 0 0",
+            "array_var aRns = GetFactionRankNames rBos",
+            "string_var arr0 = aRns[0]",
+            "SetNthFactionRankNameEx \"Squire\" rBos 0 0",
+            "PrintToConsole \"PROBE|w6d2p4_53_micro_precision_bounds|clmNeg=%g|sf16=%g|mf=%g->3:%g->7:%g|im=%g,%g,%g,%g,%g|rk(nth=[%z],arr0=[%z])\" cNeg sf16 mf0 mf3 mf7 imA imB imC imD imE rn1 arr0"
+          ]
+        }
+      ]
+    }
+  ]
+}

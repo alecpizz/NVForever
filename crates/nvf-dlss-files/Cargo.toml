@@ -11,9 +11,9 @@ fnv-util = { path = "../fnv-util" }
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 # The download's log lines; the game's log (Bevy's) collects them as before.
 tracing = { version = "0.1", default-features = false, features = ["std"] }
-ureq = { version = "3", default-features = false, features = ["native-tls-no-default"] }
 
 [target.'cfg(windows)'.dependencies]
+ureq = { version = "3", default-features = false, features = ["native-tls-no-default"] }
 # The signature checks (WinVerifyTrust, crypt32, loaded from System32 at run time), the
 # moves that never overwrite, sharing modes and the running-process check.
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_Security_WinTrust", "Win32_Storage_FileSystem", "Win32_System_LibraryLoader", "Win32_System_Threading"] }

@@ -14,25 +14,75 @@ use fnv_script::FunctionTable;
 use fnv_sim::{FormId, FormStore, RefTable, SimConfig, World};
 use serde_json::Value as Json;
 
+const XMARKER: u32 = 0x3B;
 const GLOB: u32 = 0x900;
 const QUST: u32 = 0x901;
 const REPU: u32 = 0x902;
 const MISC_A: u32 = 0x903;
 const MISC_B: u32 = 0x904;
+const ACTI_TRAP: u32 = 0x905;
+const QUST_OTHER: u32 = 0x906;
+const PERK_A: u32 = 0x907;
+const PERK_B: u32 = 0x908;
+const FLST_QP: u32 = 0x909;
+const CELL_A: u32 = 0x200;
+const TRAP_REF: FormId = FormId(0x305);
+const MISC_REF: FormId = FormId(0x306);
+const NPC_BASE: u32 = 0x910;
+const NPC_OTHER: u32 = 0x911;
+const FLST_BASE: u32 = 0x912;
+const FLST_REF: u32 = 0x913;
+const CELL_ID: u32 = 0x920;
+const NPC_REF: u32 = 0x921;
 
 fn edid(sig: &[u8; 4], fid: u32, name: &str) -> Vec<u8> {
     record(sig, 0, fid, &[sub(b"EDID", z(name))])
 }
 
+fn placed_obj(id: FormId, edid: &str, base: u32) -> Vec<u8> {
+    let data: Vec<u8> = [0.0f32; 6].iter().flat_map(|v| v.to_le_bytes()).collect();
+    record(b"REFR", 0, id.0, &[sub(b"EDID", z(edid)), sub(b"NAME", base.to_le_bytes().to_vec()), sub(b"DATA", data)])
+}
+
 fn plugin_bytes() -> Vec<u8> {
     let glob = record(b"GLOB", 0, GLOB, &[sub(b"EDID", z("TestGlobal")), sub(b"FNAM", vec![b'f']), sub(b"FLTV", 0f32.to_le_bytes().to_vec())]);
+    let flst_qp = record(
+        b"FLST",
+        0,
+        FLST_QP,
+        &[
+            sub(b"EDID", z("QuestPerkList")),
+            sub(b"LNAM", QUST.to_le_bytes().to_vec()),
+            sub(b"LNAM", PERK_A.to_le_bytes().to_vec()),
+        ],
+    );
+    let flst_base = record(b"FLST", 0, FLST_BASE, &[sub(b"EDID", z("ListNpcBase")), sub(b"LNAM", NPC_BASE.to_le_bytes().to_vec())]);
+    let flst_ref = record(b"FLST", 0, FLST_REF, &[sub(b"EDID", z("ListNpcRef")), sub(b"LNAM", NPC_REF.to_le_bytes().to_vec())]);
+    let refs = [placed_obj(TRAP_REF, "TrapRef", ACTI_TRAP), placed_obj(MISC_REF, "MiscRef", MISC_A)].concat();
+    let cell_a = [
+        record(b"CELL", 0, CELL_A, &[sub(b"EDID", z("TestCellA"))]),
+        group(CELL_A.to_le_bytes(), 6, &group(CELL_A.to_le_bytes(), 9, &refs)),
+    ]
+    .concat();
+    let npc_ref = record(b"ACHR", 0, NPC_REF, &[sub(b"EDID", z("TestNpcRef")), sub(b"NAME", NPC_BASE.to_le_bytes().to_vec())]);
+    let cell_npc = [
+        record(b"CELL", 0, CELL_ID, &[sub(b"EDID", z("TestCell"))]),
+        group(CELL_ID.to_le_bytes(), 6, &group(CELL_ID.to_le_bytes(), 8, &npc_ref)),
+    ]
+    .concat();
     [
         tes4(),
-        top(b"NPC_", &edid(b"NPC_", 0x7, "Player")),
+        top(b"NPC_", &[edid(b"NPC_", 0x7, "Player"), edid(b"NPC_", NPC_BASE, "TestNpcBase"), edid(b"NPC_", NPC_OTHER, "OtherNpcBase")].concat()),
+        top(b"STAT", &edid(b"STAT", XMARKER, "XMarker")),
+        top(b"ACTI", &edid(b"ACTI", ACTI_TRAP, "TestTrap")),
         top(b"GLOB", &glob),
-        top(b"QUST", &edid(b"QUST", QUST, "TestQuest")),
+        top(b"QUST", &[edid(b"QUST", QUST, "TestQuest"), edid(b"QUST", QUST_OTHER, "OtherQuest")].concat()),
+        top(b"PERK", &[edid(b"PERK", PERK_A, "TestPerk"), edid(b"PERK", PERK_B, "OtherPerk")].concat()),
+        top(b"FLST", &flst_qp),
         top(b"REPU", &edid(b"REPU", REPU, "TestReputation")),
         top(b"MISC", &[edid(b"MISC", MISC_A, "ZuluThing"), edid(b"MISC", MISC_B, "AlphaThing")].concat()),
+        top(b"FLST", &[flst_base, flst_ref].concat()),
+        top(b"CELL", &group(0i32.to_le_bytes(), 2, &group(0i32.to_le_bytes(), 3, &[cell_a, cell_npc].concat()))),
     ]
     .concat()
 }
@@ -106,10 +156,26 @@ fn handlers_hear_the_game() {
     q(&mut g, "let TestGlobal := 0\nSetJohnnyOnLimbGoneEventHandler 1 (begin function {ref rA, int iLimb}\nlet TestGlobal := TestGlobal + iLimb\nend) 0 0 1");
     g.dismember(FormId::PLAYER_REF, &[(1, false), (3, false)], None);
     assert_eq!(global(&mut g), 1.0);
-    // [hypothesis: SetOnReputationChangeEventHandler's (reputation, axis, value)].
-    q(&mut g, "let TestGlobal := 0\nSetOnReputationChangeEventHandler 1 (begin function {ref rR, int iAxis, float fV}\nlet TestGlobal := fV\nend) 0 TestReputation");
-    fnv_game::functions::reputation_store(&mut g, FormId(REPU), 0, 5.0);
-    assert_eq!(global(&mut g), 5.0);
+    // [observed 2026-11-24: w6t2p3_12_rep_fame_infamy: (reputation, fame, infamy)].
+    q(
+        &mut g,
+        "let TestGlobal := 0\n\
+         SetOnReputationChangeEventHandler 1 (begin function {ref rR, float fFame, float fInf}\n\
+         PlayerREF.AuxVarSetFlt \"*rep_ok\" (rR == TestReputation)\n\
+         PlayerREF.AuxVarSetFlt \"*rep_fame\" fFame\n\
+         PlayerREF.AuxVarSetFlt \"*rep_inf\" fInf\n\
+         let TestGlobal := fFame * 10 + fInf\n\
+         end) 0 TestReputation",
+    );
+    fnv_game::functions::reputation_store(&mut g, FormId(REPU), 1, 5.0);
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*rep_ok""#), 1.0);
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*rep_fame""#), 5.0);
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*rep_inf""#), 0.0);
+    assert_eq!(global(&mut g), 50.0);
+    fnv_game::functions::reputation_store(&mut g, FormId(REPU), 0, 3.0);
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*rep_fame""#), 5.0);
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*rep_inf""#), 3.0);
+    assert_eq!(global(&mut g), 53.0);
     // Removing it: `0 function flag filters` as set.
     q(&mut g, "let TestGlobal := 0");
     let removed = g.other.jg8.handlers.len();
@@ -182,6 +248,9 @@ fn arrays_colours_and_menus() {
     assert_eq!(n(&mut g, "GetSystemColor 3"), f64::from(0x21E779u32));
     q(&mut g, "SetSystemColor 4 10 20 30");
     assert_eq!(s(&mut g, "int r\nint gg\nint b\nGetSystemColorAlt 4 r gg b\nSetFunctionValue (sv_Construct \"%g %g %g\" r gg b)"), "10 20 30");
+    // Invalid ids return 0 and preserve output variables unchanged [observed: w6_t1_08_jg_system_color_alt].
+    assert_eq!(s(&mut g, "int r = 111\nint gg = 222\nint b = 333\nGetSystemColorAlt 0 r gg b\nSetFunctionValue (sv_Construct \"%g %g %g\" r gg b)"), "111 222 333");
+    assert_eq!(s(&mut g, "int r = 111\nint gg = 222\nint b = 333\nGetSystemColorAlt 6 r gg b\nSetFunctionValue (sv_Construct \"%g %g %g\" r gg b)"), "111 222 333");
     assert_eq!(n(&mut g, "GetSystemColor 6"), 0.0);
     // [documented: GetSleepWaitMenuState 0 closed, 1 wait, 2 sleep].
     assert_eq!(n(&mut g, "GetSleepWaitMenuState"), 0.0);
@@ -196,4 +265,226 @@ fn arrays_colours_and_menus() {
     assert_eq!(g.other.jg8.custom_marker, None);
     assert_eq!(n(&mut g, "ClearCustomMapMarker"), 1.0);
     assert_eq!(n(&mut g, "IsBSALoaded \"Fallout - Meshes.bsa\""), 0.0);
+}
+
+#[test]
+fn quest_and_perk_handlers_support_formlist_and_xmarker_filters() {
+    let f = fixture();
+    let mut g = game(&f);
+    // [observed 2026-11-24: w6t2p3_09_11_flst_real, FNV 1.4.0.525 + JG 528:
+    // qStart(u=2,d=1,fl=1,xm=2)|qStopFl=1|pAdd(u=1,d=1,fl=1,xm=1)|pRemFl=1]
+    q(
+        &mut g,
+        r#"
+SetJohnnyOnStartQuestEventHandler 1 (begin function {ref rQ}
+PlayerREF.AuxVarSetFlt "*qs_fl" ((PlayerREF.AuxVarGetFlt "*qs_fl") + 1)
+end) 0 QuestPerkList
+SetJohnnyOnStartQuestEventHandler 1 (begin function {ref rQ}
+PlayerREF.AuxVarSetFlt "*qs_xm" ((PlayerREF.AuxVarGetFlt "*qs_xm") + 1)
+end) 0 XMarker
+SetJohnnyOnStartQuestEventHandler 1 (begin function {ref rQ}
+PlayerREF.AuxVarSetFlt "*qs_other" ((PlayerREF.AuxVarGetFlt "*qs_other") + 1)
+end) 0 OtherQuest
+SetJohnnyOnStopQuestEventHandler 1 (begin function {ref rQ}
+PlayerREF.AuxVarSetFlt "*qstop_fl" ((PlayerREF.AuxVarGetFlt "*qstop_fl") + 1)
+end) 0 QuestPerkList
+SetJohnnyOnStopQuestEventHandler 1 (begin function {ref rQ}
+PlayerREF.AuxVarSetFlt "*qstop_xm" ((PlayerREF.AuxVarGetFlt "*qstop_xm") + 1)
+end) 0 XMarker
+SetJohnnyOnAddPerkEventHandler 1 (begin function {ref rP, int iO, int iN}
+PlayerREF.AuxVarSetFlt "*pa_fl" ((PlayerREF.AuxVarGetFlt "*pa_fl") + 1)
+end) 0 QuestPerkList
+SetJohnnyOnAddPerkEventHandler 1 (begin function {ref rP, int iO, int iN}
+PlayerREF.AuxVarSetFlt "*pa_xm" ((PlayerREF.AuxVarGetFlt "*pa_xm") + 1)
+end) 0 XMarker
+SetJohnnyOnAddPerkEventHandler 1 (begin function {ref rP, int iO, int iN}
+PlayerREF.AuxVarSetFlt "*pa_other" ((PlayerREF.AuxVarGetFlt "*pa_other") + 1)
+end) 0 OtherPerk
+SetJohnnyOnRemovePerkEventHandler 1 (begin function {ref rP}
+PlayerREF.AuxVarSetFlt "*pr_fl" ((PlayerREF.AuxVarGetFlt "*pr_fl") + 1)
+end) 0 QuestPerkList
+SetJohnnyOnRemovePerkEventHandler 1 (begin function {ref rP}
+PlayerREF.AuxVarSetFlt "*pr_xm" ((PlayerREF.AuxVarGetFlt "*pr_xm") + 1)
+end) 0 XMarker
+
+StartQuest TestQuest
+StopQuest TestQuest
+PlayerREF.AddPerk TestPerk
+PlayerREF.RemovePerk TestPerk
+"#,
+    );
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*qs_fl""#), 1.0, "StartQuest FormList matches");
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*qs_xm""#), 1.0, "StartQuest XMarker wildcard matches");
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*qs_other""#), 0.0, "StartQuest unrelated filter does not match");
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*qstop_fl""#), 1.0, "StopQuest FormList matches");
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*qstop_xm""#), 1.0, "StopQuest XMarker wildcard matches");
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*pa_fl""#), 1.0, "AddPerk FormList matches");
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*pa_xm""#), 1.0, "AddPerk XMarker wildcard matches");
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*pa_other""#), 0.0, "AddPerk unrelated filter does not match");
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*pr_fl""#), 1.0, "RemovePerk FormList matches");
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*pr_xm""#), 1.0, "RemovePerk XMarker wildcard matches");
+
+    // Non-member quest/perk triggers XMarker wildcard but not QuestPerkList.
+    q(&mut g, "StartQuest OtherQuest\nPlayerREF.AddPerk OtherPerk");
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*qs_fl""#), 1.0);
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*qs_xm""#), 2.0);
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*qs_other""#), 1.0);
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*pa_fl""#), 1.0);
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*pa_xm""#), 2.0);
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*pa_other""#), 1.0);
+}
+
+#[test]
+fn on_av_change_wildcard_minus_one_and_truncation() {
+    let f = fixture();
+    let mut g = game(&f);
+    // [observed 2026-11-24: w6t2p2_10_jg_on_av_change_timed and w6t2p3_10_av_m1_exact,
+    // FNV 1.4.0.525 + JG 528: -1 is wildcard, flag=0 truncates 200.0->199.4->198.8 to
+    // 200->199 and 199->198, flag=1 passes exact floats]
+    q(
+        &mut g,
+        r#"
+PlayerREF.SetAV Health 200
+int iM1
+let iM1 := -1
+SetOnActorValueChangeEventHandler 1 (begin function {int iAv, float fOld, float fNew}
+PlayerREF.AuxVarSetFlt "*av_i_n" ((PlayerREF.AuxVarGetFlt "*av_i_n") + 1)
+PlayerREF.AuxVarSetFlt "*av_i_o" fOld
+PlayerREF.AuxVarSetFlt "*av_i_new" fNew
+end) 0 16
+SetOnActorValueChangeEventHandler 1 (begin function {int iAv, float fOld, float fNew}
+PlayerREF.AuxVarSetFlt "*av_f_n" ((PlayerREF.AuxVarGetFlt "*av_f_n") + 1)
+PlayerREF.AuxVarSetFlt "*av_f_o" fOld
+PlayerREF.AuxVarSetFlt "*av_f_new" fNew
+end) 1 16
+SetOnActorValueChangeEventHandler 1 (begin function {int iAv, float fOld, float fNew}
+PlayerREF.AuxVarSetFlt "*av_m1_n" ((PlayerREF.AuxVarGetFlt "*av_m1_n") + 1)
+end) 0 iM1
+SetOnActorValueChangeEventHandler 1 (begin function {int iAv, float fOld, float fNew}
+PlayerREF.AuxVarSetFlt "*av_ag_n" ((PlayerREF.AuxVarGetFlt "*av_ag_n") + 1)
+end) 0 0
+
+PlayerREF.DamageAV Health 0.6
+"#,
+    );
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*av_i_n""#), 1.0);
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*av_i_o""#), 200.0);
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*av_i_new""#), 199.0);
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*av_f_n""#), 1.0);
+    assert!((n(&mut g, r#"PlayerREF.AuxVarGetFlt "*av_f_new""#) - 199.4).abs() < 1e-4);
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*av_m1_n""#), 1.0, "-1 acts as wildcard, not AV 0");
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*av_ag_n""#), 0.0, "AV 0 filter still excludes Health");
+
+    // Sub-integer drop inside the same whole number (199.4 -> 199.2): exact fires, trunc skips.
+    q(&mut g, "PlayerREF.DamageAV Health 0.2");
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*av_i_n""#), 1.0);
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*av_f_n""#), 2.0);
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*av_m1_n""#), 1.0);
+
+    // Crossing the next integer boundary (199.2 -> 198.6): trunc fires 199.0 -> 198.0.
+    q(&mut g, "PlayerREF.DamageAV Health 0.6");
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*av_i_n""#), 2.0);
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*av_i_o""#), 199.0);
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*av_i_new""#), 198.0);
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*av_m1_n""#), 2.0);
+}
+
+#[test]
+fn on_dying_handler_matches_base_form_ref_and_xmarker() {
+    let f = fixture();
+    let mut g = game(&f);
+    // [observed 2026-11-24: w6t2p2_09_jg_on_dying_all_filters, FNV 1.4.0.525 + JG 528:
+    // dead=1|u=1,xm=1,ref=1,base=1,flst=0]
+    q(
+        &mut g,
+        r#"
+SetJohnnyOnDyingEventHandler 1 (begin function {ref rDead}
+PlayerREF.AuxVarSetFlt "*d_u" ((PlayerREF.AuxVarGetFlt "*d_u") + 1)
+PlayerREF.AuxVarSetRef "*d_arg" rDead
+end) 0
+SetJohnnyOnDyingEventHandler 1 (begin function {ref rDead}
+PlayerREF.AuxVarSetFlt "*d_xm" ((PlayerREF.AuxVarGetFlt "*d_xm") + 1)
+end) 0 XMarker
+SetJohnnyOnDyingEventHandler 1 (begin function {ref rDead}
+PlayerREF.AuxVarSetFlt "*d_ref" ((PlayerREF.AuxVarGetFlt "*d_ref") + 1)
+end) 0 TestNpcRef
+SetJohnnyOnDyingEventHandler 1 (begin function {ref rDead}
+PlayerREF.AuxVarSetFlt "*d_base" ((PlayerREF.AuxVarGetFlt "*d_base") + 1)
+end) 0 TestNpcBase
+SetJohnnyOnDyingEventHandler 1 (begin function {ref rDead}
+PlayerREF.AuxVarSetFlt "*d_other" ((PlayerREF.AuxVarGetFlt "*d_other") + 1)
+end) 0 OtherNpcBase
+SetJohnnyOnDyingEventHandler 1 (begin function {ref rDead}
+PlayerREF.AuxVarSetFlt "*d_fl_base" ((PlayerREF.AuxVarGetFlt "*d_fl_base") + 1)
+end) 0 ListNpcBase
+SetJohnnyOnDyingEventHandler 1 (begin function {ref rDead}
+PlayerREF.AuxVarSetFlt "*d_fl_ref" ((PlayerREF.AuxVarGetFlt "*d_fl_ref") + 1)
+end) 0 ListNpcRef
+TestNpcRef.KillActor PlayerREF
+"#,
+    );
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*d_u""#), 1.0, "unfiltered handler fires");
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetRef "*d_arg" == TestNpcRef"#), 1.0, "dying actor ref passed as arg");
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*d_xm""#), 1.0, "XMarker (0x3B) acts as wildcard");
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*d_ref""#), 1.0, "exact placed ref matches");
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*d_base""#), 1.0, "NPC_ base form matches placed ref");
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*d_other""#), 0.0, "unrelated NPC_ base form does not match");
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*d_fl_base""#), 0.0, "FormList of NPC_ base forms does not match (flst=0)");
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*d_fl_ref""#), 1.0, "FormList of placed refs still matches");
+
+    // Unregistering an XMarker-registered handler with XMarker removes it; verify by
+    // spawning and killing a second actor so Dying genuinely dispatches again.
+    q(
+        &mut g,
+        r#"
+ref h
+ref rNpc2
+let h := (begin function {ref rDead}
+PlayerREF.AuxVarSetFlt "*d_rm" 1
+end)
+SetJohnnyOnDyingEventHandler 1 h 0 XMarker
+SetJohnnyOnDyingEventHandler 0 h 0 XMarker
+let rNpc2 := TestNpcRef.PlaceAtMe TestNpcBase 1
+rNpc2.KillActor PlayerREF
+"#,
+    );
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*d_u""#), 2.0, "second actor kill must dispatch Dying");
+    assert_eq!(n(&mut g, r#"PlayerREF.AuxVarGetFlt "*d_rm""#), 0.0, "unregistered XMarker handler must not fire on second kill");
+}
+
+#[test]
+fn xmarker_filter_acts_as_wildcard_for_crosshair_and_jg8_events() {
+    let f = fixture();
+    let mut g = game(&f);
+
+    // XMarker (0x3B) in filter slot 0 with form type 21 (ACTI) in slot 1 matches any ACTI ref
+    // and rejects non-ACTI refs (matching active mods such as BetterTrapDisarm).
+    q(
+        &mut g,
+        "let TestGlobal := 0\n\
+         ref h\n\
+         let h := (begin function {ref rTgt}\n\
+           if rTgt == TrapRef\n\
+             let TestGlobal := TestGlobal + 1\n\
+           else\n\
+             let TestGlobal := TestGlobal + 100\n\
+           endif\n\
+         end)\n\
+         SetJohnnyOnCrosshairEventHandler 1 h 0 XMarker 21",
+    );
+    g.jg8_crosshair(MISC_REF);
+    assert_eq!(global(&mut g), 0.0, "non-ACTI ref must not match form type 21");
+    g.jg8_crosshair(TRAP_REF);
+    assert_eq!(global(&mut g), 1.0, "XMarker wildcard + type 21 matches placed ACTI ref");
+
+    // XMarker also acts as wildcard on SetOnReputationChangeEventHandler.
+    q(
+        &mut g,
+        "let TestGlobal := 0\n\
+         SetOnReputationChangeEventHandler 1 (begin function {ref rR}\n\
+           let TestGlobal := TestGlobal + 1\n\
+         end) 0 XMarker",
+    );
+    fnv_game::functions::reputation_store(&mut g, FormId(REPU), 1, 5.0);
+    assert_eq!(global(&mut g), 1.0, "XMarker wildcard matches reputation change");
 }

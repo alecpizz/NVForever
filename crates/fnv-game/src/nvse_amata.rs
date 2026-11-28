@@ -113,16 +113,10 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
                     }
                 }
                 Some(EffectSlot::Added { back, at }) => {
-                    let Some(e) = g.added_effect_mut(f, back, at) else { return Some(Ok(XVal::Num(0.0))) };
-                    let field = match t {
-                        0 => &mut e.magnitude,
-                        1 => &mut e.area,
-                        _ => &mut e.duration,
-                    };
                     if get {
-                        XVal::Num(f64::from(*field))
+                        XVal::Num(g.added_effect_trait(f, back, at, t).unwrap_or(0.0))
                     } else {
-                        *field = v.max(0.0) as u32;
+                        g.set_added_effect_trait(f, back, at, t, v);
                         XVal::Num(0.0)
                     }
                 }

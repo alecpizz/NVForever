@@ -16,7 +16,8 @@
 //!   [`Loading::render_busy`]) and no actor in view still waits for its parts
 //!   ([`Loading::actors_busy`]), [`SETTLE_SECS`] later so that textures and meshes reach
 //!   the graphics card behind the picture. With ALC shadows on it also waits while their
-//!   maps are drawn behind it ([`Loading::lamp_shadows_busy`]).
+//!   maps are drawn behind it ([`Loading::lamp_shadows_busy`]), and with Volumetric clouds on,
+//!   for a second at most, until every part of their picture has been cast ([`Loading::clouds_busy`]).
 //! - A run that starts in the world ([`StartCover`]) is held under the screen from its
 //!   first frame until the same is in, the scripts are made (a save put back into
 //!   them) and the residents in view are drawn ([`Loading::start_actors`], for at most
@@ -50,7 +51,7 @@ use crate::{Location, PlaySet, PlayState, PlayWorld, Travel};
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
-use fnv_world::loadscreen::{choose, load_screens, Destination, LoadScreen, TipStyle};
+use fnv_world::loadscreen::{choose_with, load_screens, Destination, LoadScreen, TipStyle};
 use nvf_assets::{GameData, TextureCache};
 
 /// Frames the screen is up before the travel is applied [engineering choice: the frame
@@ -61,6 +62,12 @@ pub const SHOW_FRAMES: u32 = 2;
 /// cell is in [engineering choice].
 pub const SETTLE_SECS: f64 = 0.25;
 pub const SETTLE_FRAMES: u32 = 3;
+
+/// The most real seconds a settled screen stays up for the volumetric clouds
+/// ([`Loading::clouds_busy`]), counted with the settle time from when everything else was in
+/// [design: their nine casts take 0.15 s at 60 frames a second, inside the settle time, and fit
+/// the limit down to about nine frames a second; a screen must never hang on them].
+pub const CLOUDS_HOLD_SECS: f64 = 1.0;
 
 /// Real seconds after which a loading screen comes down whatever is still missing
 /// (logged as a warning), so a cell that never loads cannot hold the game forever.
@@ -141,6 +148,11 @@ pub struct Loading {
     /// The player's No Exterior Load Screens tweak: a trip out of an interior shows the
     /// black alone, no picture or tip [design: docs/design/tweaks.md].
     pub plain_going_out: bool,
+    /// Named NVForever option `location-load-screens` (off by default; #3844): prefer
+    /// location-specific load screens when any match the destination, synced live from
+    /// [`LocationLoadScreens`] [documented: JIP LN NVSE v57.30 / Settings INI v56.24
+    /// `jip_nvse.ini` `bLoadScreenFix`; design: `docs/spec-notes/location-load-screens.md`].
+    pub prefer_location: bool,
     /// The next screen is the plain one (set for one [`spawn_screen`]).
     plain_once: bool,
     waiting_click: bool,
@@ -195,6 +207,12 @@ pub struct Loading {
     /// it comes down. Set by nvforever every frame (`light_shadows`, its pre-draw, which gives
     /// up after a few seconds of its own); stays false without it.
     pub lamp_shadows_busy: bool,
+    /// The volumetric clouds are asked for but not yet drawn behind the screen with every texel
+    /// cast since the last cut (nvforever `medium.rs` `clouds_gate`, set every frame). A settled
+    /// screen waits for them up to [`CLOUDS_HOLD_SECS`]; stays false without them.
+    pub clouds_busy: bool,
+    /// They are so drawn, for the log as the screen comes down (false also without them).
+    pub clouds_ready: bool,
     /// Since when only pipelines have been waited for (real time), and whether
     /// [`PIPELINE_CAP_SECS`] has passed this screen.
     pipelines_since: Option<f64>,
@@ -249,6 +267,10 @@ pub struct LoadPhases {
     /// time queued for an archive (`fnv_vfs::read_stats`; from its first frame counted).
     pub reads: fnv_vfs::ReadStats,
     reads_from: Option<fnv_vfs::ReadStats>,
+    /// The pipelines compiled under the screen and where their time went, summed over the
+    /// compile threads (vendored bevy_render `nvf_pipeline_time`, #2407).
+    pub pipelines: bevy::render::render_resource::NvfPipelineTime,
+    pipelines_from: Option<bevy::render::render_resource::NvfPipelineTime>,
 }
 
 impl LoadPhases {
@@ -256,6 +278,8 @@ impl LoadPhases {
     fn note(&mut self, wait: &[&'static str], at: f64, frame: f64) {
         let now = fnv_vfs::read_stats();
         self.reads = now.since(self.reads_from.get_or_insert(now));
+        let piped = bevy::render::render_resource::nvf_pipeline_time();
+        self.pipelines = piped.since(self.pipelines_from.get_or_insert(piped));
         self.frames += 1;
         self.total = self.total.max(at);
         self.longest_frame = self.longest_frame.max(frame);
@@ -267,19 +291,26 @@ impl LoadPhases {
         }
     }
 
-    /// The log line's text: `up 3.40 s; cells to draw 3.10 s, pipelines 0.40 s; longest frame 0.90 s of 41; read 812 files, 95.0 MB, 0.30 s reading, 0.10 s queued for an archive`.
+    /// The log line's text: `up 3.40 s; cells to draw 3.10 s, pipelines 0.40 s; longest frame 0.90 s of 41; read 812 files, 95.0 MB, 0.30 s reading, 0.10 s queued for an archive; 45 pipelines compiled: 1.20 s queued for a thread, 0.30 s for the shader cache, 0.10 s composing, 0.40 s making modules, 2.00 s creating`
+    /// (the pipelines' seconds are summed over the compile threads).
     pub fn text(&self) -> String {
         let waits = if self.until.is_empty() { "nothing waited for".to_string() } else { self.until.iter().map(|(n, t)| format!("{n} {t:.2} s")).collect::<Vec<_>>().join(", ") };
-        let r = &self.reads;
+        let (r, p) = (&self.reads, &self.pipelines);
         format!(
-            "up {:.2} s; {waits}; longest frame {:.2} s of {}; read {} files, {:.1} MB, {:.2} s reading, {:.2} s queued for an archive",
+            "up {:.2} s; {waits}; longest frame {:.2} s of {}; read {} files, {:.1} MB, {:.2} s reading, {:.2} s queued for an archive; {} pipelines compiled: {:.2} s queued for a thread, {:.2} s for the shader cache, {:.2} s composing, {:.2} s making modules, {:.2} s creating",
             self.total,
             self.longest_frame,
             self.frames,
             r.files,
             r.bytes as f64 / 1e6,
             r.read_ns as f64 / 1e9,
-            r.queued_ns as f64 / 1e9
+            r.queued_ns as f64 / 1e9,
+            p.pipelines,
+            p.queued_ms / 1e3,
+            p.lock_ms / 1e3,
+            p.compose_ms / 1e3,
+            p.naga_ms / 1e3,
+            p.create_ms / 1e3
         )
     }
 }
@@ -344,6 +375,12 @@ impl Loading {
     pub fn placing_capped(&self) -> bool {
         self.placing_capped
     }
+
+    /// A start's screen that is up, and settling or not, for the tests of who follows it.
+    #[cfg(feature = "test-support")]
+    pub fn starting_for_test(settling: bool) -> Loading {
+        Loading { start: Some(StartHold { started: 0.0, ready: settling.then_some((0.0, 0)) }), ..default() }
+    }
 }
 
 /// The loading screens of the plugins.
@@ -353,11 +390,29 @@ struct Screens(Vec<LoadScreen>);
 #[derive(Component)]
 struct LoadingRoot;
 
+/// Named NVForever option `location-load-screens` (off by default; #3844): when enabled,
+/// prefer location-specific `LSCR` loading screens matching the destination cell or
+/// worldspace over generic screens [documented: JIP LN NVSE v57.30 / Settings INI v56.24
+/// `jip_nvse.ini` `bLoadScreenFix`; no DLL or source consulted; design:
+/// `docs/spec-notes/location-load-screens.md`].
+#[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct LocationLoadScreens(pub bool);
+
+/// Keep [`Loading::prefer_location`] aligned with the live [`LocationLoadScreens`] setting
+/// so toggling it from the pause menu takes effect immediately.
+pub(crate) fn sync_location_load_screens(setting: Option<Res<LocationLoadScreens>>, mut loading: ResMut<Loading>) {
+    let want = setting.as_deref().is_some_and(|s| s.0);
+    if loading.prefer_location != want {
+        loading.prefer_location = want;
+    }
+}
+
 pub struct LoadingPlugin;
 
 impl Plugin for LoadingPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Loading>()
+            .init_resource::<LocationLoadScreens>()
             .init_resource::<Look>()
             .add_message::<TravelRequest>()
             .add_message::<CoverRequest>()
@@ -367,8 +422,21 @@ impl Plugin for LoadingPlugin {
                 PreUpdate,
                 hold_input.after(bevy::input::InputSystems).after(crate::pad::menu_keys).after(crate::test_aid::real_presses).before(bevy::ui::UiSystems::Focus),
             )
-            .add_systems(Update, (send.in_set(PlaySet::Input), (begin_start, begin, hold, look::fit_tip, look::turn_emblem).chain().in_set(PlaySet::Sync)))
+            .add_systems(Update, (send.in_set(PlaySet::Input), (sync_location_load_screens, begin_start, begin, hold, look::fit_tip, look::turn_emblem).chain().in_set(PlaySet::Sync)))
             .add_systems(Last, finish);
+        crate::settings::add_setting(
+            app,
+            crate::settings::Setting {
+                key: "location-load-screens",
+                group: "Interface",
+                label: "Location-specific loading screens",
+                note: "On: prefer loading screens matching the destination cell or worldspace over generic screens. Off: mix matching and generic loading screens as in the original.",
+                switches: "",
+                get: |w| w.resource::<LocationLoadScreens>().0,
+                set: |w, on| w.resource_mut::<LocationLoadScreens>().0 = on,
+                slider: None,
+            },
+        );
     }
 }
 
@@ -430,6 +498,7 @@ struct Art<'w> {
     textures: Option<ResMut<'w, TextureCache>>,
     images: Option<ResMut<'w, Assets<Image>>>,
     formats: Option<Res<'w, CompressedImageFormatSupport>>,
+    prefer_location: Option<Res<'w, LocationLoadScreens>>,
     look: ResMut<'w, Look>,
 }
 
@@ -555,7 +624,8 @@ fn spawn_screen(commands: &mut Commands, loading: &mut Loading, art: &mut Art, t
     let to = to.unwrap_or(&anywhere);
     loading.shown += 1;
     let plain = std::mem::take(&mut loading.plain_once);
-    let screen = art.screens.as_deref().filter(|_| !plain).and_then(|s| choose(&s.0, to, roll(loading.shown)));
+    let prefer_location = loading.prefer_location || art.prefer_location.as_deref().is_some_and(|s| s.0);
+    let screen = art.screens.as_deref().filter(|_| !plain).and_then(|s| choose_with(&s.0, to, roll(loading.shown), prefer_location));
     if plain {
         info!("loading screen: out of an interior, no picture (tweak)");
     }
@@ -655,7 +725,7 @@ fn missing(loading: &Loading, phys: Option<&PhysState>, scripts: Option<&crate::
         out.push("the Pip-Boy warm-up");
     }
     if loading.lamp_shadows_busy {
-        out.push("ALC shadows");
+        out.push("ALCS");
     }
     out
 }
@@ -714,6 +784,38 @@ fn waiting_for(loading: &mut Loading, phys: Option<&PhysState>, scripts: Option<
         loading.pipeline_cap_note = true;
     }
     wait
+}
+
+/// What [`LoadPhases`] names for the clouds.
+const CLOUDS: &str = "the clouds";
+
+/// Whether a settled screen stays up for the volumetric clouds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CloudsHold {
+    /// Nothing to wait for: off, nothing to draw, failed, or drawn as wanted.
+    Free,
+    Hold,
+    /// Still not drawn as wanted, and the limit has passed: the screen goes without them.
+    Limit,
+}
+
+/// [`CloudsHold`] for clouds still `busy`, a screen `ready` since then (real time, frames:
+/// [`settled`]) and the time `now`. Always ends: the time is the screen's own.
+fn clouds_hold(busy: bool, ready: Option<(f64, u32)>, now: f64) -> CloudsHold {
+    match ready {
+        _ if !busy => CloudsHold::Free,
+        Some((since, _)) if now - since < CLOUDS_HOLD_SECS => CloudsHold::Hold,
+        _ => CloudsHold::Limit,
+    }
+}
+
+/// Whether a settled screen stays up this frame ([`clouds_hold`]); says so when the limit ends it.
+fn held_for_clouds(busy: bool, ready: Option<(f64, u32)>, now: f64) -> bool {
+    let hold = clouds_hold(busy, ready, now);
+    if let (CloudsHold::Limit, Some((since, frames))) = (hold, ready) {
+        debug!("loading screen: the volumetric clouds not drawn with every texel cast after {:.2} s and {frames} frames; going on without them", now - since);
+    }
+    hold == CloudsHold::Hold
 }
 
 /// Whether `ready` has held for the settle time, counting this frame; `false` resets it.
@@ -786,10 +888,14 @@ fn finish(
     };
     // Timed from the screen that is up: the start's for a travel under it.
     if let Some(origin) = loading.start.map(|s| s.started).or(loading.trip.map(|t| t.started)) {
-        let noted = wait.clone().unwrap_or_else(|| vec!["the travel to go out"]);
+        let mut noted = wait.clone().unwrap_or_else(|| vec!["the travel to go out"]);
+        if wait.is_some() && loading.clouds_busy {
+            noted.push(CLOUDS);
+        }
         loading.phases.note(&noted, now - origin, real.delta_secs_f64());
     }
     let wait = wait.unwrap_or_default();
+    let clouds = loading.clouds_busy;
     if sent {
         let trip = loading.trip.as_mut().expect("trip");
         let waited = now - trip.started;
@@ -799,6 +905,9 @@ fn finish(
             } else {
                 return;
             }
+        } else if !starting && held_for_clouds(clouds, trip.ready, now) {
+            // (Under the start's screen the start waits for them, once.)
+            return;
         }
         loading.trip = None;
         if starting {
@@ -815,6 +924,8 @@ fn finish(
             } else {
                 return;
             }
+        } else if held_for_clouds(clouds, hold.ready, now) {
+            return;
         }
         loading.start = None;
         info!("loading screen down after {waited:.2} s (the start: cells, actors and scripts ready); the test aids and --run-seconds count from now");
@@ -833,6 +944,9 @@ fn finish(
     }
     let phases = std::mem::take(&mut loading.phases);
     info!("loading screen phases: {}", phases.text());
+    if loading.clouds_ready {
+        info!("loading screen: the volumetric clouds were drawn behind it, every texel cast");
+    }
     loading.last_phases = Some(phases);
     (loading.pipelines_since, loading.pipelines_capped) = (None, false);
     (loading.placing_since, loading.placing_capped) = (None, false);
@@ -883,9 +997,50 @@ mod tests {
     #[test]
     fn a_screen_waits_for_the_lamp_shadows_pre_draw() {
         let mut loading = Loading { lamp_shadows_busy: true, ..default() };
-        assert_eq!(missing(&loading, None, None, false), vec!["ALC shadows"]);
+        assert_eq!(missing(&loading, None, None, false), vec!["ALCS"]);
         loading.lamp_shadows_busy = false;
         assert!(missing(&loading, None, None, false).is_empty());
+    }
+
+    /// The volumetric clouds hold a settled screen while not every texel has been cast, and never
+    /// past the limit of real time, however many frames that is.
+    #[test]
+    fn the_clouds_hold_a_settled_screen_up_to_their_limit() {
+        use CloudsHold::{Free, Hold, Limit};
+        assert_eq!(clouds_hold(false, Some((10.0, 3)), 10.0), Free, "off, nothing to draw, failed or drawn");
+        assert_eq!(clouds_hold(false, Some((10.0, 500)), 99.0), Free, "nothing said after the limit either");
+        assert_eq!(clouds_hold(true, Some((10.0, 3)), 10.25), Hold);
+        assert_eq!(clouds_hold(true, Some((10.0, 9)), 10.0 + CLOUDS_HOLD_SECS - 0.01), Hold, "just before the limit, at nine frames a second");
+        assert_eq!(clouds_hold(true, Some((10.0, 4)), 10.0 + CLOUDS_HOLD_SECS), Limit, "the limit");
+        assert_eq!(clouds_hold(true, Some((10.0, 10_000)), 10.5), Hold, "no limit of frames");
+        assert_eq!(clouds_hold(true, None, 10.0), Limit, "no count to wait by: not waited for");
+        assert!(held_for_clouds(true, Some((10.0, 3)), 10.25) && !held_for_clouds(true, Some((10.0, 3)), 10.0 + CLOUDS_HOLD_SECS) && !held_for_clouds(false, Some((10.0, 3)), 10.25));
+        // Not one of the waits that start the settle time again.
+        assert!(missing(&Loading { clouds_busy: true, ..default() }, None, None, true).is_empty());
+    }
+
+    /// Clouds that never come do not hang a travel's or the start's screen, and are named in its
+    /// phases.
+    #[test]
+    fn a_screen_never_hangs_on_the_clouds() {
+        for start in [false, true] {
+            let mut app = app();
+            if start {
+                app.insert_resource(StartCover);
+            }
+            app.update();
+            if !start {
+                let t = Travel { world: None, interior: None, feet: [1.0, 2.0, 3.0], heading_deg: 90.0, pitch_deg: None };
+                app.world_mut().write_message(TravelRequest(t));
+            }
+            app.world_mut().resource_mut::<Loading>().clouds_busy = true;
+            app.update();
+            assert!(app.world().resource::<Loading>().active());
+            until_down(&mut app);
+            assert_eq!(*app.world().resource::<State<PlayState>>().get(), PlayState::Playing);
+            let l = app.world().resource::<Loading>();
+            assert!(l.last_phases.as_ref().is_some_and(|p| p.until.iter().any(|(w, _)| *w == CLOUDS)), "start {start}: {:?}", l.last_phases);
+        }
     }
 
     #[test]
@@ -1337,5 +1492,104 @@ mod tests {
         until_down(&mut app);
         assert!(!app.world().resource::<Loading>().active());
         assert_eq!(*app.world().resource::<State<PlayState>>().get(), PlayState::Playing);
+    }
+
+    #[test]
+    fn location_load_screens_setting_defaults_off_syncs_and_round_trips_ini() {
+        use bevy::app::PostStartup;
+        use bevy::ecs::system::RunSystemOnce;
+        use bevy::MinimalPlugins;
+
+        let dir = std::env::temp_dir().join(format!("nvf-location-load-screens-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("NVForever.ini");
+
+        let make_app = |ini_path: &std::path::Path| {
+            let mut app = App::new();
+            app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+                .init_state::<PlayState>()
+                .insert_resource(crate::settings::SettingsFile(Some(ini_path.to_path_buf())))
+                .init_resource::<crate::settings::GivenSwitches>()
+                .add_plugins(LoadingPlugin)
+                .add_systems(PostStartup, crate::settings::apply_stored);
+            app.world_mut().run_schedule(PostStartup);
+            app
+        };
+
+        // 1. Fresh start with no INI: defaults to off, within note budget.
+        let mut app = make_app(&path);
+        assert!(!app.world().resource::<LocationLoadScreens>().0, "must default to off");
+        assert!(!app.world().resource::<Loading>().prefer_location, "Loading::prefer_location defaults off");
+        let idx = app.world().resource::<crate::settings::Settings>().index("location-load-screens").expect("setting registered");
+        let row = &app.world().resource::<crate::settings::Settings>().list()[idx];
+        assert_eq!(crate::settings::note_over_budget(row.note), None, "note must fit within 200-char budget");
+
+        // Live sync propagates to Loading::prefer_location and persists to NVForever.ini.
+        assert_eq!(crate::settings::flip(app.world_mut(), idx), Some(true));
+        app.world_mut().run_system_once(sync_location_load_screens).unwrap();
+        assert!(app.world().resource::<LocationLoadScreens>().0);
+        assert!(app.world().resource::<Loading>().prefer_location);
+        let ini = std::fs::read_to_string(&path).unwrap();
+        assert!(ini.contains("location-load-screens=1"), "persisted to NVForever.ini: {ini}");
+
+        // 2. Next start loads ON from NVForever.ini.
+        let mut reloaded = make_app(&path);
+        assert!(reloaded.world().resource::<LocationLoadScreens>().0, "restored from NVForever.ini");
+
+        // 3. Flipping back off writes 0 and restores off on next start.
+        let idx2 = reloaded.world().resource::<crate::settings::Settings>().index("location-load-screens").unwrap();
+        assert_eq!(crate::settings::flip(reloaded.world_mut(), idx2), Some(false));
+        let ini_off = std::fs::read_to_string(&path).unwrap();
+        assert!(ini_off.contains("location-load-screens=0"), "off persisted: {ini_off}");
+        let reloaded_off = make_app(&path);
+        assert!(!reloaded_off.world().resource::<LocationLoadScreens>().0, "off restored from NVForever.ini");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn location_load_screens_consumer_prefers_matching_screen_when_enabled_and_preserves_vanilla_when_off() {
+        use fnv_world::loadscreen::ScreenLocation;
+
+        const CELL: u32 = 0x106FE5;
+        let screens = vec![
+            LoadScreen { form_id: 1, edid: Some("GenericA".into()), texture: None, text: "Generic tip".into(), locations: vec![], main_menu: false, tip: None },
+            LoadScreen {
+                form_id: 2,
+                edid: Some("SaloonOwn".into()),
+                texture: None,
+                text: "Saloon tip".into(),
+                locations: vec![ScreenLocation::Direct(CELL)],
+                main_menu: false,
+                tip: None,
+            },
+        ];
+
+        let run_trips = |prefer: bool| -> Vec<String> {
+            let mut app = app();
+            app.insert_resource(Screens(screens.clone()));
+            app.world_mut().resource_mut::<LocationLoadScreens>().0 = prefer;
+            app.update();
+            let mut tips = Vec::new();
+            for _ in 0..8 {
+                let t = Travel { world: None, interior: Some(CELL), feet: [1.0, 2.0, 3.0], heading_deg: 0.0, pitch_deg: None };
+                app.world_mut().write_message(TravelRequest(t));
+                app.update();
+                let tip = app.world_mut().query::<&look::Tip>().iter(app.world()).next().expect("tip spawned").text.clone();
+                tips.push(tip);
+                until_down(&mut app);
+            }
+            tips
+        };
+
+        // Default off: mixes location-specific and generic tips across rolls (vanilla behavior).
+        let vanilla = run_trips(false);
+        assert!(vanilla.iter().any(|t| t == "Generic tip"), "off must still pick generic screens: {vanilla:?}");
+        assert!(vanilla.iter().any(|t| t == "Saloon tip"), "off must also pick location screens: {vanilla:?}");
+
+        // Enabled: every trip to CELL chooses the matching location-specific screen.
+        let preferred = run_trips(true);
+        assert!(preferred.iter().all(|t| t == "Saloon tip"), "on must prefer matching location screens: {preferred:?}");
     }
 }

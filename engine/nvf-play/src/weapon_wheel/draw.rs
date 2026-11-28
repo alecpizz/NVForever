@@ -296,7 +296,7 @@ fn base_of(face: &Face) -> f32 {
 
 /// One line of text, its top at `top`: centred on `x` (`align` 0), from `x` (-1) or
 /// ending at `x` (1).
-fn text(p: &mut ChildSpawnerCommands, face: &Face, s: &str, x: f32, top: f32, align: i32, color: Color) {
+pub(crate) fn text(p: &mut ChildSpawnerCommands, face: &Face, s: &str, x: f32, top: f32, align: i32, color: Color) {
     let Some(line) = face.font.lines(s.trim(), None).into_iter().next() else { return };
     let left = match align {
         0 => x - line.width / 2.0,

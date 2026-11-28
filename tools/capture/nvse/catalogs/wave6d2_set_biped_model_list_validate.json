@@ -1,0 +1,72 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6d2_set_biped_model_list_validate",
+  "description": "Wave 6D-2 read-only probe for SetBipedModelList FLST validation, explicit null no-op, and omitted-arg clear.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "jip_ln_nvse": "57.30 (5730)"
+  },
+  "batches": [
+    {
+      "id": "w6d2_biped_model_list",
+      "title": "Wave 6D-2: SetBipedModelList validation",
+      "extender": "JIP LN NVSE 57.30",
+      "required_plugins": [
+        "jip_nvse.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6d2p5_04_biped_model_list_omit",
+          "bucket": "A",
+          "extender": "JIP LN 57.30",
+          "required_plugins": [
+            "jip_nvse.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/jip-records-7.md",
+          "spec_line": 87,
+          "functions_tested": [
+            "GetBipedModelList",
+            "SetBipedModelList"
+          ],
+          "claim": "Verify SetBipedModelList validates FLST, treats explicit null 0 as no-op, and clears when omitted.",
+          "expected": "set=1, badEqFl=1, nullZ=0, omitZ=1.",
+          "script_lines": [
+            "ref rLth = GetFormFromMod \"FalloutNV.esm\" \"20423\"",
+            "ref rFl = GetFormFromMod \"FalloutNV.esm\" \"14B96\"",
+            "ref rStim = GetFormFromMod \"FalloutNV.esm\" \"15169\"",
+            "ref rNull = 0",
+            "ref b0 = GetBipedModelList rLth",
+            "SetBipedModelList rLth rFl",
+            "ref bSet = GetBipedModelList rLth",
+            "SetBipedModelList rLth rStim",
+            "ref bBad = GetBipedModelList rLth",
+            "SetBipedModelList rLth rNull",
+            "ref bNull = GetBipedModelList rLth",
+            "SetBipedModelList rLth",
+            "ref bOmit = GetBipedModelList rLth",
+            "SetBipedModelList rLth b0",
+            "PrintToConsole \"PROBE|w6d2p5_04_biped_model_list_omit|set=%g,badEqFl=%g,badZ=%g,nullZ=%g,omitZ=%g\" (bSet == rFl) (bBad == rFl) (bBad == 0) (bNull == 0) (bOmit == 0)"
+          ]
+        }
+      ]
+    }
+  ]
+}

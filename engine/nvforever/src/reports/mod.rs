@@ -9,6 +9,7 @@
 //!   (handoff.rs: loading a save starts a new process) follows the stored answer and never
 //!   asks; it is where the player plays after a load, so it collects and sends like any. `NVF_REPORTS=1` turns it on without asking (tests; such a run sends
 //!   only to `NVF_REPORTS_ENDPOINT`, never to the project's server).
+//!   Android never collects or sends player reports, regardless of saved or test settings.
 //! - **Official builds only** [owner 2026-11-11]: a build is official when the release
 //!   workflow made it (`NVF_OFFICIAL_BUILD=1` at build time). A local build never asks and
 //!   never sends to the project's server, as development sessions would skew what reports
@@ -218,6 +219,9 @@ pub fn decide(developer_data: bool, handoff: bool) {
 }
 
 fn choose(developer_data: bool, handoff: bool) -> Option<Active> {
+    if cfg!(target_os = "android") {
+        return None;
+    }
     let home = EngineHome::user()?;
     let test_on = std::env::var("NVF_REPORTS").is_ok_and(|v| v.trim() == "1");
     let endpoint_env = std::env::var("NVF_REPORTS_ENDPOINT").ok().filter(|v| !v.trim().is_empty());
@@ -458,6 +462,10 @@ struct Collector {
     here: anomaly::Here,
     /// When the last loading screen went down (real seconds).
     load_ended: f64,
+    /// Until when (real seconds) the frames are not play: the window lost or got back its
+    /// focus, was covered, shown again or minimised, or the app was suspended or resumed
+    /// (`track_away`).
+    away_until: f64,
     detectors: anomaly::Detectors,
 }
 
@@ -520,10 +528,11 @@ impl Plugin for ReportsPlugin {
                 load: None,
                 here: Default::default(),
                 load_ended: 0.0,
+                away_until: 0.0,
                 detectors: Default::default(),
             })
             .add_systems(Startup, (read_gpu, read_window))
-            .add_systems(Update, (collect, track_loads, list_model_sources, detect.after(nvf_play::control::enforce_locks)).chain())
+            .add_systems(Update, (track_away, collect, track_loads, list_model_sources, detect.after(nvf_play::control::enforce_locks)).chain())
             // After Bevy's window-closed exit (AppExit in Last): else a window closed by the
             // player missed the clean end and the run was sent as a native crash (#2203).
             .add_systems(Last, (controls::detect, write_summary.after(bevy::window::ExitSystems)).chain());
@@ -643,6 +652,7 @@ fn read_window(windows: Query<&Window, With<bevy::window::PrimaryWindow>>, mut c
 /// Every frame: its time in the camera's place, cells visited, time in each worldspace.
 fn collect(
     time: Res<Time>,
+    real: Res<Time<Real>>,
     player: Option<Res<nvf_play::player::Player>>,
     cam: Query<&GlobalTransform, With<crate::fly::FlyCam>>,
     streamer: Option<Res<crate::world::Streamer>>,
@@ -676,9 +686,10 @@ fn collect(
         c.summary.places.push(Place { name: place.clone(), interior, ..Default::default() });
         c.summary.places.len() - 1
     });
-    // The first frames after a load are the load, not play.
+    // The first frames after a load are the load, not play; nor are frames with the game
+    // away (`track_away`).
     let ms = time.delta_secs() * 1000.0;
-    if ms > 0.0 && t_s > 2 {
+    if ms > 0.0 && t_s > 2 && !c.away(real.elapsed_secs_f64(), real.delta_secs_f64()) {
         c.summary.places[i].add_frame(ms, t_s, &cell_name);
     }
     if !interior {
@@ -736,7 +747,10 @@ fn track_loads(
                 // Where the time went (issue #2407): each wait's end and the longest frame.
                 let phases = loading.last_phases.as_ref().map(|p| {
                     let until: serde_json::Map<String, serde_json::Value> = p.until.iter().map(|(n, t)| (n.to_string(), serde_json::json!((t * 1000.0).round()))).collect();
-                    serde_json::json!({ "until_ms": until, "longest_frame_ms": (p.longest_frame * 1000.0).round(), "frames": p.frames, "read_files": p.reads.files, "read_mb": (p.reads.bytes as f64 / 1e5).round() / 10.0, "read_ms": (p.reads.read_ns as f64 / 1e6).round(), "queued_ms": (p.reads.queued_ns as f64 / 1e6).round() })
+                    let pl = &p.pipelines;
+                    // Where the pipelines' time went (#2407), ms summed over the compile threads.
+                    let pipelines = serde_json::json!({ "compiled": pl.pipelines, "queued_ms": pl.queued_ms.round(), "lock_ms": pl.lock_ms.round(), "compose_ms": pl.compose_ms.round(), "modules_ms": pl.naga_ms.round(), "create_ms": pl.create_ms.round() });
+                    serde_json::json!({ "until_ms": until, "longest_frame_ms": (p.longest_frame * 1000.0).round(), "frames": p.frames, "read_files": p.reads.files, "read_mb": (p.reads.bytes as f64 / 1e5).round() / 10.0, "read_ms": (p.reads.read_ns as f64 / 1e6).round(), "queued_ms": (p.reads.queued_ns as f64 / 1e6).round(), "pipelines": pipelines })
                 });
                 c.detectors.fire(&mut c.summary, &c.here, t_s, "slow_load", serde_json::json!({ "load": kind, "ms": ms.round(), "phases": phases }));
             }
@@ -787,11 +801,19 @@ fn asks_to_move(state: &str, intent: Option<&nvf_play::player::MoveIntent>, held
 
 #[cfg(test)]
 mod stuck_tests {
-    use super::asks_to_move;
+    use super::{asks_to_move, away_frame};
     use nvf_play::player::MoveIntent;
 
     /// #3046: keys held while a script locks movement (Doc Mitchell's opening) or furniture
     /// holds the player are not a player stuck; the same keys free are.
+    #[test]
+    fn frames_after_the_game_was_away_are_not_play() {
+        assert!(away_frame(10.5, 0.4, 11.0), "within a second of a focus change");
+        assert!(!away_frame(11.5, 0.4, 11.0), "after it");
+        assert!(away_frame(500.0, 45.0, 0.0), "the machine slept");
+        assert!(!away_frame(500.0, 2.0, 0.0), "a long frame in play is a hitch");
+    }
+
     #[test]
     fn held_keys_count_only_when_the_player_could_move() {
         let forward = MoveIntent { forward: 1.0, ..MoveIntent::default() };
@@ -800,6 +822,48 @@ mod stuck_tests {
         assert!(!asks_to_move("menu", Some(&forward), false));
         assert!(!asks_to_move("playing", Some(&MoveIntent::default()), false));
         assert!(!asks_to_move("playing", None, false));
+    }
+}
+
+impl Collector {
+    /// Whether a frame that ends `now` (real seconds) after `dt` seconds is the game away
+    /// rather than play ([`away_frame`]).
+    fn away(&self, now: f64, dt: f64) -> bool {
+        away_frame(now, dt, self.away_until)
+    }
+}
+
+/// Seconds after the window or the app comes back during which frames are not counted as
+/// play [design, #3043: the first frames after a focus change or a resume carry the time
+/// away, and pipelines or textures the driver dropped while hidden are made again].
+pub const AWAY_SETTLE_SECS: f64 = 1.0;
+/// A frame this long or longer is taken as the machine having slept (no window message
+/// comes for a sleep) [design, #3043: no hitch a report has shown runs this long; a real
+/// stall that long is a hang, which the crash handler's watchdog reports].
+pub const AWAY_FRAME_SECS: f64 = 30.0;
+
+/// Whether a frame that ends at `now` (real seconds) and lasted `dt` is the game away, not
+/// play: it ends before `away_until` (a focus change, a cover or a suspend in the
+/// [`AWAY_SETTLE_SECS`] before), or it lasted [`AWAY_FRAME_SECS`] or more. Such frames
+/// count neither as hitches nor in the places' frame times [design, #3043: "decide whether
+/// a frame after a suspend counts as a hitch": it does not].
+pub fn away_frame(now: f64, dt: f64, away_until: f64) -> bool {
+    now <= away_until || dt >= AWAY_FRAME_SECS
+}
+
+/// Frames are not play for [`AWAY_SETTLE_SECS`] after the primary window loses or gets
+/// back its focus, is covered or shown again (minimised included), or the app is
+/// suspended or resumed, and while the window does not have the focus at all.
+fn track_away(
+    real: Res<Time<Real>>,
+    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    (mut focus, mut occluded, mut life): (MessageReader<bevy::window::WindowFocused>, MessageReader<bevy::window::WindowOccluded>, MessageReader<bevy::window::AppLifecycle>),
+    mut c: ResMut<Collector>,
+) {
+    let changed = focus.read().count() + occluded.read().count() + life.read().count() > 0;
+    let unfocused = windows.single().is_ok_and(|w| !w.focused);
+    if changed || unfocused {
+        c.away_until = real.elapsed_secs_f64() + AWAY_SETTLE_SECS;
     }
 }
 
@@ -839,7 +903,8 @@ fn detect(
     // A hitch: a frame over the limit while the world runs (not behind a loading screen).
     let ms = real.delta_secs() * 1000.0;
     let settled = real.elapsed_secs_f64() - c.load_ended > anomaly::HITCH_SETTLE_SECS && t_s > 20;
-    if ms > anomaly::HITCH_MS && !loading_now && settled && matches!(c.here.state, "playing" | "viewer") {
+    let away = c.away(real.elapsed_secs_f64(), real.delta_secs_f64());
+    if ms > anomaly::HITCH_MS && !loading_now && settled && !away && matches!(c.here.state, "playing" | "viewer") {
         c.detectors.fire(&mut c.summary, &c.here, t_s, "hitch", serde_json::json!({ "ms": ms.round() }));
     }
     // Movement keys held count only when the player could move: not while scripts lock

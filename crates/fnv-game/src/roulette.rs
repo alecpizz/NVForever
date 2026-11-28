@@ -464,6 +464,8 @@ pub struct RouletteRequest {
     pub max_bet: u32,
     /// 0: the casino's own.
     pub max_winnings: u32,
+    /// The reference whose script asked (the table activated), if any.
+    pub table: Option<FormId>,
 }
 
 #[cfg(test)]

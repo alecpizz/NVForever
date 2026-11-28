@@ -5,6 +5,15 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
+autobins = false
+
+[lib]
+path = "src/main.rs"
+crate-type = ["rlib"]
+
+[[bin]]
+name = "nvforever"
+path = "src/bin/nvforever.rs"
 
 [dependencies]
 bevy.workspace = true
@@ -18,24 +27,26 @@ fnv-install.workspace = true
 fnv-util.workspace = true
 # The DLSS download, its checks and the DLSS folder, shared with the launcher (#2765).
 nvf-dlss-files.workspace = true
-# Player reports (reports/upload.rs): HTTPS through the system's TLS (Windows: SChannel;
-# Linux: the system's OpenSSL, the same build nvf-dlss-files already brings there, #3144)
-# and the system's certificates, not rustls. `native-tls-no-default`, not `native-tls`:
-# the latter also bundles webpki's root certificates (webpki-root-certs,
-# CDLA-Permissive-2.0, outside deny.toml), which the reports never use (they ask for
-# RootCerts::PlatformVerifier, the system's roots) (#1998). ureq and native-tls
-# MIT/Apache-2.0, schannel MIT, openssl Apache-2.0, openssl-sys MIT.
-ureq = { version = "3", default-features = false, features = ["native-tls-no-default"] }
 fnv-save.workspace = true
 texpresso.workspace = true
 fnv-spt.workspace = true
 fnv-font.workspace = true
 nvf-play.workspace = true
+# The bounce light volume the lighting reads, and its read on the CPU (rtgi_volume.rs, #3009).
+nvf-rtgi.workspace = true
+nvf-coop.workspace = true
+# Online lobby codes as players type them (co-op's join screen, coop/connect.rs).
+nvf-signal = { path = "../../crates/nvf-signal" }
+# The matchmaking service run inside the game for offline tests (NVF_COOP_SIGNAL=local,
+# coop/test_service.rs): the stand-in with the Worker's rules on a loopback port.
+nvf-signal-server = { path = "../../crates/nvf-signal-server" }
 fnv-actor.workspace = true
 fnv-sim.workspace = true
 fnv-combat.workspace = true
 fnv-collide.workspace = true
 fnv-phys.workspace = true
+# The Caravan pot falls as rigid bodies (caravan_pot.rs): the same pinned rapier as fnv-phys.
+rapier3d = { version = "=0.36.1", features = ["enhanced-determinism"] }
 fnv-nav.workspace = true
 fnv-ai.workspace = true
 fnv-game.workspace = true
@@ -43,6 +54,8 @@ fnv-script.workspace = true
 fnv-voice.workspace = true
 clap.workspace = true
 serde_json = "1"
+# Tonemapping presets' files (tone_presets.rs): the version the engine already builds through Bevy.
+toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
 # Player reports (reports/, docs/design/player-reports.md): random install and session ids
 # (MIT/Apache-2.0, the version Bevy already uses), the summary's gzip (MIT/Apache-2.0,
 # already built through fnv-inflate) and the CPU and memory lines (MIT, the version
@@ -50,6 +63,9 @@ serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 png = "0.18"
+# Owned SVG touch icons at actual physical UI dimensions; already locked, BSD-3-Clause.
+# No runtime XML parser or PNG encoder. See docs/design/android-svg-icons.md.
+tiny-skia = { version = "=0.11.4", default-features = false, features = ["std", "simd"] }
 rayon = "1"
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 # Only for the window icon type (window_icon.rs); the version Bevy already uses.
@@ -69,6 +85,17 @@ ash = { version = "0.38", default-features = false }
 # frame-rate-audit.md §1. MIT/Apache-2.0; the Tracy C++ client in tracy-client-sys is BSD-3-Clause.
 tracy-client = { version = "0.19", optional = true, default-features = false, features = ["ondemand", "only-localhost"] }
 
+[target.'cfg(not(target_os = "android"))'.dependencies]
+# Player reports (reports/upload.rs): HTTPS through the system's TLS (Windows: SChannel;
+# Linux: the system's OpenSSL, the same build nvf-dlss-files already brings there, #3144)
+# and the system's certificates, not rustls. `native-tls-no-default`, not `native-tls`:
+# the latter also bundles webpki's root certificates (webpki-root-certs,
+# CDLA-Permissive-2.0, outside deny.toml), which the reports never use (they ask for
+# RootCerts::PlatformVerifier, the system's roots) (#1998). ureq and native-tls
+# MIT/Apache-2.0, schannel MIT, openssl Apache-2.0, openssl-sys MIT. Android suppresses
+# player reports (NVF_REPORTS=0) and does not link system OpenSSL.
+ureq = { version = "3", default-features = false, features = ["native-tls-no-default"] }
+
 # The first-start dialogs that ask for the game's folder (setup.rs); MIT.
 [target.'cfg(windows)'.dependencies]
 # `common-controls-v6`: the Task Dialog, whose buttons can carry words of our own (the
@@ -80,14 +107,15 @@ rfd = { version = "0.15", default-features = false, features = ["common-controls
 # DLSS's library loading and signature check (dlss/: LibraryLoader, WinTrust,
 # Cryptography; the functions themselves are looked up at run time, not linked; FileSystem
 # for the share flag the checked file is opened with) and a FidelityFX API library loaded
-# from the game's folder (ffx_api.rs: LibraryLoader), and Download DLSS...'s "Open release
+# from the game's folder (ffx_api.rs: LibraryLoader), Download DLSS...'s "Open release
 # page" and "Open dlss folder" (dlss_download/: ShellExecuteW in UI_Shell, its show flag in
-# UI_WindowsAndMessaging, COM set up for it in System_Com); a version already in the build;
-# MIT/Apache-2.0.
+# UI_WindowsAndMessaging, COM set up for it in System_Com), and keeping the display awake
+# during play (keep_awake.rs: SetThreadExecutionState in System_Power); a version already in
+# the build; MIT/Apache-2.0.
 # HDR output (src/hdr.rs): the screen's peak brightness from DXGI
 # (IDXGIOutput6::GetDesc1); a version already in the build; MIT/Apache-2.0.
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi"] }
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_Threading", "Win32_System_SystemInformation", "Win32_System_Performance", "Win32_System_ProcessStatus", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_LibraryLoader", "Win32_Security_WinTrust", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Com"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_Threading", "Win32_System_SystemInformation", "Win32_System_Performance", "Win32_System_ProcessStatus", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_LibraryLoader", "Win32_System_Power", "Win32_Security_WinTrust", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Com", "Win32_System_Console"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # [design, #2249] Optional NVML at runtime; reuse engine/Cargo.lock's libloading.
@@ -97,20 +125,36 @@ libloading = "0.8.9"
 # (MIT/Apache-2.0).
 libc = "0.2"
 
+[target.'cfg(target_os = "android")'.dependencies]
+bevy = { workspace = true, features = ["android-native-activity"] }
+jni = "0.21"
+
 [build-dependencies]
 # The program icon in the Windows executable (build.rs); MIT.
 winresource = "0.1"
 
 [dev-dependencies]
+# wgpu's no-op backend: a device without a GPU for the bind group layout and view key tests
+# (rtgi_volume/tests.rs). A feature of the wgpu already in the build.
+wgpu = { version = "30", default-features = false, features = ["noop"] }
 # [design, #2403] Exercise the real reports system with synthetic UI navigation states.
 # [design, #2652] Authored-plugin runtimes for the Use Weapon shooter tests.
-nvf-play = { workspace = true, features = ["test-support", "report-test-support"] }
+nvf-play = { workspace = true, features = ["test-support", "report-test-support", "test-fixtures", "dev-aids"] }
+
+[[example]]
+name = "dialogue_model_capture"
+path = "examples/dialogue_model_capture.rs"
+required-features = ["dialogue-model-capture"]
 
 [features]
+dialogue-model-capture = ["nvf-play/test-fixtures"]
 default = ["intro-video"]
 # The intro film before a new game (nvf-play's `intro-video`: a GPL-3.0-or-later decoder,
 # as NVForever is).
 intro-video = ["nvf-play/intro-video"]
+# The developer aids of src/dev_aids.rs (the debug variables and tune files of the volumetric clouds
+# and the light in the air, `--preview-weather`, nvf-play's `NVF_PLAY_TEST_SHOT_DIFF`), which tests and debug builds have anyway; not for release builds.
+dev-aids = ["nvf-play/dev-aids"]
 # Bevy's spans for the in-engine span profile (profile.rs, NVF_PLAY_TEST_PROFILE); not for
 # release builds.
 profile = ["bevy/trace", "fnv-phys/solver-timers"]

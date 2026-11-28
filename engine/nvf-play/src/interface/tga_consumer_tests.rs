@@ -123,7 +123,7 @@ fn corrupt_dds_and_recognizable_invalid_tga_remain_failures_without_image_assets
 }
 
 #[test]
-fn original_dds_compression_mips_bc_errors_and_font_decoder_are_preserved() {
+fn original_dds_compression_mips_bc_fallback_and_font_decoder_are_preserved() {
     let block = [0, 248, 0, 0, 0, 0, 0, 0];
     let bytes = dds(2, &[block, block].concat());
     let normal = decode_texture(&bytes, true, nvf_assets::texture::dds_image).unwrap();
@@ -143,11 +143,18 @@ fn original_dds_compression_mips_bc_errors_and_font_decoder_are_preserved() {
     );
     assert_eq!(top.texture_descriptor.mip_level_count, 1);
     assert_eq!(top.data.as_deref(), Some(block.as_slice()));
-    let old_error =
-        nvf_assets::texture::dds_image(&bytes, true, false).expect_err("unsupported BC");
+    // Android's DDS decoder now supports devices without BC sampling. The TGA
+    // admission layer must preserve that exact decoded mip chain and colour intent.
+    let fallback = decode_texture(&bytes, false, nvf_assets::texture::dds_image)
+        .expect("DDS CPU fallback is preserved");
     assert_eq!(
-        decode_texture(&bytes, false, nvf_assets::texture::dds_image).expect_err("same BC refusal"),
-        old_error
+        fallback.texture_descriptor.format,
+        TextureFormat::Rgba8UnormSrgb
+    );
+    assert_eq!(fallback.texture_descriptor.mip_level_count, 2);
+    assert_eq!(
+        fallback.data.as_deref(),
+        Some([255, 0, 0, 255].repeat(4 * 4 + 2 * 2).as_slice())
     );
     let files = OwnedFiles::new(&[("owned_bc.dds", bytes)]);
     let data = files.data();

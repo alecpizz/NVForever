@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Original NVForever geometry; Rounded family. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="currentColor" color="#ffffff" fill-rule="evenodd" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+  <title>Aid</title>
+  <path d="M 8 9 L 24 9 Q 28 9 28 13 L 28 24 Q 28 28 24 28 L 8 28 Q 4 28 4 24 L 4 13 Q 4 9 8 9 Z M 11 9 L 11 6 Q 11 4 13 4 L 19 4 Q 21 4 21 6 L 21 9 M 11 18 L 21 18 M 16 13 L 16 23"/>
+</svg>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Original NVForever geometry; Rounded family. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="currentColor" color="#ffffff" fill-rule="evenodd" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+  <title>Block</title>
+  <path d="M 7 7 Q 16 3 25 7 L 25 16 Q 25 24 16 27 Q 7 24 7 16 Z M 12 13 L 15 17 L 21 11"/>
+</svg>

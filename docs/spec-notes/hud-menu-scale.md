@@ -47,3 +47,9 @@ writer of the HUD setting atomic. Registered smoke cases retain the old 75% menu
 oracles and add HUD 75%/menus 100% restart, handbuilt and tile pointer, settings
 and main-menu review. Source-bound execution results belong in the PR; the
 registered installed-game cases require their actual logs and visual review.
+
+## Expanded HUD and individual menu sizes [design]
+
+The earlier `ui-scale` codec and migration above remain the compatibility rule for old saves/settings. The expanded HUD row uses a distinct `hud-scale-v2` part for 25–250% in 5% steps. A missing new value is synthesized from the old decoded HUD size, alongside the already independent menu value; explicit keys keep precedence. This avoids reinterpreting an old 75% size as a different value in the wider range.
+
+Buying/selling, repair and workbench sizes are independently saved by `menu_readability`. Their existing painters and hit consumers own reflow and clipping; a full-canvas zoom must not move controls outside the usable view or desynchronize native hit tests. Source regression coverage includes bounds, the actual settings INI writer/reload and an isolated shared-test-binary startup that resets public HUD defaults before proving reload and the new drawing value. These controls and the menu consumer integration remain uncompiled/unrun in this source preparation; earlier narrow-range results do not qualify the expanded path.

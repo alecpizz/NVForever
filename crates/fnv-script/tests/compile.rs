@@ -819,9 +819,9 @@ fn eval_truthiness_for_arrays_and_strings() {
 
 #[test]
 fn format_signs_and_huge_fields() {
-    // %g writes -0 as 0 [hypothesis], %f keeps its sign [observed: "%.4f" of -0 reads
-    // "-0.0000" in the original, #1919], + never doubles a minus, and a huge precision or
-    // width is cut (#1145 review, #1134) [hypothesis: the C library's forms].
+    // %g writes -0 as 0 (see crates/fnv-script/src/vm.rs, `printf_number`), %f keeps its sign
+    // [observed: "%.4f" of -0 reads "-0.0000" in the original, #1919], + never doubles a minus,
+    // and a huge precision or width is cut (#1145 review, #1134) [hypothesis: the C library's forms].
     let h = run("string_var s
 string_var t
 string_var u
@@ -1138,7 +1138,7 @@ end",
 }
 
 /// Tale of Two Wastelands' start-up checks pass for the plugins built into the engine:
-/// Stewie's Tweaks at 945 (above TTW's minimum 941, #3179) and its own ttw_nvse (ext-version.md §5).
+/// Stewie's Tweaks at 960 (above TTW's minimum 941, #3183) and its own ttw_nvse (ext-version.md §5).
 #[test]
 fn ttws_plugin_checks_find_the_plugins_built_in() {
     let h = run(
@@ -1151,7 +1151,7 @@ let t := IsPluginInstalled \"ttw_nvse\"
 let u := IsPluginInstalled \"Not A Plugin\"
 end",
     );
-    assert_eq!(h.0[&1], Value::Num(945.0));
+    assert_eq!(h.0[&1], Value::Num(960.0));
     assert_eq!(h.0[&2], Value::Num(1.0));
     assert_eq!(h.0[&3], Value::Num(0.0));
 }

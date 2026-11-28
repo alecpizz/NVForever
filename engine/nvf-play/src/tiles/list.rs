@@ -123,11 +123,17 @@ pub fn unclip_row_children(ui: &mut Ui, list: TileId, rows: impl IntoIterator<It
 ///
 /// [`write_text_sizes`]: super::menus::write_text_sizes
 pub fn measure_rows<K>(ui: &mut Ui, rows: &[RowTile<K>], text: &str) -> Vec<f64> {
+    measure_rows_sized(ui,rows,text,1.0,0.0)
+}
+
+fn measure_rows_sized<K>(ui:&mut Ui,rows:&[RowTile<K>],text:&str,scale:f32,minimum:f64)->Vec<f64> {
     let mut y = 0.0;
     let mut out = Vec::with_capacity(rows.len());
     for r in rows {
         let measured = child(ui, r.tile, text).map_or(0.0, |t| num(ui, t, "height"));
-        let height = r.fixed.unwrap_or(measured + num(ui, r.tile, "_VerticalSpacing"));
+        let spacing=num(ui,r.tile,"_VerticalSpacing")*f64::from(scale);
+        let height=if scale==1.0 {r.fixed.unwrap_or(measured+spacing)}
+            else {r.fixed.map_or(measured+spacing,|fixed|(fixed*f64::from(scale)).max(measured+spacing).max(fixed)).max(minimum)};
         ui.set_trait(r.tile, "height", Value::Num(height));
         ui.set_trait(r.tile, "_y", Value::Num(y));
         out.push(height);
@@ -387,7 +393,17 @@ impl<K> ListView<K> {
 /// writes the view ([`ListView::rewrite`]) and works the tree out again.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn settle_list<K: PartialEq + Clone>(ui: &mut Ui, list_tile: TileId, rows: &[RowTile<K>], row_text: &str, view: &mut ListView<K>, selected: Option<usize>, group: u32, pointer_pick: bool, navigated: u32) {
-    let heights = measure_rows(ui, rows, row_text);
+    settle_list_sized(ui,list_tile,rows,row_text,view,RowLayout {selected,group,pointer_pick,navigated,text_scale:1.0,minimum_height:0.0});
+}
+
+/// Selection and typography for the existing fixed list viewport.
+pub(super) struct RowLayout {
+    pub selected:Option<usize>,pub group:u32,pub pointer_pick:bool,pub navigated:u32,pub text_scale:f32,pub minimum_height:f64,
+}
+pub(super) fn settle_list_sized<K:PartialEq+Clone>(ui:&mut Ui,list_tile:TileId,rows:&[RowTile<K>],
+    row_text:&str,view:&mut ListView<K>,layout:RowLayout) {
+    let RowLayout {selected,group,pointer_pick,navigated,text_scale,minimum_height}=layout;
+    let heights = measure_rows_sized(ui, rows, row_text,text_scale,minimum_height);
     let page = ui.tile(list_tile).get("height").map_or(0.0, Value::num);
     let counts = counts(&heights, page);
     let file_delta = *view.file_delta.get_or_insert_with(|| ui.tile(list_tile).get("_scroll_delta").map_or(26.0, Value::num));

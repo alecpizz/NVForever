@@ -103,15 +103,22 @@ fn a_sky_of_one_colour_is_that_colour_times_the_sky_scale() {
     assert!(near(c.colour(Vec3::Y, 0), (colour * 0.88).map(tony_inverse), 1e-4));
 }
 
-/// Lit ground: the display-value sum's diffuse, min(albedo x light^2.2, 1): the light on
-/// level ground is the ambient (x share) plus the directional light times the sine of its
-/// elevation; with no light above the horizon, the ambient alone.
+/// Lit ground: the display-value sum's diffuse, the texture's display value x the light,
+/// held to 1, as linear light: the light on level ground is the ambient (x share) plus the
+/// directional light times the sine of its elevation; with no light above the horizon, the
+/// ambient alone.
 #[test]
 fn the_ground_is_lit_by_the_ambient_and_the_light_on_level_ground() {
     let albedo = ground_albedo();
     assert!(albedo.x > 0.08 && albedo.x < 0.1 && albedo.z < albedo.x, "a warm grey, linear: {albedo:?}");
     assert!(near(ground_texel(Vec3::splat(0.5), Vec3::splat(1.0)), Vec3::splat(0.5), 1e-6));
-    assert!(near(ground_texel(Vec3::splat(0.5), Vec3::splat(0.5)), Vec3::splat(0.5 * 0.5f32.powf(2.2)), 1e-6));
+    // The shown value is the product of the two display values, dark ones too (a floor
+    // of display 0.4 under an ambient of 40 / 255 shows 16 / 255, not the 8 / 255 that
+    // light^2.2 through the frame's sRGB curve gave).
+    for (texture, light) in [(0.5, 0.5), (0.4, 40.0 / 255.0), (0.2, 0.1), (0.9, 1.0), (0.05, 0.3)] {
+        let lit = ground_texel(reflection_room::albedo_linear([texture; 3]), Vec3::splat(light));
+        assert!((reflection_room::display_value(lit.x) - texture * light).abs() < 1e-5, "{texture} x {light}: {lit:?}");
+    }
     assert!(near(ground_texel(Vec3::ONE, Vec3::splat(2.0)), Vec3::ONE, 1e-6), "held to 1 as the shader holds it");
     let Inputs::Outdoors { ambient, sun, sun_dir, .. } = day() else { unreachable!() };
     let lit = SkyContent::new(&day(), &DomeProfile::fallback()).colour(Vec3::NEG_Y, 0);

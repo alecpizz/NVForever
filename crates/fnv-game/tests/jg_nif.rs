@@ -106,8 +106,9 @@ fn distances_and_bounds() {
     assert!((n(&mut g, "PlayerREF.Get3DDistanceFromHitToNiNode \"Bip01 Head\"") - 40.0).abs() < 1e-3);
     // The root's bound without a block.
     assert_eq!(n(&mut g, "let aR := PlayerREF.GetNiBound\nSetFunctionValue aR[2] * 1000 + aR[3]"), 60_070.0);
-    // A block it does not have: the root's.
-    assert_eq!(n(&mut g, "let aR := PlayerREF.GetNiBound \"NVFNoSuchBlock\"\nSetFunctionValue aR[2] * 1000 + aR[3]"), 60_070.0);
+    // A missing block returns a 4-element zero-radius array [observed: w4c_b3_11b_jgnif_nodes_bounds].
+    assert_eq!(n(&mut g, "let aR := PlayerREF.GetNiBound \"NVFNoSuchBlock\"\nSetFunctionValue (ar_Size aR)"), 4.0);
+    assert_eq!(n(&mut g, "let aR := PlayerREF.GetNiBound \"NVFNoSuchBlock\"\nSetFunctionValue aR[3]"), 0.0);
 }
 
 #[test]
@@ -188,11 +189,17 @@ fn the_camera() {
     // No engine yet: zeros.
     assert_eq!(n(&mut g, "GetCameraTranslation fX fY fZ 0\nSetFunctionValue fX + fY + fZ"), 0.0);
     let at = g.ref_pos_rot(P).unwrap().0;
-    // The camera 100 behind the player, facing north with a 90° view, square.
+    // First person: world returns camera position, local returns (0, 0, 0)
+    // [observed: w6_t1_10a_jg_cam_trans].
+    g.ui.camera.view = Some(CameraView { pos: [at[0], at[1] - 3.7, at[2] + 118.0], heading: 0.0, pitch: 0.0, roll: 0.0, fov_y: std::f32::consts::FRAC_PI_2, aspect: 1.0, first_person: true });
+    assert_eq!(n(&mut g, "GetCameraTranslation fX fY fZ 1\nSetFunctionValue fX + fY + fZ"), 0.0);
+    // Third person: camera 100 behind the player, facing north with a 90° view, square.
     g.ui.camera.view = Some(CameraView { pos: [at[0], at[1] - 100.0, at[2]], heading: 0.0, pitch: 0.0, roll: 0.0, fov_y: std::f32::consts::FRAC_PI_2, aspect: 1.0, first_person: false });
     assert_eq!(n(&mut g, "GetCameraTranslation fX fY fZ 1\nSetFunctionValue fY"), -100.0);
-    // The player's place is at the screen's centre, 100 ahead.
-    assert_eq!(n(&mut g, "let fOn := WorldToScreen fX fY fZ 0 0 0 0 PlayerREF\nSetFunctionValue fOn * 1000 + fX * 100 + fY * 10 + fZ / 100"), 1000.0 + 50.0 + 5.0 + 1.0);
+    // The player's place is at the screen's centre, 100 ahead -> D3D9 NDC zOut 0.95095
+    // [observed: w6_t1_10d_jg_w2s_depth].
+    let w2s = n(&mut g, "let fOn := WorldToScreen fX fY fZ 0 0 0 0 PlayerREF\nSetFunctionValue fOn * 1000 + fX * 100 + fY * 10 + fZ");
+    assert!((w2s - (1000.0 + 50.0 + 5.0 + 0.95095)).abs() < 1e-4, "w2s={w2s}");
     // The overrides for the engine to put on the third-person camera.
     q(&mut g, "SetCameraTranslate 1 10 -50 20\nSetCameraRotate 1 3 90");
     assert_eq!(g.ui.camera.translate_override, Some([10.0, -50.0, 20.0]));

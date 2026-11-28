@@ -19,7 +19,7 @@ fn terrain_height(texel: vec3<f32>, reference: vec3<f32>, gain: f32) -> f32 {
 }
 
 // The share of the base and of each of the `n` layers in the ordered blend: `a[k]` is
-// layer k's painted share (opacity x the layer texture's alpha), each layer laid over
+// layer k's painted opacity, each layer laid over
 // what came before it, as the `mix` chain of terrain.wesl's ordinary path does.
 // w[k + 1] = a[k] x the product of (1 - a[j]) over the later layers j; w[0] the base's
 // remainder. They sum to 1.

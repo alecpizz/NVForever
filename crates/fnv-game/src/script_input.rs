@@ -35,6 +35,9 @@ fn default_binding(c: usize) -> (Option<u16>, Option<u16>) {
 pub struct ScriptInput {
     /// Keys and mouse buttons held this frame, as the player pressed them.
     pub held: BTreeSet<u16>,
+    /// Admitted non-key control holds supplied by the engine each frame. Not saved;
+    /// raw key/button queries remain independent. Empty preserves headless behavior.
+    pub virtual_controls: BTreeSet<u8>,
     /// Each control's key and mouse button (`Bindings` in the engine).
     pub bindings: Vec<(Option<u16>, Option<u16>)>,
     /// Selected-device control snapshot for event edges (control-input-events.md).
@@ -137,6 +140,14 @@ impl ScriptInput {
         (self.held.contains(&code) || self.script_held.contains(&code)) && (ignore || !self.key_disabled(code))
     }
 
+    pub fn control_pressed(&self, control: usize, ignore: bool) -> bool {
+        if control >= CONTROLS { return false; }
+        let (k,m)=self.binding(control as i64);
+        let raw=[k,m].into_iter().flatten().any(|c| self.pressed(c,ignore));
+        let permitted=ignore || k.or(m).is_some_and(|code| !self.key_disabled(code));
+        raw || (permitted && self.virtual_controls.contains(&(control as u8)))
+    }
+
     fn pressed_list(&self, mouse: bool, ignore: bool) -> Vec<u16> {
         let mut all: BTreeSet<u16> = self.held.union(&self.script_held).copied().collect();
         all.retain(|&c| (c >= MOUSE_BASE) == mouse && (ignore || !self.key_disabled(c)));
@@ -163,8 +174,7 @@ pub(crate) fn call(input: &mut ScriptInput, name: &str, args: &[XVal]) -> Option
         "iskeypressed" => yes(code.is_some_and(|c| input.pressed(c, ignore))),
         "getkeyname" => XVal::Str(key_name(int(args, 0, -1)).to_string()),
         "iscontrolpressed" => {
-            let (k, m) = input.binding(int(args, 0, -1));
-            yes([k, m].into_iter().flatten().any(|c| input.pressed(c, ignore)))
+            yes(usize::try_from(int(args,0,-1)).ok().is_some_and(|c| input.control_pressed(c,ignore)))
         }
         // `GetControl control [type]`: 0 the key, 1 the mouse button as 256 + n;
         // GetAltControl the bare button n [documented; observed: nvse-controls].
@@ -282,4 +292,19 @@ mod tests {
         assert_eq!(call(&mut input, "getcontrol", &[XVal::Num(4.0), XVal::Num(1.0)]), Some(XVal::Num(257.0)));
         assert_eq!(input.rebinds, vec![(7, false, Some(48)), (4, true, Some(257))]);
     }
+    #[test]
+    fn admitted_virtual_controls_reach_actual_vm_query_without_inventing_physical_keys() {
+        let mut input=ScriptInput::default();input.virtual_controls.insert(0);
+        assert!(pressed(&mut input,0.0));
+        assert_eq!(call(&mut input,"iskeypressed",&[XVal::Num(17.0)]),Some(XVal::Num(0.0)));
+        assert_eq!(call(&mut input,"getnumkeyspressed",&[]),Some(XVal::Num(0.0)));
+        call(&mut input,"setcontrol",&[XVal::Num(0.0),XVal::Num(66.0)]);
+        assert!(pressed(&mut input,0.0),"virtual control identity follows remapping, not a fabricated W key");
+        input.disabled_keys.insert(66);assert!(!pressed(&mut input,0.0));
+        input.disabled_keys.clear();input.disabled_controls.insert(0);assert!(!pressed(&mut input,0.0));
+        input.disabled_controls.clear();input.virtual_controls.clear();assert!(!pressed(&mut input,0.0));
+        input.held.insert(66);assert!(pressed(&mut input,0.0),"ordinary physical query stays unchanged");
+        input.virtual_controls.insert(255);assert!(!pressed(&mut input,255.0));
+    }
+
 }

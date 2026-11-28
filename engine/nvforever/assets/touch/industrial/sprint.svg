@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Original NVForever geometry; Industrial family. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="currentColor" color="#ffffff" fill-rule="evenodd" stroke-width="1.8" stroke-linecap="square" stroke-linejoin="bevel">
+  <title>Sprint</title>
+  <path d="M 20 4 L 25 4 L 27 7 L 25 10 L 20 10 L 18 7 Z M 18 13 L 12 19 L 20 22 L 22 28 M 12 19 L 8 25 L 3 25 M 18 13 L 25 17 L 29 13 M 12 15 L 9 11 L 5 14 M 4 6 L 11 6"/>
+</svg>

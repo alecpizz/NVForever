@@ -61,6 +61,28 @@
 //! [`TELL_SHARE`] of the GPU budget the player gets a corner message that the graphics
 //! memory is almost full, and the log a line.
 //!
+//! **Giving memory back** [design, #2754: an 8 GB RTX 4060 at 2560x1440 with 4096 shadow
+//! maps held 7,037 MB of a 6,844 MB budget and stalled 1-2 s at a time; #3349: a GTX 1080
+//! at 3840x2160 with 8x multisampling went past its budget and lost the device]. The caches
+//! cannot give back what the allocator keeps (#898), but the largest single textures can:
+//! the sun's shadow maps (a 4096² layer is 64 MiB against 16 MiB at 2048², five layers by
+//! day in first person) and the multisampled view targets (each sample is a full-size
+//! colour and depth target). Textures larger than the allocator's blocks get allocations
+//! of their own from the driver, so dropping them returns their memory [observed:
+//! `gpu-sheds-over-budget`, 2026-11-25: 4096 to 2048 maps took the use from 1,444 to
+//! 1,204 MB]; smaller ones go back into blocks the allocator keeps (#898) and return
+//! nothing. At 1920x1080 the steps gave back 240 MB (maps), 128 MB (8x to 4x) and 0 MB
+//! (4x to 2x); at 1280x720 the multisampling steps gave back 0-1 MB. The last step is kept
+//! for larger windows (a 4x target at 2560x1440 is past the largest block) [hypothesis]. When this process holds over
+//! [`SHED_SHARE`] of the GPU budget at [`SHED_AFTER_CHECKS`] checks in a row, one step of
+//! [`next_shed`] is taken (shadow maps 4096 to 2048, then multisampling 8x to 4x, then 4x
+//! to 2x), at most one every [`SHED_WAIT_SECS`]; each is logged with the use before, the
+//! next check logs the use after, and the player is told in a corner message what was
+//! lowered. The change is made as the settings page's own rows make it, so the page shows
+//! the lower value; it is kept in `NVForever.ini` only if the player saves the settings
+//! page afterwards [design: on that card the lower value is the one that fits]. Nothing
+//! is raised again in the run.
+//!
 //! Test aids, since there is no small machine to test on: `NVF_PLAY_TEST_VRAM_MB=<MB>` and
 //! `NVF_PLAY_TEST_RAM_MB=<MB>` take the GPU budget and the RAM as at most that (the RAM's
 //! free part shrinks by what was taken off).
@@ -101,6 +123,74 @@ pub const LARGE_BLOCKS_VRAM_MB: u64 = 6 * 1024;
 pub const TELL_SHARE: f64 = 0.95;
 /// What the player is told (a corner message).
 pub const TELL_TEXT: &str = "Graphics memory is almost full. If the game stutters or stops, lower the graphics settings.";
+/// The share of the GPU budget held over which a step of [`next_shed`] is taken [design:
+/// the same share at which the player is told].
+pub const SHED_SHARE: f64 = TELL_SHARE;
+/// Checks in a row (2 s apart) over [`SHED_SHARE`], with no loading screen up, before a
+/// step is taken [design: a moment's peak, such as a load, does not lower anything].
+pub const SHED_AFTER_CHECKS: u32 = 2;
+/// The least time between two steps, seconds [design: the memory of the step before is
+/// back by then; checked in `gpu-sheds-over-budget`].
+pub const SHED_WAIT_SECS: f64 = 10.0;
+
+/// A step that gives GPU memory back (module notes).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shed {
+    /// The sun's shadow maps (and the other maps the Shadow resolution row sizes) from
+    /// 4096² to 2048².
+    Shadows,
+    /// Multisampling from 8x to 4x.
+    Msaa8,
+    /// Multisampling from 4x to 2x.
+    Msaa4,
+}
+
+impl Shed {
+    /// What the log and the player are told was lowered.
+    pub fn what(self) -> &'static str {
+        match self {
+            Shed::Shadows => "shadow resolution lowered to 2048",
+            Shed::Msaa8 => "anti-aliasing lowered to 4x",
+            Shed::Msaa4 => "anti-aliasing lowered to 2x",
+        }
+    }
+}
+
+/// The next step that gives memory back: the shadow maps' side now, and the multisampling
+/// drawn (`None` while the anti-aliasing is done after the picture or by an upscaler,
+/// where the samples are not drawn and lowering them gives nothing back).
+pub fn next_shed(shadow_side: usize, msaa_drawn: Option<bevy::render::view::Msaa>) -> Option<Shed> {
+    use bevy::render::view::Msaa;
+    if shadow_side > 2048 {
+        return Some(Shed::Shadows);
+    }
+    match msaa_drawn {
+        Some(Msaa::Sample8) => Some(Shed::Msaa8),
+        Some(Msaa::Sample4) => Some(Shed::Msaa4),
+        _ => None,
+    }
+}
+
+/// Take the next step of [`next_shed`] in `world`, if there is one, as the settings
+/// page's rows would.
+fn shed_one(world: &mut World) -> Option<Shed> {
+    use crate::graphics::{self, ScreenAa};
+    use bevy::render::view::Msaa;
+    let side = crate::sky::map_side(world.get_resource::<bevy::light::DirectionalLightShadowMap>());
+    let samples_drawn = world.get_resource::<graphics::Graphics>().is_some_and(|g| g.screen_aa == ScreenAa::Off) && !crate::upscaler::temporal_active(world);
+    let drawn = world.get_resource::<graphics::MsaaSetting>().map(|m| m.0).filter(|_| samples_drawn);
+    let step = next_shed(side, drawn)?;
+    match step {
+        Shed::Shadows => graphics::set_shadow_resolution_choice(world, 0),
+        Shed::Msaa8 | Shed::Msaa4 => {
+            let to = if step == Shed::Msaa8 { Msaa::Sample4 } else { Msaa::Sample2 };
+            let i = graphics::AA_CHOICES.iter().position(|&(_, a, m)| a == ScreenAa::Off && m == to)?;
+            graphics::set_aa_choice(world, i);
+        }
+    }
+    Some(step)
+}
+
 /// Says which blocks to ask for (`large` or `small`), whatever the budget.
 pub const BLOCKS_ENV: &str = "NVF_GPU_BLOCKS";
 
@@ -195,6 +285,14 @@ pub struct MemoryBudget {
     told: bool,
     /// The most of the GPU budget this process held at a check, MB.
     vram_peak_mb: u64,
+    /// Checks in a row over [`SHED_SHARE`].
+    over_checks: u32,
+    /// When the last step that gave memory back was taken (real seconds).
+    shed_at: Option<f64>,
+    /// The steps taken, in order.
+    pub shed: Vec<Shed>,
+    /// The step just taken and the use before it (MB), said with the next check's use.
+    shed_before: Option<(Shed, u64)>,
 }
 
 pub struct MemoryBudgetPlugin;
@@ -530,7 +628,7 @@ fn read_budgets(mut commands: Commands, device: Option<Res<RenderDevice>>, adapt
     }
     let vram_use_mb = vram.as_ref().ok().and_then(|v| v.used_mb.map(|used| (used, vram_mb.unwrap_or(v.budget_mb))));
     let ram_in_use = ram.map(|r| ram_share(r, aid_ram));
-    *budget = MemoryBudget { vram_mb, vram_use_mb, ram_share: ram_in_use, aid_vram, aid_ram, base, pressed: false, told: false, vram_peak_mb: vram_use_mb.map_or(0, |u| u.0) };
+    *budget = MemoryBudget { vram_mb, vram_use_mb, ram_share: ram_in_use, aid_vram, aid_ram, base, pressed: false, told: false, vram_peak_mb: vram_use_mb.map_or(0, |u| u.0), ..default() };
     commands.insert_resource(base);
 }
 
@@ -542,7 +640,7 @@ fn watch_use(
     adapter: Option<Res<RenderAdapterInfo>>,
     mut budget: ResMut<MemoryBudget>,
     mut limits: ResMut<KeepLimits>,
-    mut corner: Option<ResMut<nvf_play::corner_messages::CornerMessages>>,
+    (mut corner, mut commands, loading): (Option<ResMut<nvf_play::corner_messages::CornerMessages>>, Commands, Option<Res<nvf_play::loading::Loading>>),
     mut last: Local<f64>,
 ) {
     let now = real.elapsed_secs_f64();
@@ -568,6 +666,25 @@ fn watch_use(
             if let Some(c) = corner.as_mut() {
                 c.push(TELL_TEXT.to_string().into());
             }
+        }
+        if let Some((step, before)) = budget.shed_before.take() {
+            info!("memory budget: after {} this process holds {used} of {b} MB (it held {before} MB)", step.what());
+        }
+        // A loading screen's peak (the cells and pipelines coming in) does not count.
+        let loading_now = loading.as_deref().is_some_and(nvf_play::loading::Loading::active);
+        budget.over_checks = if share > SHED_SHARE && !loading_now { budget.over_checks + 1 } else { 0 };
+        if budget.over_checks >= SHED_AFTER_CHECKS && budget.shed_at.is_none_or(|t| now - t >= SHED_WAIT_SECS) {
+            budget.shed_at = Some(now);
+            commands.queue(move |world: &mut World| {
+                let Some(step) = shed_one(world) else { return };
+                warn!("memory budget: over {:.0} % of the GPU budget ({used} of {b} MB) at {SHED_AFTER_CHECKS} checks in a row: {} to give memory back", SHED_SHARE * 100.0, step.what());
+                let mut m = world.resource_mut::<MemoryBudget>();
+                m.shed.push(step);
+                m.shed_before = Some((step, used));
+                if let Some(mut c) = world.get_resource_mut::<nvf_play::corner_messages::CornerMessages>() {
+                    c.push(format!("Graphics memory is full: {}.", step.what()).into());
+                }
+            });
         }
     }
     if let Some(r) = ram {
@@ -667,6 +784,17 @@ mod tests {
         assert_eq!(vram_by_client([one, other]), Some(594), "two clients add up");
         assert_eq!(vram_by_client(["drm-memory-vram: \t2048 KiB\n"]), Some(2), "no client id: counts alone");
         assert_eq!(vram_by_client(["drm-memory-gtt: 1 KiB\n"]), None, "no VRAM line: none");
+    }
+
+    #[test]
+    fn memory_is_given_back_shadows_first_then_samples_down_to_2x() {
+        use bevy::render::view::Msaa;
+        assert_eq!(next_shed(4096, Some(Msaa::Sample8)), Some(Shed::Shadows));
+        assert_eq!(next_shed(2048, Some(Msaa::Sample8)), Some(Shed::Msaa8));
+        assert_eq!(next_shed(2048, Some(Msaa::Sample4)), Some(Shed::Msaa4));
+        assert_eq!(next_shed(2048, Some(Msaa::Sample2)), None);
+        assert_eq!(next_shed(2048, None), None, "samples not drawn: nothing to give back");
+        assert_eq!(next_shed(4096, None), Some(Shed::Shadows));
     }
 
     #[test]

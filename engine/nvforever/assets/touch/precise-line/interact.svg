@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Original NVForever geometry; Precise line family. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="currentColor" color="#ffffff" fill-rule="evenodd" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+  <title>Interact</title>
+  <path d="M 10 25 L 6 18 Q 5 16 7 15 Q 8 14 10 17 L 12 19 L 12 7 Q 12 4 14 4 Q 16 4 16 7 L 16 14 Q 17 11 19 13 L 22 14 Q 25 14 25 18 L 25 21 Q 25 25 21 27 L 13 27 Z"/>
+</svg>

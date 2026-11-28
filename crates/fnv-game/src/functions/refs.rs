@@ -27,12 +27,26 @@ pub fn enable_ref(g: &mut Game, r: FormId, fade: bool) -> Result<Value, String> 
         return none();
     }
     let was = g.world.get(r).map_err(|e| e.to_string())?.enabled();
-    g.world.set_enabled(r, true).map_err(|e| e.to_string())?;
     if !was {
+        if !g.enable_event_active.insert(r) {
+            return none();
+        }
+        // The extender's OnEnable fires PRE-update (GetDisabled still 1) with null
+        // calling reference (GetSelfAlt == 0) and args (ref, 0) [observed: 2026-11-24,
+        // Fallout: New Vegas 1.4.0.525, xNVSE 6.4.9, JIP LN 57.30, GSDocMitchellHouse
+        // (0x00103DF9), 10 official base masters,
+        // `tools/capture/nvse/catalogs/wave6d1_on_enable_disable_pre_update.json` probe
+        // `w6d1p2_07_on_enable_tick`:
+        // `PROBE|w6d1p2_07_on_enable_tick|dis=1->0|en(n1=1,n2=1,s0=1,sR=0,a1R=1,a2z=1,inDis=1)`;
+        // no DLL, PDB, or third-party source consulted].
+        g.dispatch_event("OnEnable", vec![fnv_script::vm::XVal::Ref(r.0), fnv_script::vm::XVal::Num(0.0)], None);
+        g.enable_event_active.remove(&r);
+    }
+    let still_disabled = !g.world.get(r).map_err(|e| e.to_string())?.enabled();
+    g.world.set_enabled(r, true).map_err(|e| e.to_string())?;
+    if still_disabled {
         g.emit(EventKind::RefEnabled { reference: r, fade });
         g.note_enabled(r);
-        // The extender's OnEnable: the reference, then 0 [observed: nvse-events].
-        g.dispatch_event("OnEnable", vec![fnv_script::vm::XVal::Ref(r.0), fnv_script::vm::XVal::Num(0.0)], Some(r));
     }
     none()
 }
@@ -88,11 +102,26 @@ pub fn disable_ref(g: &mut Game, r: FormId, fade: bool) -> Result<Value, String>
     }
     g.script_looks.fading_out.remove(&r);
     let was = g.world.get(r).map_err(|e| e.to_string())?.enabled();
-    g.world.set_enabled(r, false).map_err(|e| e.to_string())?;
     if was {
+        if !g.enable_event_active.insert(r) {
+            return none();
+        }
+        // The extender's OnDisable fires PRE-update (GetDisabled still 0) with
+        // GetSelfAlt != ref and args (ref, 0) [observed: 2026-11-24, Fallout: New
+        // Vegas 1.4.0.525, xNVSE 6.4.9, JIP LN 57.30, ShowOffNVSE 184,
+        // GSDocMitchellHouse (0x00103DF9), 10 official base masters,
+        // `tools/capture/nvse/catalogs/wave6d1_on_enable_disable_pre_update.json` probe
+        // `w6d1_07_on_enable_on_disable_args`:
+        // `PROBE|w6d1_07_on_enable_on_disable_args|dis(n1=1,n2=1,sOk=0,a1Ok=1,a2z=1,inDis=0)|en(n1=0,sOk=0,a1Ok=0,inDis=0)|par(d=0,da=1,ea=0)`;
+        // no DLL, PDB, or third-party source consulted]; passing `None` (`GetSelfAlt == 0`)
+        // matches `OnEnable` (`s0=1`) [hypothesis].
+        g.dispatch_event("OnDisable", vec![fnv_script::vm::XVal::Ref(r.0), fnv_script::vm::XVal::Num(0.0)], None);
+        g.enable_event_active.remove(&r);
+    }
+    let still_enabled = g.world.get(r).map_err(|e| e.to_string())?.enabled();
+    g.world.set_enabled(r, false).map_err(|e| e.to_string())?;
+    if still_enabled {
         g.emit(EventKind::RefDisabled { reference: r, fade });
-        // The extender's OnDisable: the reference, then 0 [observed: nvse-events].
-        g.dispatch_event("OnDisable", vec![fnv_script::vm::XVal::Ref(r.0), fnv_script::vm::XVal::Num(0.0)], Some(r));
     }
     none()
 }
@@ -259,6 +288,11 @@ pub(crate) fn move_ref(g: &mut Game, r: FormId, marker: FormId, offset: [f64; 3]
     if r == FormId::PLAYER_REF {
         g.player_entered(cell);
         g.bring_teammates(from);
+        // A co-op host's guests go with it (a script's move, not a door's or travel's)
+        // [design].
+        if let Some(out) = g.coop_effects.as_mut().filter(|o| o.len() < crate::sound::MAX_PENDING) {
+            out.push(crate::sound::CoopEffect::PlayerMoved);
+        }
     }
     Ok(())
 }
@@ -287,15 +321,25 @@ pub fn get_is_reference(_g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, Str
 
 /// 1 when the caller's cell's Editor ID begins with the given cell's [documented:
 /// catalogue summary].
+///
+/// A co-op random encounter's `player.GetInCell`: whether any player is there
+/// (`crate::coop`, the encounter notes).
 pub fn get_in_cell(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
     let r = ctx.subject()?;
     let want = a.form(0)?;
-    let Some(cell) = g.cell_of(r) else { return yes(false) };
-    if cell == want {
-        return yes(true);
+    if r == FormId::PLAYER_REF && ctx.self_ref.is_some_and(|s| g.coop_encounter(s)) {
+        return yes(g.any_player(|g, p| in_cell(g, p, want)));
     }
-    let (Some(have), Some(w)) = (g.data.edid_of.get(&cell), g.data.edid_of.get(&want)) else { return yes(false) };
-    yes(have.to_ascii_lowercase().starts_with(&w.to_ascii_lowercase()))
+    yes(in_cell(g, r, want))
+}
+
+fn in_cell(g: &Game, r: FormId, want: FormId) -> bool {
+    let Some(cell) = g.cell_of(r) else { return false };
+    if cell == want {
+        return true;
+    }
+    let (Some(have), Some(w)) = (g.data.edid_of.get(&cell), g.data.edid_of.get(&want)) else { return false };
+    have.to_ascii_lowercase().starts_with(&w.to_ascii_lowercase())
 }
 
 pub fn get_in_worldspace(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
@@ -335,6 +379,14 @@ pub fn is_in_interior(g: &mut Game, ctx: &Ctx, _a: &Args) -> Result<Value, Strin
 pub fn get_distance(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
     let r = ctx.subject()?;
     let t = a.form(0)?;
+    // A co-op random encounter's `player.GetDistance X` and `GetDistance player`: the
+    // nearest player's (`crate::coop`, the encounter notes).
+    if (r == FormId::PLAYER_REF || t == FormId::PLAYER_REF) && ctx.self_ref.is_some_and(|s| g.coop_encounter(s)) {
+        let from = if r == FormId::PLAYER_REF { t } else { r };
+        if let Some(d) = g.nearest_player_distance(from) {
+            return Ok(Value::Num(d as f64));
+        }
+    }
     let (c1, p1, _) = place(g, r)?;
     let (c2, p2, _) = place(g, t)?;
     let space = |c: Option<FormId>| c.map(|c| g.world.placed.world_of(c).unwrap_or(c));

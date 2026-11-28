@@ -65,8 +65,8 @@ pub fn prepare_core_3d_transmission_textures(
             continue;
         }
 
-        // Don't prepare a transmission texture if there are no transmissive items to render
-        if transmissive_3d_phase.items.is_empty() {
+        // Sorted before PrepareResources: items reading the copy follow those contributing to it.
+        if transmissive_3d_phase.items.last().is_none_or(|(_, item)| item.before_copy) {
             continue;
         }
 

@@ -505,13 +505,13 @@ pub fn cell_anchor(nav: &NavGraph, refs: &RefTable, cell: FormId) -> Option<Plac
     Some(Place { space, pos: nav.centre(*best) })
 }
 
-/// The chain of linked references (XLKR) from `start`, as patrol points.
+/// The chain of linked references (XLKR or runtime SetLinkedReference) from `start`, as
+/// patrol points.
 fn route_from(game: &Game, start: FormId, repeatable: bool) -> Option<Route> {
-    let refs = game.world.placed;
     let mut ids = vec![start];
     let mut loops_to = None;
     let mut at = start;
-    while let Some(next) = refs.get(at).and_then(|r| r.linked) {
+    while let Some(next) = game.linked_ref(at) {
         if let Some(i) = ids.iter().position(|x| *x == next) {
             loops_to = Some(i);
             break;
@@ -544,7 +544,6 @@ fn route_from(game: &Game, start: FormId, repeatable: bool) -> Option<Route> {
 /// from it [documented: Patrol Package; observed: GSVictorRef, packages.md §3]. A Patrol
 /// with another location goes to that location [hypothesis].
 pub fn resolve(game: &Game, nav: &NavGraph, actor: FormId, def: &PackageDef) -> Goal {
-    let refs = game.world.placed;
     match def.ty {
         // A Use Weapon package stands at its location to shoot (`fnv_game::use_weapon`).
         PackageType::Travel | PackageType::Sandbox | PackageType::Sleep | PackageType::Eat | PackageType::Guard | PackageType::Wander | PackageType::Patrol | PackageType::UseWeapon => {}
@@ -574,7 +573,7 @@ pub fn resolve(game: &Game, nav: &NavGraph, actor: FormId, def: &PackageDef) -> 
         }
     }
     let Some(loc) = def.location else { return Goal::Here };
-    let linked = refs.get(actor).and_then(|r| r.linked);
+    let linked = game.linked_ref(actor);
     if def.ty == PackageType::Patrol {
         let start = match loc.kind {
             LocationKind::NearReference(r) => r,
@@ -629,7 +628,7 @@ fn stay_at(game: &Game, nav: &NavGraph, actor: FormId, loc: &Location) -> Goal {
 fn location_reference(game: &Game, actor: FormId, kind: LocationKind) -> Option<FormId> {
     match kind {
         LocationKind::NearReference(r) => r,
-        LocationKind::NearLinked => game.world.placed.get(actor).and_then(|r| r.linked),
+        LocationKind::NearLinked => game.linked_ref(actor),
         LocationKind::ObjectId(Some(b)) => nearest_object(game, actor, Wanted::Base(b)),
         LocationKind::ObjectType(c) if c != 0 => nearest_object(game, actor, Wanted::Type(c)),
         _ => None,
@@ -671,7 +670,7 @@ fn nearest_object(game: &Game, actor: FormId, wanted: Wanted) -> Option<FormId> 
 /// The goal of a Follow or Accompany package: its target, a reference or the actor's
 /// linked reference ([`Follow`]).
 fn follow(game: &Game, actor: FormId, def: &PackageDef) -> Goal {
-    let linked = game.world.placed.get(actor).and_then(|r| r.linked);
+    let linked = game.linked_ref(actor);
     let target = match def.target.map(|t| t.kind) {
         Some(TargetKind::Reference(Some(r))) => r,
         Some(TargetKind::LinkedReference) => match linked {
@@ -697,8 +696,7 @@ fn follow(game: &Game, actor: FormId, def: &PackageDef) -> Goal {
 /// issue #2451) [documented: the package engages the actor "in a specific conversation
 /// with the player or another NPC"].
 fn talk(game: &Game, nav: &NavGraph, actor: FormId, def: &PackageDef) -> Goal {
-    let refs = game.world.placed;
-    let linked = refs.get(actor).and_then(|r| r.linked);
+    let linked = game.linked_ref(actor);
     let target = match def.target.map(|t| t.kind) {
         Some(TargetKind::Reference(Some(r))) => r,
         Some(TargetKind::LinkedReference) => match linked {
@@ -734,8 +732,7 @@ fn talk(game: &Game, nav: &NavGraph, actor: FormId, def: &PackageDef) -> Goal {
 
 /// A location 2 as a trigger location (Dialogue and Ambush packages).
 fn trigger_of(game: &Game, actor: FormId, l: &Location) -> Trigger {
-    let refs = game.world.placed;
-    let linked = refs.get(actor).and_then(|r| r.linked);
+    let linked = game.linked_ref(actor);
     let radius = l.radius.max(0) as f32;
     match l.kind {
         LocationKind::NearReference(Some(reference)) => Trigger::NearReference { reference, radius },
@@ -753,7 +750,7 @@ fn trigger_of(game: &Game, actor: FormId, l: &Location) -> Trigger {
 fn target_ref(game: &Game, actor: FormId, def: &PackageDef, why_none: &'static str) -> Result<FormId, Goal> {
     match def.target.map(|t| t.kind) {
         Some(TargetKind::Reference(Some(r))) => Ok(r),
-        Some(TargetKind::LinkedReference) => game.world.placed.get(actor).and_then(|r| r.linked).ok_or(Goal::Missing("the actor has no linked reference")),
+        Some(TargetKind::LinkedReference) => game.linked_ref(actor).ok_or(Goal::Missing("the actor has no linked reference")),
         Some(TargetKind::Reference(None)) => Err(Goal::Missing("the package's target is not in the load order")),
         _ => Err(Goal::NotCarriedOut(why_none)),
     }
@@ -908,7 +905,7 @@ pub fn package_furniture(game: &Game, taken: &std::collections::BTreeMap<FormId,
     // crosses].
     let place_ref = match loc.kind {
         LocationKind::NearReference(Some(r)) => Some(r),
-        LocationKind::NearLinked => refs.get(actor).and_then(|p| p.linked),
+        LocationKind::NearLinked => game.linked_ref(actor),
         _ => None,
     };
     if let Some(r) = place_ref {

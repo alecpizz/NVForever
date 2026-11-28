@@ -166,16 +166,18 @@ pub struct DlssgRequest {
 
 /// Why the row's DLSS choice cannot run now, in the settings page's words: the loader's reason
 /// (`dlss::frame_generation_unavailable`: the files, the GPU, Windows' GPU scheduling, the
-/// driver), no upscaler drawing (DLSS-G takes the upscaler's depth and motion), or vsync on
+/// driver), no upscaler drawing (DLSS-G takes the upscaler's depth and motion), or Vertical sync
 /// (DLSS-G requires vsync off on Vulkan [observed: its requirements' "vsync off required yes",
 /// fork-notes `fg-spike-results.md`; documented: "VSync with Frame Generation is only supported
-/// on D3D12", `ProgrammingGuideDLSS_G.md` §22.5]).
+/// on D3D12", `ProgrammingGuideDLSS_G.md` §22.5]). Variable refresh is no bar: while DLSS-G is
+/// asked for it presents with vsync off and keeps its cap, through Reflex
+/// (`frame_pace::FramePace::presents_vsync`).
 pub fn dlss_unavailable_reason(world: &World) -> Option<&'static str> {
     if let Some(why) = crate::dlss::frame_generation_unavailable(|| crate::settings::dlss_download_offered(world)) {
         Some(why)
     } else if !crate::upscaler::temporal_active(world) {
         Some("Needs an upscaler")
-    } else if world.resource::<crate::frame_pace::FramePace>().sync.vsync() {
+    } else if world.resource::<crate::frame_pace::FramePace>().sync == crate::frame_pace::DisplaySync::Vsync {
         Some("Needs vsync off")
     } else {
         None
@@ -366,17 +368,14 @@ fn storage_without_format(adapter: &wgpu::Adapter) -> bool {
 /// one `graphics::apply` puts on the camera in the same frame (FSR's prepare then sees the
 /// request and FSR's component together, as when both read `Graphics::fsr`).
 fn add_switch_systems(app: &mut App) {
-    app.add_systems(Update, (follow_switch, log_switch).after(crate::frame_pace::ApplyFramePace).after(crate::upscaler::follow_request));
+    app.add_systems(Update, request_dlssg.after(crate::upscaler::follow_request).before(crate::frame_pace::ApplyFramePace))
+        .add_systems(Update, (follow_switch, log_switch).after(crate::frame_pace::ApplyFramePace).after(crate::upscaler::follow_request));
 }
 
-/// FSR frame generation was asked for while DLSS-G is loaded (said once).
-static SAID_DLSSG: AtomicBool = AtomicBool::new(false);
-
-fn follow_switch(world: &mut World) {
-    if world.resource::<FrameGeneration>().fsr() && crate::dlss::frame_generation_loaded() && !SAID_DLSSG.swap(true, Ordering::Relaxed) {
-        warn!("frame generation: FSR 3.1 frame generation waits until Streamline's DLSS Frame Generation is unloaded");
-    }
-    // DLSS Frame Generation's request for the render world.
+/// DLSS Frame Generation's request for the render world, before the frame pacing: with Variable
+/// refresh, the window's present mode follows it (`frame_pace::apply_vsync`), so the swapchain
+/// DLSS-G's load makes in this frame's extraction is already made with vsync off.
+fn request_dlssg(world: &mut World) {
     let request = DlssgRequest {
         on: world.resource::<FrameGeneration>().kind == FrameGenKind::Dlss && dlss_unavailable_reason(world).is_none(),
         // At most what the GPU allows once it is known (`DLSSGState::numFramesToGenerateMax`).
@@ -387,6 +386,15 @@ fn follow_switch(world: &mut World) {
     };
     if *world.resource::<DlssgRequest>() != request {
         *world.resource_mut::<DlssgRequest>() = request;
+    }
+}
+
+/// FSR frame generation was asked for while DLSS-G is loaded (said once).
+static SAID_DLSSG: AtomicBool = AtomicBool::new(false);
+
+fn follow_switch(world: &mut World) {
+    if world.resource::<FrameGeneration>().fsr() && crate::dlss::frame_generation_loaded() && !SAID_DLSSG.swap(true, Ordering::Relaxed) {
+        warn!("frame generation: FSR 3.1 frame generation waits until Streamline's DLSS Frame Generation is unloaded");
     }
     let usable = usable(world);
     let playing = world.get_resource::<State<nvf_play::PlayState>>().is_none_or(|s| *s.get() == nvf_play::PlayState::Playing);
@@ -1436,6 +1444,34 @@ mod tests {
         assert_eq!(app.world().resource::<crate::upscaler::UpscalerStatus>().effective().fsr(), Some(UpscaleQuality::Quality));
         assert!(app.world().resource::<FrameGenUsable>().0, "usable in the frame FSR became effective");
         assert!(app.world().resource::<crate::anti_lag::LatencyReduction>().by_frame_generation);
+    }
+
+    /// DLSS-G's request is made before the frame pacing, which sets the window's present mode
+    /// from it with Variable refresh: both in the same frame.
+    #[test]
+    fn the_dlssg_request_is_made_before_the_frame_pacing() {
+        #[derive(Resource, Default)]
+        struct Seen(u32);
+        let mut app = App::new();
+        app.insert_resource(crate::graphics::Graphics::preset(crate::graphics::Preset::Vanilla))
+            .insert_resource(crate::fsr::FsrSupport(true))
+            .insert_resource(FrameGenSupport(true))
+            .insert_resource(FrameGeneration { kind: FrameGenKind::Fsr })
+            .insert_resource(crate::frame_pace::FramePace { sync: crate::frame_pace::DisplaySync::Variable, cap: 0 })
+            .insert_resource(crate::frame_pace::Refresh::default())
+            .insert_resource(crate::anti_lag::LatencyReduction { on: false, by_frame_generation: false })
+            .init_resource::<DlssgFrames>()
+            .init_resource::<DlssgRequest>()
+            .init_resource::<FrameGenCap>()
+            .init_resource::<FrameGenUsable>()
+            .init_resource::<Seen>();
+        add_switch_systems(&mut app);
+        app.add_systems(Update, crate::upscaler::follow_request);
+        app.add_systems(Update, (|r: Res<DlssgRequest>, mut seen: ResMut<Seen>| seen.0 = r.frames).in_set(crate::frame_pace::ApplyFramePace));
+        app.update();
+        app.world_mut().resource_mut::<DlssgFrames>().0 = 2;
+        app.update();
+        assert_eq!(app.world().resource::<Seen>().0, 2, "the frame pacing sees this frame's request");
     }
 
     #[test]

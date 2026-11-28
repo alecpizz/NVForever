@@ -244,6 +244,73 @@ impl FromWorld for MeshAllocator {
     }
 }
 
+/// NVForever mesh allocator counts (#3057: a profile build's 74 ms frame in the South Vegas
+/// ruins held 23.7 ms "in mesh allocation and freeing"; a count of the allocations, frees
+/// and bytes tells whether the allocator is the cost): every run of
+/// [`allocate_and_free_meshes`] adds its meshes written, its meshes freed and its time, and
+/// every slab buffer made (a new slab, or a slab grown into a new buffer) of any slab
+/// allocator adds its bytes and the bytes copied out of the old buffer. Read with
+/// [`nvf_mesh_alloc`]; the worst run's time is taken (reset) by each read.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct NvfMeshAlloc {
+    /// Runs of [`allocate_and_free_meshes`], their time in all and the longest run since
+    /// the last read (milliseconds).
+    pub runs: u64,
+    pub ms: f64,
+    pub worst_ms: f64,
+    /// Meshes written (new or changed) and meshes freed.
+    pub written: u64,
+    pub freed: u64,
+    /// Slab buffers made, their bytes, and the bytes copied from the buffers they replaced.
+    pub slabs_made: u64,
+    pub slab_bytes: u64,
+    pub copied_bytes: u64,
+}
+
+impl NvfMeshAlloc {
+    /// What was added after `before` (the worst run is this read's own).
+    pub fn since(&self, before: &NvfMeshAlloc) -> NvfMeshAlloc {
+        NvfMeshAlloc {
+            runs: self.runs.saturating_sub(before.runs),
+            ms: (self.ms - before.ms).max(0.0),
+            worst_ms: self.worst_ms,
+            written: self.written.saturating_sub(before.written),
+            freed: self.freed.saturating_sub(before.freed),
+            slabs_made: self.slabs_made.saturating_sub(before.slabs_made),
+            slab_bytes: self.slab_bytes.saturating_sub(before.slab_bytes),
+            copied_bytes: self.copied_bytes.saturating_sub(before.copied_bytes),
+        }
+    }
+}
+
+/// [`NvfMeshAlloc`]'s sums: runs, microseconds, worst microseconds, written, freed, slabs
+/// made, slab bytes, copied bytes.
+static NVF_MESH_ALLOC: [core::sync::atomic::AtomicU64; 8] = [const { core::sync::atomic::AtomicU64::new(0) }; 8];
+
+/// Count a slab buffer made, `bytes` long, with `copied` bytes copied into it.
+pub(crate) fn nvf_count_slab(bytes: u64, copied: u64) {
+    use core::sync::atomic::Ordering::Relaxed;
+    NVF_MESH_ALLOC[5].fetch_add(1, Relaxed);
+    NVF_MESH_ALLOC[6].fetch_add(bytes, Relaxed);
+    NVF_MESH_ALLOC[7].fetch_add(copied, Relaxed);
+}
+
+/// The mesh allocator's counts so far ([`NvfMeshAlloc`]); takes the worst run's time.
+pub fn nvf_mesh_alloc() -> NvfMeshAlloc {
+    use core::sync::atomic::Ordering::Relaxed;
+    let n = |i: usize| NVF_MESH_ALLOC[i].load(Relaxed);
+    NvfMeshAlloc {
+        runs: n(0),
+        ms: n(1) as f64 / 1000.0,
+        worst_ms: NVF_MESH_ALLOC[2].swap(0, Relaxed) as f64 / 1000.0,
+        written: n(3),
+        freed: n(4),
+        slabs_made: n(5),
+        slab_bytes: n(6),
+        copied_bytes: n(7),
+    }
+}
+
 /// A system that processes newly-extracted or newly-removed meshes and writes
 /// their data into buffers or frees their data as appropriate.
 pub fn allocate_and_free_meshes(
@@ -254,6 +321,8 @@ pub fn allocate_and_free_meshes(
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
 ) {
+    // NVForever mesh allocator counts.
+    let began = std::time::Instant::now();
     // Clear the list of meshes displaced by last frame's slab growth.
     mesh_allocator.clear_displaced_keys();
 
@@ -268,6 +337,17 @@ pub fn allocate_and_free_meshes(
         &render_device,
         &render_queue,
     );
+
+    // NVForever mesh allocator counts.
+    {
+        use core::sync::atomic::Ordering::Relaxed;
+        let us = began.elapsed().as_micros() as u64;
+        NVF_MESH_ALLOC[0].fetch_add(1, Relaxed);
+        NVF_MESH_ALLOC[1].fetch_add(us, Relaxed);
+        NVF_MESH_ALLOC[2].fetch_max(us, Relaxed);
+        NVF_MESH_ALLOC[3].fetch_add(extracted_meshes.extracted.len() as u64, Relaxed);
+        NVF_MESH_ALLOC[4].fetch_add((extracted_meshes.removed.len() + extracted_meshes.modified.len()) as u64, Relaxed);
+    }
 }
 
 impl MeshAllocator {

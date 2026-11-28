@@ -56,7 +56,11 @@ use bevy::light::SimulationLightSystems;
 use bevy::math::reflection_matrix;
 use bevy::pbr::DistanceFog;
 use bevy::prelude::*;
-use bevy::render::gpu_readback::{Readback, ReadbackComplete};
+use bevy::render::gpu_readback::ReadbackComplete;
+#[cfg(any(not(target_os = "android"), test))]
+use bevy::render::gpu_readback::Readback;
+#[cfg(any(target_os = "android", test))]
+use bevy::render::gpu_readback::ReadbackOnce;
 use bevy::render::render_asset::RenderAssets;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use bevy::render::renderer::RenderQueue;
@@ -67,6 +71,9 @@ use bevy::window::{PrimaryWindow, WindowResized};
 use fnv_world::cell_of;
 use nvf_play::RefVisual;
 use bevy::camera::primitives::Aabb;
+
+mod clouds;
+pub(crate) use clouds::ReflectedClouds;
 
 /// Render layer of water surfaces: seen by the main camera, not by the reflection camera
 /// (which would otherwise sample the texture it renders into).
@@ -105,7 +112,8 @@ pub struct ReflectionPlugin;
 
 impl Plugin for ReflectionPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<WaterPixels>().init_resource::<WaterProbe>().add_systems(Startup, setup_reflection).add_systems(
+        clouds::install(app);
+        app.init_resource::<WaterPixels>().init_resource::<WaterProbe>().init_resource::<ReflectionGate>().add_systems(Startup, setup_reflection).add_systems(
             PostUpdate,
             (resize_reflection, read_water_pixels, update_reflection)
                 .chain()
@@ -157,8 +165,9 @@ fn setup_reflection(mut commands: Commands, mut images: ResMut<Assets<Image>>, w
         Projection::Perspective(PerspectiveProjection::default()),
         crate::sky::initial_fog(),
         // The world without the water; the player's first-person arms and seen body as
-        // before they had layers of their own.
-        RenderLayers::from_layers(&[0, crate::sky::ARMS_LAYER, crate::sky::BODY_LAYER]),
+        // before they had layers of their own. Keep the flat sky until the mirror's
+        // own volume has rendered and the mirror can draw its dome.
+        RenderLayers::from_layers(&[0, crate::sky::ARMS_LAYER, crate::sky::BODY_LAYER, crate::volumetric_clouds::FLAT_CLOUD_LAYER, clouds::MIRROR_CLOUD_LAYER]),
     ));
     commands.insert_resource(Reflection { image });
 }
@@ -245,7 +254,12 @@ impl WaterSample {
 
 #[derive(Resource, Default)]
 struct WaterPixels {
+    #[cfg(any(not(target_os = "android"), test))]
     requested: Option<(AssetId<ShaderBuffer>, Entity)>,
+    #[cfg(any(target_os = "android", test))]
+    pending: Option<(Entity, AssetId<ShaderBuffer>)>,
+    #[cfg(any(target_os = "android", test))]
+    counter: Option<AssetId<ShaderBuffer>>,
     /// Start of the current probe and the newest result for it.
     started: f32,
     last: Option<WaterSample>,
@@ -316,27 +330,75 @@ impl WaterPixels {
 
 /// Follow the shared counter asset. Old observers cannot deliver into a new probe.
 fn read_water_pixels(mut commands: Commands, cache: Res<WaterCache>, mut px: ResMut<WaterPixels>) {
-    let counter = cache.seen_counter();
-    if px.requested.map(|(id, _)| id) == counter.map(Handle::id) {
+    #[cfg(target_os = "android")]
+    {
+        if let Some(counter) = cache.seen_counter() {
+            request_android_water_pixels(&mut commands, counter, &mut px);
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let counter = cache.seen_counter();
+        if px.requested.map(|(id, _)| id) == counter.map(Handle::id) {
+            return;
+        }
+        if let Some((_, entity)) = px.requested.take() {
+            commands.entity(entity).despawn();
+        }
+        let Some(counter) = counter else { return };
+        let entity = commands.spawn((Name::new("Water pixel readback"), Readback::buffer(counter.clone()))).observe(
+            |ev: On<ReadbackComplete>, probe: Res<WaterProbe>, mut px: ResMut<WaterPixels>, time: Res<Time<Real>>| {
+                if let Some(sample) = WaterSample::decode(&ev.data) {
+                    px.read(sample, &probe, time.elapsed_secs());
+                }
+            },
+        ).id();
+        px.requested = Some((counter.id(), entity));
+    }
+}
+
+#[cfg(any(target_os = "android", test))]
+fn request_android_water_pixels(commands: &mut Commands, counter: &Handle<ShaderBuffer>, px: &mut WaterPixels) {
+    if px.counter != Some(counter.id()) {
+        px.counter = Some(counter.id());
+        px.last = None;
+        px.last_drawn = None;
+        px.empty_since = None;
+    }
+    if px.pending.is_some() {
         return;
     }
-    if let Some((_, entity)) = px.requested.take() {
-        commands.entity(entity).despawn();
+    let entity = commands
+        .spawn((Name::new("Water pixel readback"), ReadbackOnce::buffer(counter.clone())))
+        .observe(complete_android_water_pixels)
+        .id();
+    px.pending = Some((entity, counter.id()));
+}
+
+#[cfg(any(target_os = "android", test))]
+fn complete_android_water_pixels(
+    ev: On<ReadbackComplete>,
+    mut commands: Commands,
+    probe: Res<WaterProbe>,
+    mut px: ResMut<WaterPixels>,
+    time: Res<Time<Real>>,
+) {
+    let Some((entity, counter)) = px.pending.filter(|(entity, _)| *entity == ev.entity) else {
+        commands.entity(ev.entity).despawn();
+        return;
+    };
+    if px.counter == Some(counter) {
+        if let Some(sample) = WaterSample::decode(&ev.data) {
+            px.read(sample, &probe, time.elapsed_secs());
+        }
     }
-    let Some(counter) = counter else { return };
-    let entity = commands.spawn((Name::new("Water pixel readback"), Readback::buffer(counter.clone()))).observe(
-        |ev: On<ReadbackComplete>, probe: Res<WaterProbe>, mut px: ResMut<WaterPixels>, time: Res<Time<Real>>| {
-            if let Some(sample) = WaterSample::decode(&ev.data) {
-                px.read(sample, &probe, time.elapsed_secs());
-            }
-        },
-    ).id();
-    px.requested = Some((counter.id(), entity));
+    px.pending = None;
+    commands.entity(entity).despawn();
 }
 
 /// CPU retention is independent of GPU coverage. Track the selected world and height
 /// even while out of view so the grace period never holds an unrelated plane on.
-#[derive(Default)]
+#[derive(Resource, Default)]
 struct ReflectionGate {
     plane: Option<(u32, f32)>,
     last_in_view: Option<f32>,
@@ -551,7 +613,7 @@ fn update_reflection(
     hidden: Option<Res<crate::console_toggles::Hidden>>,
     mut probe: ResMut<WaterProbe>,
     mut pixels: ResMut<WaterPixels>,
-    mut gate: Local<ReflectionGate>,
+    mut gate: ResMut<ReflectionGate>,
 ) {
     let Ok((mut camera, mut t, mut gt, mut proj, mut fog)) = refl.single_mut() else { return };
     let main = main.single().ok().filter(|(camera, ..)| camera.is_active);
@@ -860,6 +922,7 @@ mod tests {
             centre: None,
             waiting: Vec::new(),
             model_overrides: HashMap::new(),
+            coop_areas: Vec::new(),
             travels: 0,
         };
         static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -1061,6 +1124,108 @@ mod tests {
         tick(&mut app, 0.25);
         assert_reflection(&mut app, false);
         assert!(app.world().resource::<WaterProbe>().target.is_none());
+    }
+
+    #[derive(Resource)]
+    struct CounterFixture(Handle<ShaderBuffer>);
+
+    fn request_fixture(mut commands: Commands, counter: Res<CounterFixture>, mut px: ResMut<WaterPixels>) {
+        request_android_water_pixels(&mut commands, &counter.0, &mut px);
+    }
+
+    fn readback_app() -> App {
+        let mut app = App::new();
+        // Real one-shot removal runs in First; no RenderApp or GPU device is made.
+        app.add_plugins((MinimalPlugins, bevy::render::gpu_readback::GpuReadbackPlugin::default()))
+            .init_resource::<Assets<ShaderBuffer>>()
+            .init_resource::<WaterPixels>()
+            .insert_resource(WaterProbe { target: Some((0, 0.0)), buffer: None, generation: 1, frame: 1, time: 0.0 })
+            .add_systems(Update, request_fixture);
+        let counter = app.world_mut().resource_mut::<Assets<ShaderBuffer>>()
+            .add(ShaderBuffer::new(vec![0_u32; 4], default()));
+        app.insert_resource(CounterFixture(counter));
+        app
+    }
+
+    fn request_entities(app: &mut App) -> Vec<Entity> {
+        let world = app.world_mut();
+        let mut query = world.query::<(Entity, &Name)>();
+        query.iter(world).filter(|(_, name)| name.as_str() == "Water pixel readback").map(|(entity, _)| entity).collect()
+    }
+
+    fn complete_readback(app: &mut App, entity: Entity, data: Vec<u8>) {
+        app.world_mut().trigger(ReadbackComplete { entity, data });
+        app.world_mut().flush();
+    }
+
+    #[test]
+    fn android_water_readback_stall_retains_one_request_and_existing_fallback() {
+        let mut app = readback_app();
+        app.update();
+        let first = app.world().resource::<WaterPixels>().pending.unwrap().0;
+        assert_eq!(request_entities(&mut app), vec![first]);
+        assert!(app.world().get::<ReadbackOnce>(first).is_some());
+        for _ in 1..=180 {
+            app.update();
+            assert_eq!(app.world().resource::<WaterPixels>().pending.unwrap().0, first);
+            assert_eq!(request_entities(&mut app), vec![first], "stalled callback cannot allocate more request entities");
+            assert!(app.world().get::<Readback>(first).is_none(), "real plugin removed the one-shot request after its single extraction frame");
+        }
+        assert_eq!(app.world().resource::<WaterPixels>().state(READBACK_WAIT + 1.0), GpuWater::Unavailable, "existing initial timeout fallback survives without a callback");
+        assert!(app.world().resource::<WaterPixels>().last.is_none());
+    }
+
+    #[test]
+    fn android_water_readback_completion_retires_once_and_preserves_counter_semantics() {
+        let mut app = readback_app();
+        for (i, count) in [10_u32, 0, 25, 0].into_iter().enumerate() {
+            let now = app.world().resource::<Time<Real>>().elapsed_secs();
+            let sample = WaterSample { count, generation: 1, frame: i as u32 + 1, time: now };
+            app.update();
+            let entity = app.world().resource::<WaterPixels>().pending.unwrap().0;
+            assert_eq!(request_entities(&mut app), vec![entity]);
+            complete_readback(&mut app, entity, sample.bytes().to_vec());
+            assert!(app.world().resource::<WaterPixels>().pending.is_none());
+            assert!(request_entities(&mut app).is_empty(), "completion retires the actual request entity");
+            let px = app.world().resource::<WaterPixels>();
+            assert_eq!(px.last.map(|s| s.count), Some(count));
+            assert_eq!(px.state(now), GpuWater::Drawn);
+        }
+        app.update();
+        assert_eq!(request_entities(&mut app).len(), 1, "one successor is admitted after the previous completion");
+    }
+
+    #[test]
+    fn android_water_readback_late_old_counter_and_short_result_cannot_pollute_new_counter() {
+        let mut app = readback_app();
+        app.update();
+        let old = app.world().resource::<WaterPixels>().pending.unwrap();
+        let replacement = app.world_mut().resource_mut::<Assets<ShaderBuffer>>()
+            .add(ShaderBuffer::new(vec![0_u32; 4], default()));
+        app.insert_resource(CounterFixture(replacement.clone()));
+        app.update();
+        assert_eq!(request_entities(&mut app), vec![old.0], "counter replacement must still wait for the existing request");
+        assert_eq!(app.world().resource::<WaterPixels>().counter, Some(replacement.id()));
+        let now = app.world().resource::<Time<Real>>().elapsed_secs();
+        let old_sample = WaterSample { count: 999, generation: 1, frame: 1, time: now };
+        complete_readback(&mut app, old.0, old_sample.bytes().to_vec());
+        let px = app.world().resource::<WaterPixels>();
+        assert!(px.pending.is_none());
+        assert!(px.last.is_none(), "late old-counter bytes cannot become the new counter baseline");
+        assert!(px.last_drawn.is_none());
+        app.update();
+        let fresh = app.world().resource::<WaterPixels>().pending.unwrap();
+        assert_eq!(fresh.1, replacement.id());
+        complete_readback(&mut app, fresh.0, vec![1, 2, 3]);
+        assert!(app.world().resource::<WaterPixels>().last.is_none(), "short payload is not a counter value");
+        app.update();
+        let fresh = app.world().resource::<WaterPixels>().pending.unwrap().0;
+        let now = app.world().resource::<Time<Real>>().elapsed_secs();
+        let valid = WaterSample { count: 7, generation: 1, frame: 2, time: now };
+        complete_readback(&mut app, fresh, valid.bytes().to_vec());
+        assert_eq!(app.world().resource::<WaterPixels>().last.map(|s| s.count), Some(7));
+        assert_eq!(app.world().resource::<WaterPixels>().state(now), GpuWater::Drawn);
+        assert!(request_entities(&mut app).is_empty());
     }
 
     #[test]

@@ -309,8 +309,10 @@ the compass the eight directions' letters in Bevy's font.
   up within 0.34 s, held about 1.3 s. [hypothesis] `xp_meter.rs` fits the notice at
   7.2 s, with a 1.2 s gap and symmetric 0.34 s fades (experience.md §6). History:
   0.25 s fade, 3 s hold, immediate eased 0.6 s slide and LEVEL UP replacing +n XP.
-  [design: owner 2026-10-24; maintainer's choice T12b B/M4; needs an issue] The filled-bar
-  sound and 5 s sound-to-menu wait stay; the original's sound moment is not captured.
+  [owner 2026-10-24; observed: private job hud_xp_limbs2, x9_level_up_long; design: #3438]
+  The filled-bar sound stays at 4.0 s and `LEVEL_UP_DELAY` is 5.35 s so the menu opens at
+  the observed 9.35 s after the `LEVEL UP` fade (9.18 s); the original's sound moment is
+  still uncaptured.
 - The radiation meter is built: radiation.md §6 (`radiation.rs`); its place is a guess.
 - The breath meter is built: drowning.md §3 (`hud_breath.rs`); from its `nif` tile with
   `[UI] TileMenus=HUDMainMenu` (§14.12).
@@ -451,27 +453,27 @@ mouse button, and stayed 8 with nothing pressed).
 (`sneak_nif`); the template `sneak_bracket` (`glow_stealth_metre_seperator.dds`) is a
 bracket like the enemy's. [observed: the owner's four screenshots] The original shows
 neither: only a word in brackets, centred at the top of the view, its line at y 51 from
-the top, in font 7: `[HIDDEN]` and `[DETECTED]` in the HUD's colour, `[CAUTION]` and
-`[DANGER]` in its alternative red. The words are not in `FalloutNV.esm`'s settings
-(they would be the program's defaults); they are written here as the screenshots show
-them.
+the top, in font 7: one of four words, the two calm ones in the HUD's colour, the two
+warnings in its alternative red. The words are not in `FalloutNV.esm`'s settings
+(they would be the program's defaults), so NVForever writes its own [design, #2984]:
+`[UNSEEN]`, `[SPOTTED]`, `[ALERT]` and `[COMBAT]`.
 
 Shown while the player sneaks (`PlayerControl::sneak`), with the rest of the HUD. Which
-word [hypothesis: the meaning players give the words; not documented]: `[DANGER]` when
+word [hypothesis: the meaning players give the words; not documented]: `[COMBAT]` when
 an actor is in Combat with the player as its detected target (an enemy left in an unloaded
-cell, or out of reach, detects the player no more: alert.md §2, #3390); else `[CAUTION]` when an actor in
+cell, or out of reach, detects the player no more: alert.md §2, #3390); else `[ALERT]` when an actor in
 Alert or Lost has the player among its threats or an alarm the player caused
-(`fnv_game::awareness`); else `[DETECTED]` when some actor's latest detection of the
-player is in the detected band (`Game::detection`, value above 0); else `[HIDDEN]`.
+(`fnv_game::awareness`); else `[SPOTTED]` when some actor's latest detection of the
+player is in the detected band (`Game::detection`, value above 0); else `[UNSEEN]`.
 Teammates and actors whose current package is a Follow or Accompany package on the
-player (`Game::with_player`) count for neither `[CAUTION]` nor `[DETECTED]`; their
+player (`Game::with_player`) count for neither `[ALERT]` nor `[SPOTTED]`; their
 detection is still measured and kept for their own AI [observed: owner's playtest
-2026-10-31, #1159: a following companion alone set `[DETECTED]`, which the owner
+2026-10-31, #1159: a following companion alone set `[SPOTTED]`, which the owner
 reports the original does not; hypothesis: the original leaves companions out by the
 same rule, observer-checks.md P3 16]. Other actors, hostile or not, still count
 [hypothesis: a neutral seeing the player is what theft and pickpocketing care about;
 not checked in the original, observer-checks.md P3 16]. An actor with the player that
-is in Combat with the player still gives `[DANGER]` [design].
+is in Combat with the player still gives `[COMBAT]` [design].
 Logged as `hud: sneak [WORD]` on each change. (`fnv_game::detection::Band::meter`
 names the bands HIDDEN, CAUTION, DANGER for the detection log; that older mapping is not
 what the HUD shows.)
@@ -1256,9 +1258,10 @@ and `t12b-fixes.md`, part A] Game 1.4.0.525, xNVSE 6.4.9, JIP 57.3, save `hudtes
   +5 example]; further gains update the endpoint. LEVEL UP alone appears around
   7.2 s, rises within 0.34 s, holds about 1.3 s, falls by 9.35 s. [design] Tile-only
   `ui_hud::Animation` clocks pause without the HUD and reset on tree rebuild or XP/
-  level reset. They do not schedule sounds/menus: the hand-built menu delay can
-  interrupt this longer visual sequence [documented: nvf-play/src/xp_meter.rs,
-  LEVEL_UP_DELAY]. Reconciling that owner's delay is outside part A.
+  level reset. They do not schedule sounds/menus: `xp_meter` keeps `UILevelUpText` at the
+  filled bar (4.0 s, owner 2026-10-24) and opens the menu `LEVEL_UP_DELAY` (5.35 s) later
+  at 9.35 s, matching the observed menu opening after the `LEVEL UP` fade finishes at
+  9.18 s [documented: nvf-play/src/xp_meter.rs, LEVEL_UP_DELAY; #3438].
 - [observed: private job hud_xp_limbs l1-l3] Limb pictures at zoom 75:
 
   | Picture | x,y | width,height |

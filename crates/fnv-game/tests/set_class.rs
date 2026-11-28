@@ -20,6 +20,8 @@ const CLASS_A: u32 = 0x900;
 const CLASS_B: u32 = 0x901;
 const NPC: u32 = 0x902;
 const MISC: u32 = 0x903;
+const QUST_NAMED: u32 = 0x904;
+const QUST_UNNAMED: u32 = 0x905;
 
 fn plugin_bytes() -> Vec<u8> {
     let npc_data = [50i32.to_le_bytes().to_vec(), vec![5; 7]].concat();
@@ -30,7 +32,25 @@ fn plugin_bytes() -> Vec<u8> {
     .concat();
     let classes = [record(b"CLAS", 0, CLASS_A, &[sub(b"EDID", z("ClassA"))]), record(b"CLAS", 0, CLASS_B, &[sub(b"EDID", z("ClassB"))])].concat();
     let misc = record(b"MISC", 0, MISC, &[sub(b"EDID", z("TestMisc"))]);
-    [tes4(), top(b"CLAS", &classes), top(b"NPC_", &npcs), top(b"MISC", &misc)].concat()
+    // QUST DATA: flags (u8), priority (u8), pad (2 bytes), quest_delay (f32).
+    let qdata = [vec![1u8, 0, 0, 0], 0.0f32.to_le_bytes().to_vec()].concat();
+    let qusts = [
+        record(
+            b"QUST",
+            0,
+            QUST_NAMED,
+            &[
+                sub(b"EDID", z("TestNamedQuest")),
+                sub(b"FULL", z("Test Quest")),
+                sub(b"DATA", qdata.clone()),
+                sub(b"QOBJ", 10i32.to_le_bytes().to_vec()),
+                sub(b"NNAM", z("Do thing")),
+            ],
+        ),
+        record(b"QUST", 0, QUST_UNNAMED, &[sub(b"EDID", z("TestUnnamedQuest")), sub(b"DATA", qdata)]),
+    ]
+    .concat();
+    [tes4(), top(b"CLAS", &classes), top(b"NPC_", &npcs), top(b"MISC", &misc), top(b"QUST", &qusts)].concat()
 }
 
 fn with_game(f: impl FnOnce(&mut Game)) {
@@ -65,8 +85,16 @@ fn set_class_changes_what_the_class_getters_read() {
         assert_eq!(q(g, "SetFunctionValue (TestNpc.GetIsClass ClassB)"), 1.0);
         assert_eq!(q(g, "SetFunctionValue (TestNpc.GetIsClass ClassA)"), 0.0);
         assert_eq!(q(g, "ref r\nlet r := GetClass TestNpc\nSetFunctionValue r"), f64::from(CLASS_B));
-        // Not a class: nothing changes.
-        q(g, "TestNpc.SetClass TestMisc");
+        // Non-CLAS or null class argument aborts at runtime (even in default non-strict
+        // mode) and leaves the actor's class unchanged (w4g_05).
+        assert_eq!(
+            g.run_query("Begin Function { }\nTestNpc.SetClass TestMisc\nSetFunctionValue 91\nEnd\n", Default::default()),
+            Err("setclass requires a CLAS form".into()),
+        );
+        assert_eq!(
+            g.run_query("ref rNull\nBegin Function { }\nlet rNull := 0\nTestNpc.SetClass rNull\nSetFunctionValue 91\nEnd\n", Default::default()),
+            Err("setclass requires a CLAS form".into()),
+        );
         assert_eq!(q(g, "SetFunctionValue (TestNpc.GetIsClass ClassB)"), 1.0);
     });
 }
@@ -116,5 +144,38 @@ fn gpcdex_reads_the_disabled_controls() {
         q(g, "EnablePlayerControlsAltEx 4");
         assert_eq!(q(g, "SetFunctionValue (GPCDEx 2 4)"), 0.0);
         assert_eq!(q(g, "short s\nif GPCDEx 2 4 && GPCDEx 2 8\nlet s := 1\nendif\nSetFunctionValue 3"), 3.0, "legacy if with two calls compiles");
+    });
+}
+
+/// `GetQuestFlag` / `SetQuestFlag` flag 5 (shown in Pip-Boy): running named quest starts 0
+/// before objectives are displayed, `SetQuestFlag q 5 1` sets 1, and `SetQuestFlag q 5 0`
+/// clears back to 0 even when objectives are displayed [observed:
+/// `w6d2_26_quest_flag_5_clear_and_all_bits`].
+#[test]
+fn set_quest_flag_5_clears_and_respects_initial_state() {
+    with_game(|g| {
+        q(g, "StartQuest TestNamedQuest\nStartQuest TestUnnamedQuest");
+        assert_eq!(q(g, "SetFunctionValue (GetQuestFlag TestNamedQuest 0)"), 1.0);
+        assert_eq!(q(g, "SetFunctionValue (GetQuestFlag TestNamedQuest 4)"), 1.0);
+        assert_eq!(q(g, "SetFunctionValue (GetQuestFlag TestNamedQuest 5)"), 0.0);
+        q(g, "SetQuestFlag TestNamedQuest 5 1");
+        assert_eq!(q(g, "SetFunctionValue (GetQuestFlag TestNamedQuest 5)"), 1.0);
+        q(g, "SetQuestFlag TestNamedQuest 5 0");
+        assert_eq!(q(g, "SetFunctionValue (GetQuestFlag TestNamedQuest 5)"), 0.0);
+
+        // Even after an objective is displayed, explicit SetQuestFlag 5 0 stays 0.
+        q(g, "SetObjectiveDisplayed TestNamedQuest 10 1");
+        assert_eq!(q(g, "SetFunctionValue (GetQuestFlag TestNamedQuest 5)"), 0.0);
+        q(g, "SetQuestFlag TestNamedQuest 5 1");
+        assert_eq!(q(g, "SetFunctionValue (GetQuestFlag TestNamedQuest 5)"), 1.0);
+
+        // Setting flag 7 does not clobber flag 5; OOB flag 8 reads 0.
+        assert_eq!(q(g, "SetFunctionValue (GetQuestFlag TestNamedQuest 7)"), 0.0);
+        q(g, "SetQuestFlag TestNamedQuest 7 1");
+        assert_eq!(q(g, "SetFunctionValue (GetQuestFlag TestNamedQuest 7)"), 1.0);
+        assert_eq!(q(g, "SetFunctionValue (GetQuestFlag TestNamedQuest 5)"), 1.0);
+        assert_eq!(q(g, "SetFunctionValue (GetQuestFlag TestNamedQuest 8)"), 0.0);
+        assert_eq!(q(g, "SetFunctionValue (GetQuestFlag TestUnnamedQuest 0)"), 1.0);
+        assert_eq!(q(g, "SetFunctionValue (GetQuestFlag TestUnnamedQuest 5)"), 0.0);
     });
 }

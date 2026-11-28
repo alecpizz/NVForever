@@ -52,7 +52,15 @@ pub fn menu_of(world: &World, settings: &Settings) -> Menu {
             tabs.push(menu::Tab { name: t.name.to_string(), label: on_page(t.name), categories });
         }
     }
-    Menu { version: env!("CARGO_PKG_VERSION").to_string(), layout: nvf_settings_layout::layout_stamp(), tabs }
+    Menu { version: env!("CARGO_PKG_VERSION").to_string(), layout: layout_stamp(), tabs }
+}
+
+fn layout_stamp() -> String {
+    if cfg!(target_os = "android") {
+        nvf_settings_layout::mobile_layout_stamp()
+    } else {
+        nvf_settings_layout::layout_stamp()
+    }
 }
 
 fn row(world: &World, settings: &Settings, i: usize) -> menu::Row {
@@ -77,7 +85,7 @@ fn row(world: &World, settings: &Settings, i: usize) -> menu::Row {
     };
     // What it needs of other rows (the shared tables the page goes by), its reason translated.
     let words = |w: &'static str| tr(w).to_string();
-    let shown_with = nvf_settings_layout::shown_with(s.key).map(|r| menu::Rule::of(r, words));
+    let shown_with = crate::settings_layout::shown_with(s.key).map(|r| menu::Rule::of(r, words));
     let needs = nvf_settings_layout::needs(s.key).into_iter().map(|r| menu::Rule::of(r, words)).collect();
     menu::Row { key: s.key.to_string(), label: on_page(s.label), note: tr(s.note).to_string(), kind, default: default(world, settings, i), shown_with, needs }
 }
@@ -190,7 +198,7 @@ mod tests {
         let app = app();
         let w = app.world();
         let m = menu_of(w, w.resource::<Settings>());
-        assert_eq!((m.version.as_str(), m.layout.clone()), (env!("CARGO_PKG_VERSION"), nvf_settings_layout::layout_stamp()));
+        assert_eq!((m.version.as_str(), m.layout.clone()), (env!("CARGO_PKG_VERSION"), layout_stamp()));
         let tabs: Vec<&str> = m.tabs.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(tabs, ["Gameplay", "Display", "Audio"], "in the table's order, a tab with no rows left out");
         let g = &m.tabs[0];
@@ -237,6 +245,37 @@ mod tests {
         write_menu(app.world());
         assert!(!file.exists(), "no settings file: no menu");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn exported_android_controller_rules_keep_shared_rules_and_actual_registry_rows() {
+        let mut app = app();
+        for key in crate::settings_layout::ANDROID_CONTROLLER_KEYS {
+            add_setting(&mut app, setting(key, "Controller", key));
+        }
+        add_setting(&mut app, setting("button-style", "Controller", "Button style"));
+        add_setting(&mut app, setting("upscaler-quality", "Graphics", "Upscaler quality"));
+        let before: Vec<_> = app.world().resource::<Settings>().list().iter()
+            .map(|s| (s.key, s.group, s.label, s.note)).collect();
+        let menu = menu_of(app.world(), app.world().resource::<Settings>());
+        let row = |key: &str| menu.rows().find(|r| r.key == key).unwrap();
+        let controller = menu::Rule { parent: crate::settings_layout::DEVICE_ROW.into(),
+            choices: vec![crate::settings_layout::CONTROLLER_DEVICE.into()], why: String::new() };
+        for key in crate::settings_layout::ANDROID_CONTROLLER_KEYS {
+            assert_eq!(row(key).shown_with, Some(controller.clone()), "{key}");
+            assert!(row(key).needs.is_empty());
+        }
+        assert_eq!(row("button-style").shown_with, Some(controller));
+        assert_eq!(row("upscaler-quality").shown_with, Some(menu::Rule {
+            parent: "upscaler".into(), choices: vec!["FSR 3.1".into(), "DLSS".into()], why: String::new() }));
+        assert!(row("a-later-row").shown_with.is_none());
+        assert!(row("a-later-row").needs.is_empty());
+        assert!(menu.rows().all(|r| r.key != "controller-not-registered"));
+        assert_eq!(crate::settings_layout::shown_with("controller-not-registered"), None);
+        assert_eq!(menu.rows().count(), before.len(), "export every actual registered row once");
+        assert_eq!(before, app.world().resource::<Settings>().list().iter()
+            .map(|s| (s.key, s.group, s.label, s.note)).collect::<Vec<_>>());
+        assert_eq!(Menu::parse(&menu.to_text()), Some(menu), "same public shared schema");
     }
 
     #[test]

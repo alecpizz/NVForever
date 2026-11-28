@@ -123,13 +123,13 @@ fn numeric_playgroup_zero_is_literal_and_preserves_callback_code_and_receiver() 
 }
 
 #[test]
-fn actor_zero_and_xmarker_keep_their_existing_wildcard_policy() {
+fn actor_zero_stays_wildcard_while_xmarker_does_not_wildcard_animaction() {
     let f = fixture(); let mut game = game(&f);
     register(&mut game, "AnimAction", "null", "0", 9);
     register(&mut game, "AnimAction", "marker", "OwnedXMarker", 9);
     assert_eq!(fire(&mut game, "animaction", ACTOR_A, 0), 0);
-    assert_eq!(fire(&mut game, "animaction", ACTOR_B, 9), 2);
-    assert_eq!((read(&game, "null", "calls"), read(&game, "marker", "calls"), read(&game, "marker", "b")), (1.0, 1.0, 1.0));
+    assert_eq!(fire(&mut game, "animaction", ACTOR_B, 9), 1);
+    assert_eq!((read(&game, "null", "calls"), read(&game, "null", "b"), read(&game, "marker", "calls"), read(&game, "marker", "b")), (1.0, 1.0, 0.0, 0.0));
     assert_clean(&game);
 }
 

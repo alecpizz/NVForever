@@ -27,6 +27,11 @@ struct NvfAmbientOcclusion {
     // for the multi-bounce fit on the ambient (`nvf_ao_multibounce`, ssao_lighting.rs
     // `MULTIBOUNCE`), 0 for the factor alone; w unused.
     extra: vec4<f32>,
+    // x: the share of the lamps' factor that also reaches the light of lamps whose shadow is
+    // looked up at the fragment (0..1, ssao_lighting.rs `SHADOWED_LAMPS`; 0 leaves them
+    // whole); y: the weight of the factor on the lamps' highlights (0..1, ssao_lighting.rs
+    // `HIGHLIGHTS`; 0 leaves them whole); z, w unused.
+    more: vec4<f32>,
 }
 
 @group(0) @binding(43) var<uniform> nvf_ao: NvfAmbientOcclusion;
@@ -115,4 +120,33 @@ fn nvf_lamp_visibility(g: f32) -> f32 {
         return 1.0;
     }
     return mix(1.0, g, w);
+}
+
+// The factor on the light of a lamp whose shadow is looked up at this fragment, from the
+// factor `lamps` on the lamps without one: mix(1, lamps, s), s the uniform's share. A
+// lamp's shadow map keeps its light out of what stands in its way, but its texels are
+// several units wide and its edges filtered wider: the creases the occlusion finds (a
+// skirting board, a book against a shelf's back) are below what it resolves. Until
+// 2026-11-24 such a lamp took none of the factor, and with the ALC shadows row on a room's
+// occlusion was left on the ambient light alone.
+fn nvf_shadowed_lamp_visibility(lamps: vec3<f32>) -> vec3<f32> {
+    return mix(vec3(1.0), lamps, clamp(nvf_ao.more.x, 0.0, 1.0));
+}
+
+// The factor on a lamp's highlight (the specular part of a point or spot light) from the
+// ambient's factor `g`: the specular occlusion of Lagarde and de Rousiers [documented:
+// "Moving Frostbite to Physically Based Rendering", SIGGRAPH 2014 course, §4.10.2:
+// saturate(pow(N.V + ao, exp2(-16 roughness - 1)) - 1 + ao)], by the uniform's weight. A
+// rough surface's highlight falls as its diffuse light does; a smooth one's keeps more of
+// it where the view looks straight in and loses it at a grazing view. Exactly 1 while the
+// weight is 0, and where the surface is open. Until 2026-11-24 no highlight took the
+// factor: a bottle, a metal shelf or a wet floor glinted in a crease as in the open.
+fn nvf_specular_visibility(g: f32, n_dot_v: f32, roughness: f32) -> f32 {
+    let w = clamp(nvf_ao.more.y, 0.0, 1.0);
+    if !(w > 0.0) {
+        return 1.0;
+    }
+    let exponent = exp2(-16.0 * clamp(roughness, 0.0, 1.0) - 1.0);
+    let open = clamp(pow(max(n_dot_v, 0.0) + g, exponent) - 1.0 + g, 0.0, 1.0);
+    return mix(1.0, open, w);
 }

@@ -136,16 +136,21 @@ A file is a list of entries, or one entry; 59 files are empty. An entry's keys:
 - **The engine** plays the third-person files whose name is a standing locomotion group
   (`mtidle.kf`, `mtforward.kf` …) on drawn actors, as it plays SetActorAnimationPath's
   (`engine/nvforever/src/anim_paths.rs`), and applies player first- and third-person
-  overrides through `engine/nvforever/src/player_body.rs` (`apply_anim_overrides`). A
+  overrides through `engine/nvforever/src/player_body.rs` (`apply_anim_overrides`). An
+  NPC's idles take a replacement of the idle's file name (`idles.rs`, `clip_path_for`), and
+  its attack, reload, block and aim-form clips one of the clip's file name
+  (`attack_anims.rs`, #1461), the later of two [hypothesis: as the locomotion files]. A
   file's group is read from its name, not its sequence [hypothesis, as knvse-anim.md §2;
   the mods' `1hpReloadL v2.14.kf` shows names can differ].
 
 ## 4. Not built (follow-ups)
 
-- The engine plays no NPC weapon group (attacks, reloads, aims, equips) or NPC idle from
-  folder overrides: it has no NPC player for SetWeaponAnimationPath's either. Weapon sets
-  (including `Mod1`–`Mod3`, direct `.kf` folders, and `chances.txt` weighted picks) are
-  read and resolved game-side into `Game::anim_overrides` / `Game::anim_overrides_now`.
+- An NPC's draw, holster and level aim clips (`weapons.rs`'s stances, loaded once per
+  skeleton and weapon type and shared by every actor) take no replacement yet; its
+  attack, reload, block and aim-form clips do (`attack_anims.rs`, #1461: the actor's
+  files from `anim_paths::ActorAnimFiles`, by file name). Weapon sets (including
+  `Mod1`–`Mod3`, direct `.kf` folders, and `chances.txt` weighted picks) are read and
+  resolved game-side into `Game::anim_overrides` / `Game::anim_overrides_now`.
 - The group of a file from its sequence name instead of its file name, and engine-side
   variant-stem mapping when a selected file name carries a variant suffix (`2haJamF_a.kf`)
   for a base group (`2haJamF.kf`).

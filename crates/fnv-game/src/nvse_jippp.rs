@@ -221,7 +221,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         }
         // `object`: the calling plugin's entries dropped, other plugins' kept; the number
         // dropped [documented: ClearRuntimeNodes, "if ClearRuntimeNodes … > 0"]. On a
-        // drawn reference the inserted nodes go at once [hypothesis].
+        // drawn reference the inserted nodes go at once (see docs/spec-notes/ext-jippp.md §1).
         "clearruntimenodes" => {
             let Some(f) = form(args, 0) else { return Some(Ok(zero)) };
             let plugin = g.other.plugin.clone();
@@ -261,8 +261,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         }
         // `[filter] [temp]`: each active effect on the calling actor as a string map
         // [documented: GetActiveEffectsInfo's entries and filters]. Flags read 0 and a
-        // permanent effect's TimeLeft and Duration 0 [hypothesis: NVForever keeps no
-        // effect flags; an ability has no duration].
+        // permanent effect's TimeLeft and Duration 0 (see docs/spec-notes/ext-jippp.md §2).
         "getactiveeffectsinfo" => {
             let a = subject.unwrap_or(FormId::PLAYER_REF);
             let (class, by_form) = match args.first() {
@@ -313,7 +312,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         // `array`: GetActiveEffectsInfo's maps written back by MetaData: Magnitude,
         // TimeLeft (at most the duration) and Duration [documented: SetActiveEffectsInfo;
         // the read-only entries are not read]. A per-second change scales with the
-        // magnitude [hypothesis: a modifier already applied keeps its amount, follow-up].
+        // magnitude (see docs/spec-notes/ext-jippp.md §2; follow-up).
         "setactiveeffectsinfo" => {
             let a = subject.unwrap_or(FormId::PLAYER_REF);
             let Some(XVal::Array(id)) = args.first() else { return Some(Ok(zero)) };

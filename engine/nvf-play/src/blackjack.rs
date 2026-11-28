@@ -36,6 +36,7 @@ use crate::lockpick::Help;
 use crate::pause::{AidTime, Paused};
 use crate::script::{with_world, ScriptState};
 use crate::sim::SimState;
+use crate::flourish::{Flourish, Highlight};
 use crate::ui_sounds::{UiEvent, UiMenu, UiSound};
 use crate::PlayState;
 use crate::PlaySet;
@@ -55,6 +56,10 @@ pub const DEAL_GAP: f32 = 0.45;
 /// A deal sequence's length, and the discard's [observed: the models' text keys].
 pub const CARD_SECONDS: f32 = 0.633;
 pub const DISCARD_SECONDS: f32 = 1.3;
+/// The dealer's hole card turning over in place (`Dealer_Reveal`, played in this time by
+/// the view), then the pause before the dealer draws or the result shows [design: a 0.25 to 0.4 s flip, then 0.5 to 0.8 s].
+pub const REVEAL_SECONDS: f32 = 0.35;
+pub const REVEAL_PAUSE: f32 = 0.65;
 /// Seconds the shuffle takes before the deal [design].
 pub const SHUFFLE_SECONDS: f32 = 1.0;
 /// Seconds the table stays after the round that banned the player [design].
@@ -69,7 +74,9 @@ pub struct OpenBlackjack(pub BlackjackRequest);
 /// The table's picture, drawn by the engine while the menu is open.
 #[derive(Resource, Clone, Debug)]
 pub struct BlackjackView {
-    pub image: Handle<Image>,
+    /// The picture of the table drawn alone; `None` when the game's own camera shows the
+    /// table where it stands in the world (the room is the backdrop).
+    pub image: Option<Handle<Image>>,
 }
 
 #[derive(Resource, Default)]
@@ -107,12 +114,16 @@ pub struct Session {
     /// When the last round's cards started to be swept away (they are gone after
     /// [`DISCARD_SECONDS`]).
     pub discard: Option<(f32, Vec<Shown>)>,
+    /// When the settled round's cards are swept off (aid seconds).
+    pub collect_at: Option<f32>,
     /// The buttons wait until then (aid seconds): the cards are still coming.
     pub busy_until: f32,
     /// The round's result line, shown from then.
     pending: Option<(f32, String)>,
     /// Sounds to play when their time comes.
     sounds: Vec<(f32, UiEvent)>,
+    /// Hands won to show as highlights when their time comes: whether it was a blackjack.
+    wins: Vec<(f32, bool)>,
     /// The round took the earnings to the max: the menu closes then.
     pub banned_at: Option<f32>,
     pub leaving: Option<(f32, &'static str)>,
@@ -120,6 +131,34 @@ pub struct Session {
     auto: bool,
     /// Asked to leave during a round: the menu leaves once it is over.
     leave_after: bool,
+    /// What the last round paid back (from when, how many chips): on the table at the
+    /// seat until the next bet is set.
+    pub paid: Option<(f32, u32)>,
+    /// The table in the world the menu is at (`crate::roulette::world_table`): the menu's
+    /// table and camera stand where it does, the room around it the backdrop (nvforever
+    /// `blackjack_view.rs`).
+    pub table_ref: Option<FormId>,
+}
+
+/// Seconds the chips a round paid stay before the buttons come back [design].
+pub const PAID_SECONDS: f32 = 1.2;
+/// Seconds a settled round's cards stay to be read before they are swept off; the chips
+/// stay until the next bet [design].
+pub const COLLECT_SECONDS: f32 = 1.5;
+
+/// The cards on the table swept off from `now` (none when there are none).
+fn sweep(shown: &mut Vec<Shown>, discard: &mut Option<(f32, Vec<Shown>)>, now: f32) -> bool {
+    if shown.is_empty() {
+        return false;
+    }
+    *discard = Some((now, std::mem::take(shown)));
+    true
+}
+
+/// When a new deal's first card may leave the shoe: after the cards being swept off are
+/// gone (they are the same cards of the models).
+fn after_discard(discard: &Option<(f32, Vec<Shown>)>, t: f32) -> f32 {
+    discard.as_ref().map_or(t, |(d, _)| t.max(d + DISCARD_SECONDS))
 }
 
 impl Session {
@@ -130,6 +169,19 @@ impl Session {
 
     pub fn betting(&self) -> bool {
         self.table.phase != Phase::Playing
+    }
+
+    /// The chips on the table at this player's seat now: the bet being set, the hands'
+    /// stakes, then what the round paid back.
+    pub fn chips_shown(&self, now: f32) -> u32 {
+        if !self.betting() {
+            return self.table.staked();
+        }
+        match self.paid {
+            Some((t, _)) if now < t => self.table.staked(),
+            Some((_, n)) => n,
+            None => self.bet,
+        }
     }
 
     /// How much of the menu is drawn: 1, down to 0 as it leaves.
@@ -172,10 +224,10 @@ impl Session {
         }
     }
 
-    /// The third row's title: the casino's name as its record has it ("Gommorah
-    /// Earnings:" [observed: the owner's screenshot]).
+    /// The third row's title, with the casino's name as its record has it: "Won at
+    /// Gommorah:" (NVForever's own words [design, #4495]).
     pub fn earnings_title(&self) -> String {
-        trf("{casino} Earnings:", &[("casino", &self.def.name)])
+        trf("Won at {casino}:", &[("casino", &self.def.name)])
     }
 }
 
@@ -244,7 +296,7 @@ fn parse_aid(v: &str) -> Result<Vec<(f32, AidStep)>, String> {
                 "open" => {
                     let casino = FormId(parts.first().and_then(|s| hex(s)).ok_or_else(bad)?);
                     let (min_bet, max_bet) = if parts.len() >= 3 { (num(parts.get(1))? as u32, num(parts.get(2))? as u32) } else { (1, 200) };
-                    AidStep::Open(BlackjackRequest { casino, min_bet, max_bet, max_winnings: 0 })
+                    AidStep::Open(BlackjackRequest { casino, min_bet, max_bet, max_winnings: 0, table: None })
                 }
                 "stack" => AidStep::Stack(arg.split('-').map(|c| Card::parse(c.trim()).ok_or_else(bad)).collect::<Result<_, _>>()?),
                 "bet" => AidStep::Input(BlackjackInput::SetBet(num(parts.first())?.max(0) as u32)),
@@ -398,6 +450,7 @@ fn open(
     mut aid: ResMut<BlackjackAid>,
     time: AidTime,
     (mut stats, mut corner, mut sounds, bindings): (ResMut<BlackjackStats>, Option<ResMut<crate::corner_messages::CornerMessages>>, MessageWriter<UiSound>, Res<crate::bindings::Bindings>),
+    play: Option<Res<crate::PlayWorld>>,
 ) {
     let Some(OpenBlackjack(r)) = requests.read().last().copied() else { return };
     stats.asked += 1;
@@ -455,6 +508,11 @@ fn open(
         info!("blackjack: help message {} {:?} shown (first use)", rules::HELP_MESSAGE, h.title);
     }
     let bet = table.clamp_bet(r.min_bet, chips);
+    let table_ref = crate::roulette::world_table(&sim, play.as_deref(), r.table, def.table_model.as_deref(), "blackjack");
+    match table_ref {
+        Some(t) => info!("blackjack: at the table {t} in the world (asked by {:?})", r.table),
+        None => info!("blackjack: no blackjack table near in the world; the menu draws its table alone"),
+    }
     screen.0 = Some(Session {
         casino: r.casino,
         def,
@@ -471,13 +529,17 @@ fn open(
         shown: Vec::new(),
         reveal: None,
         discard: None,
+        collect_at: None,
         busy_until: now,
         pending: None,
         sounds: Vec::new(),
+        wins: Vec::new(),
         banned_at: None,
         leaving: None,
         auto: false,
         leave_after: false,
+        paid: None,
+        table_ref,
     });
     sounds.write(UiSound { menu: UiMenu::Blackjack, event: UiEvent::Opened });
     next.set(PlayState::Menu);
@@ -565,11 +627,11 @@ pub fn result_line(outcomes: &[(Outcome, u32)], dealer: u32, net: i64) -> String
         Outcome::Surrendered => tr("Surrendered"),
     };
     let parts: Vec<&str> = outcomes.iter().map(|(o, _)| words(*o)).collect();
-    let dealer = if dealer > 21 { tr("Dealer busts").to_string() } else { trf("Dealer has {dealer}", &[("dealer", &dealer)]) };
     let net = match net {
         n if n > 0 => format!("+{n}"),
         n => n.to_string(),
     };
+    let dealer = if dealer > 21 { tr("Dealer busts").to_string() } else { trf("Dealer has {dealer}", &[("dealer", &dealer)]) };
     format!("{}. {dealer}. {net}", parts.join(" / "))
 }
 
@@ -604,6 +666,9 @@ fn apply(
             }
             _ => {}
         }
+        if matches!(cmd, BlackjackInput::Deal | BlackjackInput::Bet { .. } | BlackjackInput::MaxBet | BlackjackInput::SetBet(_)) && s.betting() && now >= s.busy_until {
+            s.paid = None;
+        }
         let Some(rt) = script.as_mut().and_then(|s| s.rt.as_mut()) else { return };
         match cmd {
             BlackjackInput::Bet { up } if s.betting() => {
@@ -628,12 +693,12 @@ fn apply(
                 match s.table.deal(bet, chips) {
                     Ok(events) => {
                         // Last round's cards are swept off first.
-                        let mut t = now.max(s.busy_until);
-                        if !s.shown.is_empty() {
-                            s.discard = Some((now, std::mem::take(&mut s.shown)));
+                        let mut t = after_discard(&s.discard, now.max(s.busy_until));
+                        s.collect_at = None;
+                        if sweep(&mut s.shown, &mut s.discard, now) {
                             s.sounds.push((now, UiEvent::Collected { dealer: false }));
                             s.sounds.push((now + 0.3, UiEvent::Collected { dealer: true }));
-                            t += DISCARD_SECONDS;
+                            t = after_discard(&s.discard, t);
                         }
                         s.reveal = None;
                         s.status = None;
@@ -707,11 +772,14 @@ fn schedule(s: &mut Session, events: Vec<Event>, mut t: f32, stats: &mut Blackja
                 info!("blackjack: the dealer turns over {}", card.short());
                 s.reveal = Some(t);
                 s.sounds.push((t, UiEvent::CardFlipped));
-                t += DEAL_GAP;
+                t += REVEAL_SECONDS + REVEAL_PAUSE;
             }
             Event::Active(h) => info!("blackjack: playing hand {}", h + 1),
             Event::HandOver { hand, outcome } => info!("blackjack: hand {} {}", hand + 1, outcome.name()),
             Event::Settled { outcomes, dealer, net } => {
+                if let Some(natural) = won(&outcomes) {
+                    s.wins.push((t, natural));
+                }
                 let paid: u32 = outcomes.iter().map(|(_, p)| p).sum();
                 let chip = s.chip;
                 if paid > 0 {
@@ -733,6 +801,9 @@ fn schedule(s: &mut Session, events: Vec<Event>, mut t: f32, stats: &mut Blackja
                 }
                 stats.naturals += outcomes.iter().filter(|(o, _)| *o == Outcome::Blackjack).count() as u32;
                 s.pending = Some((t, line));
+                s.paid = Some((t, paid));
+                s.collect_at = Some(t + COLLECT_SECONDS);
+                t += PAID_SECONDS;
                 if net != 0 {
                     s.sounds.push((t, UiEvent::RoundOver { won: net > 0 }));
                 }
@@ -755,14 +826,38 @@ fn seat_name(seat: Seat) -> &'static str {
     }
 }
 
+/// A round won (any hand a win or a blackjack): whether one was a blackjack.
+fn won(outcomes: &[(Outcome, u32)]) -> Option<bool> {
+    outcomes.iter().any(|(o, _)| matches!(o, Outcome::Win | Outcome::Blackjack)).then(|| outcomes.iter().any(|(o, _)| *o == Outcome::Blackjack))
+}
+
+/// The highlight of a hand won.
+fn win_flourish(natural: bool) -> Flourish {
+    let text = if natural { tr("BLACKJACK") } else { tr("YOU WIN THE HAND") };
+    Flourish { kind: Highlight::HandWon, text: text.into() }
+}
+
 fn ordinal(i: usize) -> String {
     format!("#{}", i + 1)
 }
 
 /// Timed sounds and lines; the end after a ban; leaving.
-fn step(time: AidTime, mut screen: ResMut<BlackjackScreen>, mut next: ResMut<NextState<PlayState>>, mut sounds: MessageWriter<UiSound>) {
+fn step(time: AidTime, mut screen: ResMut<BlackjackScreen>, mut next: ResMut<NextState<PlayState>>, mut sounds: MessageWriter<UiSound>, mut flourish: MessageWriter<Flourish>) {
     let Some(s) = screen.0.as_mut() else { return };
     let now = time.elapsed_secs();
+    // Several due at once: one banner (they would lie over each other).
+    let mut due = None;
+    s.wins.retain(|&(t, natural)| {
+        if t <= now {
+            due = Some(due.unwrap_or(false) || natural);
+            false
+        } else {
+            true
+        }
+    });
+    if let Some(natural) = due {
+        flourish.write(win_flourish(natural));
+    }
     s.sounds.retain(|(t, e)| {
         if *t <= now {
             sounds.write(UiSound { menu: UiMenu::Blackjack, event: *e });
@@ -776,6 +871,15 @@ fn step(time: AidTime, mut screen: ResMut<BlackjackScreen>, mut next: ResMut<Nex
     }
     if s.discard.as_ref().is_some_and(|(t, _)| now - t >= DISCARD_SECONDS) {
         s.discard = None;
+    }
+    // A settled round's cards are swept off once read (the chips stay until the next bet).
+    if s.collect_at.is_some_and(|t| t <= now) {
+        s.collect_at = None;
+        if sweep(&mut s.shown, &mut s.discard, now) {
+            s.reveal = None;
+            s.sounds.push((now, UiEvent::Collected { dealer: false }));
+            s.sounds.push((now + 0.3, UiEvent::Collected { dealer: true }));
+        }
     }
     if s.leave_after && s.betting() && now >= s.busy_until {
         s.begin_leaving(now, "the player left after the round");
@@ -851,6 +955,10 @@ pub fn report_progress_fixture(step: usize) -> BlackjackScreen {
         leaving: None,
         auto: false,
         leave_after: false,
+        collect_at: None,
+        wins: vec![],
+        paid: None,
+        table_ref: None,
     }))
 }
 
@@ -863,8 +971,8 @@ mod tests {
         let s = parse_aid("1:seed:7,1:chips:140521:500,2:open:140521,2:open:144C3F:5:50,3:stack:Ah-Kd-9c-7s,4:bet:25,5:deal,6:hit,7:stay,8:auto,9:exit,9:earnings:140521:-20").unwrap();
         assert_eq!(s[0], (1.0, AidStep::Seed(7)));
         assert_eq!(s[1], (1.0, AidStep::Chips(0x140521, 500)));
-        assert_eq!(s[2], (2.0, AidStep::Open(BlackjackRequest { casino: FormId(0x140521), min_bet: 1, max_bet: 200, max_winnings: 0 })));
-        assert_eq!(s[3], (2.0, AidStep::Open(BlackjackRequest { casino: FormId(0x144C3F), min_bet: 5, max_bet: 50, max_winnings: 0 })));
+        assert_eq!(s[2], (2.0, AidStep::Open(BlackjackRequest { casino: FormId(0x140521), min_bet: 1, max_bet: 200, max_winnings: 0, table: None })));
+        assert_eq!(s[3], (2.0, AidStep::Open(BlackjackRequest { casino: FormId(0x144C3F), min_bet: 5, max_bet: 50, max_winnings: 0, table: None })));
         assert_eq!(s[4].1, AidStep::Stack(["Ah", "Kd", "9c", "7s"].iter().map(|c| Card::parse(c).unwrap()).collect()));
         assert_eq!(s[5].1, AidStep::Input(BlackjackInput::SetBet(25)));
         assert_eq!(s[7].1, AidStep::Input(BlackjackInput::Play(Action::Hit)));
@@ -879,6 +987,70 @@ mod tests {
         assert_eq!(result_line(&[(Outcome::Blackjack, 25)], 16, 15), "Blackjack. Dealer has 16. +15");
         assert_eq!(result_line(&[(Outcome::Win, 20), (Outcome::Bust, 0)], 22, 0), "You win / Bust. Dealer busts. 0");
         assert_eq!(result_line(&[(Outcome::Lose, 0)], 20, -10), "Dealer wins. Dealer has 20. -10");
+        // A bust (or a surrender) alone: no dealer's total, it drew nothing.
+        assert_eq!(result_line(&[(Outcome::Bust, 0)], 13, -20), "Bust. Dealer has 13. -20");
+        assert_eq!(result_line(&[(Outcome::Bust, 0), (Outcome::Surrendered, 5)], 13, -15), "Bust / Surrendered. Dealer has 13. -15");
+        assert_eq!(win_flourish(true).text, "BLACKJACK");
+        assert_eq!(win_flourish(false).text, "YOU WIN THE HAND");
+    }
+
+    fn session() -> Session {
+        let rules = Rules { min_bet: 5, max_bet: 200, payout: 1.5, stay_soft17: true };
+        Session {
+            table_ref: None,
+            casino: FormId(1),
+            def: CasinoDef::default(),
+            chip: FormId(2),
+            chip_name: "chip".into(),
+            table: Table::new(rules, 6, 0.75, ChaCha8Rng::seed_from_u64(1)),
+            bet: 25,
+            chips: 500,
+            earnings: 0,
+            max_winnings: 0,
+            status: None,
+            help: None,
+            opened: 0.0,
+            shown: Vec::new(),
+            reveal: None,
+            discard: None,
+            collect_at: None,
+            busy_until: 0.0,
+            pending: None,
+            sounds: Vec::new(),
+            wins: Vec::new(),
+            banned_at: None,
+            leaving: None,
+            auto: false,
+            leave_after: false,
+            paid: None,
+        }
+    }
+
+    #[test]
+    fn a_settled_rounds_cards_are_swept_and_the_next_deal_waits_for_them() {
+        let card = |i| Shown { seat: Seat::Hand(0), index: i, card: Card::new(10, 0), since: 0.0 };
+        let (mut shown, mut discard) = (vec![card(0), card(1)], None);
+        assert!(sweep(&mut shown, &mut discard, 5.0));
+        assert!(shown.is_empty() && discard.as_ref().is_some_and(|d| d.0 == 5.0 && d.1.len() == 2));
+        assert!(!sweep(&mut shown, &mut discard, 6.0), "nothing left to sweep");
+        assert_eq!(discard.as_ref().unwrap().0, 5.0, "the sweep under way is kept");
+        // A deal at 5.5 waits for the cards to be gone; one later goes at once.
+        assert_eq!(after_discard(&discard, 5.5), 5.0 + DISCARD_SECONDS);
+        assert_eq!(after_discard(&discard, 9.0), 9.0);
+        assert_eq!(after_discard(&None, 5.5), 5.5);
+    }
+
+    #[test]
+    fn this_seats_chips_are_the_bet_the_stakes_then_the_payout() {
+        let mut s = session();
+        assert_eq!(s.chips_shown(0.0), 25);
+        s.table.deal(25, 500).unwrap();
+        if s.table.phase == Phase::Playing {
+            assert_eq!(s.chips_shown(0.0), 25);
+        }
+        s.table.phase = Phase::Over;
+        s.paid = Some((5.0, 50));
+        assert_eq!((s.chips_shown(4.0), s.chips_shown(5.0)), (25, 50));
     }
 
     #[test]

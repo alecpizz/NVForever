@@ -229,7 +229,7 @@ impl Game<'_> {
 pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XVal]) -> Option<Result<XVal, String>> {
     let v = match name {
         // PlaySoundFile path [forcePlay] [shouldLoop] [playInMainMenu] [documented].
-        // forcePlay is read as playing in menu mode too, as playInMainMenu [hypothesis].
+        // forcePlay is read as playing in menu mode too, as playInMainMenu (see docs/spec-notes/ext-jg9.md §1).
         // Returns 1 even for a nonexistent path [observed: Fallout: New Vegas 1.4.0.525 +
         // xNVSE 6.4.9 + JohnnyGuitarNVSE 528 + JIP LN 57.30, 2026-11-23, `GSDocMitchellHouse`,
         // `b3_jg9_01_sound_runspeed_compass_pipboy` (`wave4b_extenders.json`, #3679):
@@ -246,8 +246,7 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
         // StopSoundFile: what PlaySoundFile plays [documented].
         "stopsoundfile" => yes(g.stop_paths(0.0, |p| p.file)),
         // PlaySoundFromPath path [fadeTime] [isVoice] [systemSound] [shouldLoop]
-        // [documented]. isVoice plays it as any script sound [hypothesis: the voice
-        // channel's volume is not applied].
+        // [documented]. isVoice plays it as any script sound (see docs/spec-notes/ext-jg9.md §1).
         // 1 for any path, a missing file too [observed: the original, 2026-11-10].
         "playsoundfrompath" => {
             let Some(p) = text(args, 0).as_deref().and_then(data_path).filter(|p| crate::mod_files::exists(p)) else { return Some(Ok(yes(true))) };
@@ -291,7 +290,7 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
             yes(true)
         }
         // StopSoundLooping sound: "gradually" by its Loop End point [documented]. The
-        // engine plays no loop points: what a script plays of it stops [hypothesis].
+        // engine plays no loop points: what a script plays of it stops (see docs/spec-notes/ext-jg9.md §1).
         "stopsoundlooping" => {
             let Some(sound) = form(args, 0) else { return Some(Ok(yes(false))) };
             let was = g.gaps.sounds.is_playing(sound, g.frame);
@@ -352,8 +351,7 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
         // as the engine's music picked it.
         "audiomarkergetcurrent" | "amkgetcur" => XVal::Ref(g.other.jg9.current_marker.map_or(0, |r| r.0)),
         // ref.AudioMarkerGetProperty (AMKGetProp) n: 0 radius, 1 layer 2 trigger %, 2
-        // layer 3 trigger % [documented]; the triggers as stored, fractions [hypothesis:
-        // the page does not say percent or fraction].
+        // layer 3 trigger % [documented]; the triggers as stored, fractions (see docs/spec-notes/ext-jg9.md §4).
         "audiomarkergetproperty" | "amkgetprop" => {
             let m = subject.and_then(|r| g.marker_values(r));
             XVal::Num(match (m, int_arg(args, 0)) {
@@ -425,7 +423,7 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
         // ref.GetLinearVelocity node xOut yOut zOut: "in units of 0.1 Meter/sec, or 7
         // game Units/sec" [documented]: the reference's velocity as GetActorVelocity
         // follows it (`crate::nvse_jip2`), over 7; the node's own body is not told apart
-        // [hypothesis: the whole reference moves with it].
+        // (see docs/spec-notes/ext-jg9.md §5).
         "getlinearvelocity" => {
             let a = subject.unwrap_or(FormId::PLAYER_REF);
             let here = g.ref_pos_rot(a).map(|p| p.0).unwrap_or([0.0; 3]);
@@ -434,7 +432,7 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
         }
         // actor.GetRunSpeed: its run speed [documented], units per second, as the
         // engine's pace gives it (people's and creatures' paces; the player's run with
-        // its Speed Mult and perks); 0 for one not drawn [hypothesis].
+        // its Speed Mult and perks); 0 for one not drawn (see docs/spec-notes/ext-jg9.md §5).
         "getrunspeed" => XVal::Num(f64::from(g.other.jg9.run_speeds.get(&subject.unwrap_or(FormId::PLAYER_REF)).copied().unwrap_or(0.0))),
         // GetPlayerKarmaTitle 0/1: the title (by level and karma) or the tier
         // [documented], as the Pip-Boy's stats show them (`crate::karma_titles`).
@@ -462,13 +460,17 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
             XVal::Num(g.other.jg9.compass_hostile[k].map_or(-1.0, f64::from))
         }
         // GetCurrentSkyColor type rOut gOut bOut: the sky's colour of that type now
-        // [documented: 0 sky upper … 9 clouds upper], 0-255; 0 without a sky (an
-        // interior) [hypothesis].
+        // [documented: 0 sky upper … 9 clouds upper], as normalized 0.0..=1.0 floats (in
+        // interiors too); out-of-range types (or no sky state) return 0 and leave the
+        // output variables unchanged [observed: Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9
+        // + JohnnyGuitarNVSE 528, 2026-11-24, `w6_t1_09_jg_sky_color_interior` and
+        // `w6_t1_15b_raycast_ref_mat_reticle_sky`
+        // (`tools/capture/nvse/catalogs/wave6_t1_jg_sky_color.json`, `ext-jg9.md` §6)].
         "getcurrentskycolor" => {
             let c = int_arg(args, 0).filter(|t| (0..10).contains(t)).zip(g.other.jg9.sky_colors).map(|(t, c)| c[t as usize]);
             match c {
-                Some(c) => outputs(g, 1.0, &c.map(|x| f64::from(x).round())),
-                None => outputs(g, 0.0, &[0.0; 3]),
+                Some(c) => outputs(g, 1.0, &c.map(|x| f64::from(x) / 255.0)),
+                None => outputs(g, 0.0, &[]),
             }
         }
         // ref.GetPlayerCamFOV 0/1/2: the world FOV, the first person's, or the one the

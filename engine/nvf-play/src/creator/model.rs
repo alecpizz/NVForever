@@ -234,13 +234,13 @@ impl Action {
     }
 
     /// The key and the controller button, as the hint shows them: in the form the other
-    /// menus give a button's key ("Take All R)", `crate::menu::look`).
+    /// menus give a button's key ("Take All [R]", `crate::pad::hint`).
     pub fn hint(self) -> &'static str {
         match self {
-            Action::Randomise => "Space) X)",
-            Action::Undo => "Z) Y)",
-            Action::Reset => "R) Back)",
-            Action::Done => "Enter) Start)",
+            Action::Randomise => "[Space] [X]",
+            Action::Undo => "[Z] [Y]",
+            Action::Reset => "[R] [Back]",
+            Action::Done => "[Enter] [Start]",
         }
     }
 }

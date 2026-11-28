@@ -41,6 +41,9 @@
 //!   from, its idle layers, whether it has a character (`PhysState::npcs`) and whether
 //!   that swims and rests on the bed ([`pose_line`]). A fade thus writes a few lines and
 //!   its end one with the base clip alone at weight 1.
+//! - **Co-op players**: the other players' bodies here are no characters of this game's
+//!   physics; they swim while their own games say so (`nvf_coop::net::more_flag::SWIMMING`),
+//!   handed over in [`Swimmers`].
 
 use crate::limbs::ActorRig;
 use crate::locomotion::Locomotion;
@@ -129,11 +132,17 @@ pub struct SwimmingPlugin;
 impl Plugin for SwimmingPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SwimStats>()
+            .init_resource::<Swimmers>()
             .add_systems(Update, swim.after(nvf_play::PlaySet::Scripts).before(crate::locomotion::walk_test))
             .add_systems(Update, pose_watch.after(crate::locomotion::drive).run_if(|| watch_texts().is_some()))
             .add_systems(Last, report);
     }
 }
+
+/// References swimming by another game's word: the co-op players whose own games have them
+/// in the water (`coop.rs` fills it each frame).
+#[derive(Resource, Default)]
+pub struct Swimmers(pub std::collections::HashSet<u32>);
 
 #[derive(Resource, Default)]
 struct SwimStats {
@@ -148,12 +157,12 @@ struct SwimStats {
     resting: BTreeSet<u32>,
 }
 
-fn swim(phys: Option<Res<PhysState>>, mut actors: Query<(&ActorRig, &mut Locomotion)>, mut stats: ResMut<SwimStats>) {
+fn swim(phys: Option<Res<PhysState>>, swimmers: Res<Swimmers>, mut actors: Query<(&ActorRig, &mut Locomotion)>, mut stats: ResMut<SwimStats>) {
     let Some(phys) = phys else { return };
     for (rig, mut lo) in &mut actors {
         let r = rig.reference;
         let ch = phys.npcs.get(&r).map(|n| &n.ch);
-        let swims = ch.is_some_and(|c| c.swimming);
+        let swims = swimmers.0.contains(&r) || ch.is_some_and(|c| c.swimming);
         let was_resting = stats.resting.contains(&r);
         let rests = rests_now(swims, ch.and_then(|c| c.ground_gap), &lo, was_resting);
         if rests {

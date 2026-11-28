@@ -243,6 +243,13 @@ fn message_flags_time_and_disabling() {
     assert_eq!((n(&mut g, "GetMessageFlags TestNote"), n(&mut g, "GetMessageFlags TestBoxMessage")), (2.0, 1.0));
     q(&mut g, "SetMessageFlags TestNote 3");
     assert_eq!(n(&mut g, "GetMessageFlags TestNote"), 3.0);
+    // Values > 3 (`7`) are rejected without mutating DNAM [observed:
+    // `w6d2p3_47_jip6_messages_creatures_and_bptd`]; `< 0` (`-1`), omitted/non-finite args,
+    // and `.trunc()` are [hypothesis]/[design].
+    q(&mut g, "SetMessageFlags TestNote 7");
+    assert_eq!(n(&mut g, "GetMessageFlags TestNote"), 3.0);
+    q(&mut g, "SetMessageFlags TestNote -1");
+    assert_eq!(n(&mut g, "GetMessageFlags TestNote"), 3.0);
     assert_eq!(g.message_flags(FormId(MESG)) & 1, 1, "the game shows it as a box now");
     assert_eq!(g.message_seconds(FormId(MESG)), Some(4));
     q(&mut g, "SetMessageDisplayTime TestNote 9");

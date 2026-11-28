@@ -112,18 +112,16 @@ impl Requests {
 pub(crate) fn call(game: &mut crate::Game<'_>, name: &str, subject: Option<FormId>, args: &[fnv_script::vm::XVal]) -> Option<Result<fnv_script::vm::XVal, String>> {
     use fnv_script::vm::XVal;
     if name != "projectuitile" { return None; }
-    let result = (|| {
-        let reference = subject.ok_or_else(|| "ProjectUITile requires a reference".to_string())?;
-        let [XVal::Str(source), XVal::Str(block), XVal::Num(x), XVal::Num(y), XVal::Num(width), XVal::Num(height)] = args else {
-            return Err("ProjectUITile requires two strings and four numbers".to_string());
-        };
-        game.ui_extra.projections.set(&game.ui_tree, reference, source, block, [*x,*y,*width,*height])
-            .map_err(|reason| format!("ProjectUITile unavailable: {reason:?}"))?;
-        // Accepted/withdrawn calls return the engine's neutral numeric value [design];
-        // native return-value parity has not been measured for this port.
-        Ok(XVal::Num(0.0))
-    })();
-    Some(result)
+    let [XVal::Str(source), XVal::Str(block), XVal::Num(x), XVal::Num(y), XVal::Num(width), XVal::Num(height)] = args else {
+        return Some(Err("ProjectUITile requires two strings and four numbers".to_string()));
+    };
+    if let Some(reference) = subject {
+        let _ = game.ui_extra.projections.set(&game.ui_tree, reference, source, block, [*x, *y, *width, *height]);
+    }
+    // JIP LN ProjectUITile returns 0.0 and continues script execution on valid,
+    // withdrawal, missing-tile, invalid-viewport, and missing/null-reference calls
+    // without enqueueing invalid requests [observed: w4g_10_project_ui_tile_errors].
+    Some(Ok(XVal::Num(0.0)))
 }
 
 #[cfg(test)]

@@ -11,12 +11,19 @@
 //! The host and the guest each run an [`Agent`]. Both probe. The guest picks the pair
 //! ([`Action::Selected`]) and the caller tells the host which, over that pair; the host calls
 //! [`Agent::on_peer_selected`].
+//!
+//! The birthday punch (docs/spec-notes/nat-traversal.md, #4263): when this side's NAT is hard
+//! and the other's easy, the agent asks for extra sockets ([`Action::OpenSockets`]) and
+//! probes from each; when this side is easy and the other hard, it sprays the other side's
+//! public IP across the port range. The caller says what its own NAT is
+//! ([`Agent::set_local_nat`]).
 
-use std::collections::VecDeque;
-use std::net::SocketAddr;
+use std::collections::{HashMap, VecDeque};
+use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 
-use crate::candidate::{canonical, pair_class, Candidate, Kind};
+use crate::candidate::{canonical, pair_class, Candidate, Kind, RELAYED_CLASS};
+use crate::report::Nat;
 
 /// Which side of the join this agent is on. The guest nominates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,12 +42,27 @@ pub struct Config {
     /// After the first valid pair, how long the guest waits for a better class to answer
     /// before it picks (200 ms). It picks at once when no better class is left to try.
     pub settle: Duration,
+    /// The same wait when the best pair that answered goes through a hosted relay (2 s): a
+    /// relay answers in one round trip, while punching a direct hole can take a few.
+    pub relay_settle: Duration,
     /// A keepalive on the chosen pair this often while nothing else is sent (1 s): many NATs
     /// forget a UDP mapping after about 30 s.
     pub keepalive: Duration,
     /// Nothing heard on the chosen pair for this long: [`Action::PathLost`] (4 s, `net.rs`'s
     /// `LOST_AFTER`).
     pub lost_after: Duration,
+    /// Port prediction against a symmetric NAT (#3795 section 7.2, phase 5): when the other
+    /// side's STUN servers saw two different ports on one address, also probe this many ports
+    /// above the highest, where its NAT's next mappings are likely to land. 0 turns it off,
+    /// the default: it looks like a port scan to some firewalls, so it waits for a setting.
+    pub predict: u16,
+    /// The birthday punch (module notes): how many extra sockets the hard side asks for (256).
+    /// 0 turns the punch off on both sides.
+    pub birthday_sockets: u16,
+    /// With no pair but a hosted relay's answered by then, the punch starts (1 s).
+    pub birthday_after: Duration,
+    /// The easy side's spray: one probe per this, to the next port of the sweep (4 ms).
+    pub spray_pace: Duration,
 }
 
 impl Default for Config {
@@ -49,19 +71,45 @@ impl Default for Config {
             pace: Duration::from_millis(20),
             give_up: Duration::from_secs(10),
             settle: Duration::from_millis(200),
+            relay_settle: Duration::from_secs(2),
             keepalive: Duration::from_secs(1),
             lost_after: Duration::from_secs(4),
+            predict: 0,
+            birthday_sockets: 256,
+            birthday_after: Duration::from_secs(1),
+            spray_pace: Duration::from_millis(4),
         }
     }
 }
 
 pub type PairId = usize;
 
+/// The `pair` of a probe that belongs to no pair yet: the birthday punch's.
+pub const NO_PAIR: PairId = usize::MAX;
+
+/// The spray waits this long after the punch starts, so the hard side's mappings exist first.
+const SPRAY_DELAY: Duration = Duration::from_millis(300);
+/// The sweep's ports: 1024..=65535, in steps of a prime that divides none of their count, so
+/// every port comes once before any repeats.
+const SWEEP_FIRST: u32 = 1024;
+const SWEEP_LEN: u32 = 65536 - SWEEP_FIRST;
+const SWEEP_STEP: u32 = 4099;
+/// At most this many sprayed probes per poll, should the caller poll late.
+const SPRAY_BURST: u32 = 16;
+
 /// What the agent asks the caller to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
-    /// Send a probe carrying `check_id` from the socket bound at `from` to `to`.
+    /// Send a probe carrying `check_id` from the socket bound at `from` to `to`. `pair` is
+    /// [`NO_PAIR`] for the birthday punch's probes. `from` may be an extra socket.
     SendProbe { pair: PairId, from: SocketAddr, to: SocketAddr, check_id: u64 },
+    /// The birthday punch: open `count` more UDP sockets (any port, IPv4), listen on them as
+    /// on the main one, answer probes from the socket they came in on, and pass their
+    /// addresses to [`Agent::add_extra_sockets`].
+    OpenSockets { count: u16 },
+    /// Close the extra sockets, except `keep` (the chosen path's, when it is one of them: the
+    /// game's traffic goes over it from now on).
+    CloseSockets { keep: Option<SocketAddr> },
     /// This pair is the path. On the guest: tell the host (over it). On the host: the guest
     /// named it.
     Selected { pair: PairId, local: SocketAddr, remote: SocketAddr },
@@ -110,7 +158,30 @@ pub struct Agent {
     last_keepalive: Option<Instant>,
     last_heard: Option<Instant>,
     lost_reported: bool,
+    /// The addresses port prediction has already run for.
+    predicted: Vec<IpAddr>,
+    /// This side's NAT, from its own STUN gather.
+    local_nat: Nat,
+    /// The birthday punch's extra sockets, once the caller opened them.
+    extras: Vec<SocketAddr>,
+    /// [`Action::OpenSockets`] went out.
+    extras_asked: bool,
+    /// How many of `extras` have sent their probe.
+    extras_probed: usize,
+    /// How many ports the spray has probed.
+    sprayed: u32,
+    /// The birthday punch's probes still unanswered: check id -> sent at.
+    punch_checks: HashMap<u64, Instant>,
     out: Vec<Action>,
+}
+
+/// What the birthday punch has this side do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Punch {
+    /// Hard here, easy there: probe the other side's address from many sockets.
+    Spread(SocketAddr),
+    /// Easy here, hard there: probe the other side's IP across the port range.
+    Spray(IpAddr),
 }
 
 impl Agent {
@@ -135,12 +206,79 @@ impl Agent {
             last_keepalive: None,
             last_heard: None,
             lost_reported: false,
+            predicted: Vec::new(),
+            local_nat: Nat::Unknown,
+            extras: Vec::new(),
+            extras_asked: false,
+            extras_probed: 0,
+            sprayed: 0,
+            punch_checks: HashMap::new(),
             out: Vec::new(),
         }
     }
 
     pub fn role(&self) -> Role {
         self.role
+    }
+
+    /// This side's NAT, as its own STUN gather saw it ([`Nat::from_gather`]). Unknown until
+    /// called; the birthday punch needs it.
+    pub fn set_local_nat(&mut self, nat: Nat) {
+        self.local_nat = nat;
+    }
+
+    /// The extra sockets [`Action::OpenSockets`] asked for, as the caller bound them.
+    pub fn add_extra_sockets(&mut self, addrs: &[SocketAddr]) {
+        for &a in addrs {
+            let a = canonical(a);
+            if !self.extras.contains(&a) && !self.locals.contains(&a) {
+                self.extras.push(a);
+            }
+        }
+    }
+
+    /// What the birthday punch did, for the caller's log once the checks end: `None` when it
+    /// never ran on this side.
+    pub fn punch_summary(&self) -> Option<String> {
+        match self.punch()? {
+            Punch::Spray(ip) if self.sprayed > 0 => Some(format!("birthday punch: sprayed {} ports of {ip}", self.sprayed)),
+            Punch::Spread(to) if self.extras_asked => {
+                Some(format!("birthday punch: {} extra sockets probed {to}", self.extras_probed))
+            }
+            _ => None,
+        }
+    }
+
+    /// The extra sockets still open, as far as the agent knows.
+    pub fn extra_sockets(&self) -> &[SocketAddr] {
+        &self.extras
+    }
+
+    /// The other side's public IPv4 address when its NAT is hard: two or more
+    /// server-reflexive ports on one address.
+    fn remote_hard(&self) -> Option<IpAddr> {
+        let srflx = || self.remotes.iter().filter(|r| r.kind == Kind::ServerReflexive && r.addr.is_ipv4());
+        srflx().map(|r| r.addr.ip()).find(|&ip| srflx().filter(|r| r.addr.ip() == ip).count() >= 2)
+    }
+
+    /// The other side's one server-reflexive IPv4 address, when it has exactly one (an easy NAT).
+    fn remote_easy(&self) -> Option<SocketAddr> {
+        let mut srflx = self.remotes.iter().filter(|r| r.kind == Kind::ServerReflexive && r.addr.is_ipv4());
+        match (srflx.next(), srflx.next()) {
+            (Some(one), None) => Some(one.addr),
+            _ => None,
+        }
+    }
+
+    fn punch(&self) -> Option<Punch> {
+        if self.cfg.birthday_sockets == 0 || !self.locals.iter().any(SocketAddr::is_ipv4) {
+            return None;
+        }
+        match self.local_nat {
+            Nat::Hard => self.remote_easy().map(Punch::Spread),
+            Nat::Easy => self.remote_hard().map(Punch::Spray),
+            _ => None,
+        }
     }
 
     /// A candidate of the other side's, as the service passes it on. Pairs it with every local
@@ -161,6 +299,30 @@ impl Agent {
                 self.pairs.push(Pair { local, remote: c, class: pair_class(c), state: State::Waiting, checks: VecDeque::new() });
             }
         }
+        if c.kind == Kind::ServerReflexive {
+            self.predict(c.addr.ip());
+        }
+    }
+
+    /// Port prediction (see [`Config::predict`]): two server-reflexive ports on one address
+    /// mean a NAT that maps each destination anew, usually to the next free port. The ports
+    /// just above the highest seen are added as candidates, once per address.
+    fn predict(&mut self, ip: IpAddr) {
+        if self.cfg.predict == 0 || self.predicted.contains(&ip) {
+            return;
+        }
+        let ports: Vec<u16> =
+            self.remotes.iter().filter(|r| r.kind == Kind::ServerReflexive && r.addr.ip() == ip).map(|r| r.addr.port()).collect();
+        let (Some(&lo), Some(&hi)) = (ports.iter().min(), ports.iter().max()) else { return };
+        if lo == hi {
+            return;
+        }
+        self.predicted.push(ip);
+        for d in 1..=self.cfg.predict {
+            if let Some(port) = hi.checked_add(d) {
+                self.remote(Candidate::new(Kind::ServerReflexive, SocketAddr::new(ip, port)));
+            }
+        }
     }
 
     fn find(&self, local: SocketAddr, remote: SocketAddr) -> Option<PairId> {
@@ -170,6 +332,16 @@ impl Agent {
     /// The pair (local, remote), learning `remote` as peer reflexive when it is new.
     fn pair_for(&mut self, local: SocketAddr, remote: SocketAddr) -> Option<PairId> {
         let (local, remote) = (canonical(local), canonical(remote));
+        if self.extras.contains(&local) {
+            // An extra socket pairs only with the addresses that reached it.
+            self.remote(Candidate::new(Kind::PeerReflexive, remote));
+            if let Some(id) = self.find(local, remote) {
+                return Some(id);
+            }
+            let c = *self.remotes.iter().find(|r| r.addr == remote)?;
+            self.pairs.push(Pair { local, remote: c, class: pair_class(c), state: State::Waiting, checks: VecDeque::new() });
+            return Some(self.pairs.len() - 1);
+        }
         if !self.locals.contains(&local) {
             return None;
         }
@@ -205,6 +377,15 @@ impl Agent {
     /// port: `from` is learnt as peer reflexive and that pair is the valid one. Returns false
     /// for an unknown check id.
     pub fn on_probe_result(&mut self, check_id: u64, local: SocketAddr, from: SocketAddr, now: Instant) -> bool {
+        if let Some(sent) = self.punch_checks.remove(&check_id) {
+            self.last_heard = Some(now);
+            if self.selected.is_none() {
+                if let Some(v) = self.pair_for(local, from) {
+                    self.succeed(v, now.saturating_duration_since(sent), now);
+                }
+            }
+            return true;
+        }
         let Some((id, sent)) = self.pairs.iter().enumerate().find_map(|(i, p)| {
             p.checks.iter().find(|(c, _)| *c == check_id).map(|&(_, sent)| (i, sent))
         }) else {
@@ -221,15 +402,18 @@ impl Agent {
             self.pair_for(local, from)
         };
         if let Some(v) = valid {
-            let rtt = now.saturating_duration_since(sent);
-            let p = &mut self.pairs[v];
-            p.state = match p.state {
-                State::Succeeded { rtt: old } => State::Succeeded { rtt: old.min(rtt) },
-                _ => State::Succeeded { rtt },
-            };
-            self.first_valid.get_or_insert(now);
+            self.succeed(v, now.saturating_duration_since(sent), now);
         }
         true
+    }
+
+    fn succeed(&mut self, id: PairId, rtt: Duration, now: Instant) {
+        let p = &mut self.pairs[id];
+        p.state = match p.state {
+            State::Succeeded { rtt: old } => State::Succeeded { rtt: old.min(rtt) },
+            _ => State::Succeeded { rtt },
+        };
+        self.first_valid.get_or_insert(now);
     }
 
     /// The guest named the pair its message came over: the socket at `local`, from `from`.
@@ -273,7 +457,69 @@ impl Agent {
         self.last_keepalive = Some(now);
         self.last_heard = Some(now);
         let p = &self.pairs[id];
-        self.out.push(Action::Selected { pair: id, local: p.local, remote: p.remote.addr });
+        let local = p.local;
+        self.out.push(Action::Selected { pair: id, local, remote: p.remote.addr });
+        self.punch_checks.clear();
+        if self.extras_asked {
+            let keep = self.extras.contains(&local).then_some(local);
+            self.out.push(Action::CloseSockets { keep });
+            self.extras.retain(|&e| Some(e) == keep);
+        }
+    }
+
+    fn fail(&mut self) {
+        self.failed = true;
+        self.out.push(Action::Failed);
+        self.punch_checks.clear();
+        if self.extras_asked {
+            self.out.push(Action::CloseSockets { keep: None });
+            self.extras.clear();
+        }
+    }
+
+    /// A probe of the birthday punch's, from `from` to `to`.
+    fn punch_probe(&mut self, from: SocketAddr, to: SocketAddr, now: Instant) {
+        let check_id = self.next_check;
+        self.next_check += 1;
+        self.punch_checks.insert(check_id, now);
+        self.out.push(Action::SendProbe { pair: NO_PAIR, from, to, check_id });
+    }
+
+    /// The birthday punch's step this poll (module notes).
+    fn birthday(&mut self, started: Instant, now: Instant) {
+        let since = now.saturating_duration_since(started);
+        if since < self.cfg.birthday_after || self.best_valid().is_some_and(|(_, class)| class < RELAYED_CLASS) {
+            return;
+        }
+        match self.punch() {
+            Some(Punch::Spread(to)) => {
+                if !self.extras_asked {
+                    self.extras_asked = true;
+                    self.out.push(Action::OpenSockets { count: self.cfg.birthday_sockets });
+                }
+                while self.extras_probed < self.extras.len() {
+                    let from = self.extras[self.extras_probed];
+                    self.extras_probed += 1;
+                    self.punch_probe(from, to, now);
+                }
+            }
+            Some(Punch::Spray(ip)) => {
+                let Some(since) = since.checked_sub(self.cfg.birthday_after + SPRAY_DELAY) else { return };
+                let due = (since.as_micros() / self.cfg.spray_pace.as_micros().max(1)) as u32 + 1;
+                let Some(&from) = self.locals.iter().find(|l| l.is_ipv4()) else { return };
+                // Where the sweep starts: from the address, so two hosts do not walk in step.
+                let start = match ip {
+                    IpAddr::V4(v4) => u32::from(v4) % SWEEP_LEN,
+                    IpAddr::V6(_) => 0,
+                };
+                for _ in 0..due.saturating_sub(self.sprayed).min(SPRAY_BURST) {
+                    let port = SWEEP_FIRST + (start + (self.sprayed % SWEEP_LEN) * SWEEP_STEP % SWEEP_LEN) % SWEEP_LEN;
+                    self.sprayed += 1;
+                    self.punch_probe(from, SocketAddr::new(ip, port as u16), now);
+                }
+            }
+            None => {}
+        }
     }
 
     fn best_valid(&self) -> Option<(PairId, u8)> {
@@ -314,7 +560,8 @@ impl Agent {
             if let Some((id, class)) = best {
                 let better_left =
                     self.pairs.iter().any(|p| p.class < class && !matches!(p.state, State::Succeeded { .. }));
-                let settled = self.first_valid.is_some_and(|t| now.saturating_duration_since(t) >= self.cfg.settle);
+                let wait = if class >= RELAYED_CLASS { self.cfg.relay_settle } else { self.cfg.settle };
+                let settled = self.first_valid.is_some_and(|t| now.saturating_duration_since(t) >= wait);
                 if !better_left || settled || timed_out {
                     self.select(id, now);
                     return std::mem::take(&mut self.out);
@@ -322,10 +569,10 @@ impl Agent {
             }
         }
         if timed_out && best.is_none() {
-            self.failed = true;
-            self.out.push(Action::Failed);
+            self.fail();
             return std::mem::take(&mut self.out);
         }
+        self.birthday(started, now);
 
         if self.last_probe.is_none_or(|t| now.saturating_duration_since(t) >= self.cfg.pace) {
             if let Some(id) = self.next_pair() {
@@ -502,6 +749,112 @@ mod tests {
         let acts = a.poll(t0 + Duration::from_millis(4100));
         assert!(acts.contains(&Action::PathLost));
         assert!(!a.poll(t0 + Duration::from_millis(4200)).contains(&Action::PathLost), "reported once");
+    }
+
+    /// Easy here, hard there: after 1.3 s, one sprayed probe per 4 ms to the other side's IP,
+    /// every port once, none from a pair.
+    #[test]
+    fn easy_side_sprays_the_hard_sides_ip() {
+        let t0 = Instant::now();
+        let mut a = Agent::new(Role::Host, &[sa("192.168.1.2:47960")], Config::default());
+        a.set_local_nat(Nat::Easy);
+        a.add_remote(Candidate::new(Kind::ServerReflexive, sa("198.51.100.7:63744")));
+        a.add_remote(Candidate::new(Kind::ServerReflexive, sa("198.51.100.7:41216")));
+        a.start(t0);
+        let mut sprayed = Vec::new();
+        let mut first = None;
+        for ms in (0..3300).step_by(10) {
+            for act in a.poll(t0 + Duration::from_millis(ms)) {
+                assert!(!matches!(act, Action::OpenSockets { .. }), "the easy side opens no sockets");
+                if let Action::SendProbe { pair: NO_PAIR, to, .. } = act {
+                    first.get_or_insert(ms);
+                    assert_eq!(to.ip(), sa("198.51.100.7:1").ip());
+                    sprayed.push(to.port());
+                }
+            }
+        }
+        assert_eq!(first, Some(1300), "1 s, then the 300 ms for the other side's sockets");
+        assert!((495..=505).contains(&sprayed.len()), "2 s at 250 a second: {}", sprayed.len());
+        assert_eq!(a.punch_summary(), Some(format!("birthday punch: sprayed {} ports of 198.51.100.7", sprayed.len())));
+        let distinct: std::collections::HashSet<_> = sprayed.iter().collect();
+        assert_eq!(distinct.len(), sprayed.len(), "no port twice");
+        assert!(sprayed.iter().all(|&p| p >= 1024));
+    }
+
+    /// Hard here, easy there: ask for the sockets once, probe once from each, and on the
+    /// choice close all but the chosen one.
+    #[test]
+    fn hard_side_spreads_and_keeps_the_chosen_socket() {
+        let t0 = Instant::now();
+        let main = sa("192.168.1.2:47960");
+        let easy = sa("203.0.113.3:47960");
+        let mut a = Agent::new(Role::Guest, &[main], Config::default());
+        a.set_local_nat(Nat::Hard);
+        a.add_remote(Candidate::new(Kind::Host, sa("192.168.7.3:47960")));
+        a.add_remote(Candidate::new(Kind::ServerReflexive, easy));
+        a.start(t0);
+        assert!(!a.poll(t0 + Duration::from_millis(990)).iter().any(|x| matches!(x, Action::OpenSockets { .. })));
+        let acts = a.poll(t0 + Duration::from_secs(1));
+        assert!(acts.contains(&Action::OpenSockets { count: 256 }), "{acts:?}");
+        assert!(!a.poll(t0 + Duration::from_millis(1010)).iter().any(|x| matches!(x, Action::OpenSockets { .. })), "asked once");
+        let extras: Vec<SocketAddr> = (0..256u16).map(|i| SocketAddr::new(main.ip(), 50000 + i)).collect();
+        a.add_extra_sockets(&extras);
+        let punch: Vec<(SocketAddr, SocketAddr)> = a
+            .poll(t0 + Duration::from_millis(1020))
+            .into_iter()
+            .filter_map(|x| match x {
+                Action::SendProbe { pair: NO_PAIR, from, to, .. } => Some((from, to)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(punch.len(), 256);
+        assert!(punch.iter().all(|&(_, to)| to == easy));
+        assert!(a.poll(t0 + Duration::from_millis(1030)).iter().all(|x| !matches!(x, Action::SendProbe { pair: NO_PAIR, .. })), "once each");
+        // A sprayed probe lands on extra socket 77 from the easy side's address; its triggered
+        // check goes out from that socket and is answered.
+        let hit = extras[77];
+        a.on_probe_received(hit, easy, t0 + Duration::from_millis(1500));
+        let check = a
+            .poll(t0 + Duration::from_millis(1500))
+            .into_iter()
+            .find_map(|x| match x {
+                Action::SendProbe { from, to, check_id, .. } if from == hit && to == easy => Some(check_id),
+                _ => None,
+            })
+            .expect("a triggered check from the socket that was hit");
+        assert!(a.on_probe_result(check, hit, easy, t0 + Duration::from_millis(1540)));
+        // The LAN candidate has not answered, so the guest waits `settle` for it first.
+        let acts = a.poll(t0 + Duration::from_millis(1750));
+        assert!(acts.contains(&Action::CloseSockets { keep: Some(hit) }), "{acts:?}");
+        assert_eq!(a.selected(), Some((hit, easy)));
+        assert_eq!(a.extra_sockets(), &[hit]);
+        assert_eq!(a.punch_summary().as_deref(), Some("birthday punch: 256 extra sockets probed 203.0.113.3:47960"));
+    }
+
+    /// No NAT kind given, both sides easy, or the punch turned off: nothing new happens.
+    #[test]
+    fn no_punch_without_the_pairing() {
+        let t0 = Instant::now();
+        for (nat, srflx, sockets) in [
+            (Nat::Unknown, vec!["198.51.100.7:1000", "198.51.100.7:2000"], 256),
+            (Nat::Easy, vec!["198.51.100.7:1000"], 256),
+            (Nat::Hard, vec!["198.51.100.7:1000", "198.51.100.7:2000"], 256),
+            (Nat::Easy, vec!["198.51.100.7:1000", "198.51.100.7:2000"], 0),
+        ] {
+            let mut a = Agent::new(Role::Guest, &[sa("192.168.1.2:47960")], Config { birthday_sockets: sockets, ..Config::default() });
+            a.set_local_nat(nat);
+            for s in &srflx {
+                a.add_remote(Candidate::new(Kind::ServerReflexive, sa(s)));
+            }
+            a.start(t0);
+            for ms in (0..12000).step_by(10) {
+                for act in a.poll(t0 + Duration::from_millis(ms)) {
+                    let new = matches!(act, Action::OpenSockets { .. } | Action::CloseSockets { .. } | Action::SendProbe { pair: NO_PAIR, .. });
+                    assert!(!new, "{nat:?} {srflx:?} {sockets}: {act:?}");
+                }
+            }
+            assert_eq!(a.punch_summary(), None, "{nat:?} {srflx:?} {sockets}");
+        }
     }
 
     #[test]

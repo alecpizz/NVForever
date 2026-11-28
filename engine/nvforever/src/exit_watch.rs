@@ -44,6 +44,9 @@ pub fn words(code: u32) -> &'static str {
         1 => "an error exit, or the process was ended from outside (Task Manager ends with 1)",
         // [documented: Rust's std, a panic that unwinds out of `main` exits with 101]
         101 => "a Rust panic in the main thread",
+        // [observed, 2026-11-27: Ctrl+Break in the game's console] Bevy's Ctrl+C handler
+        // closes the game normally and it exits with 130.
+        130 => "Ctrl+C or Ctrl+Break, and the game closed normally",
         0xC000_0005 => "access violation",
         0xC000_0017 => "no memory",
         0xC000_001D => "illegal instruction",

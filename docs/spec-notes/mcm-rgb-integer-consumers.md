@@ -92,8 +92,8 @@ changed to obtain a green flag. Engine callback/draw-piece, original-mod/rendere
 acceptance and native numeric parity remain unqualified. Independent raw/source review
 confirmed the bounded case results while retaining the false overall flag.
 
-[documented: source integration] The accepted-main 060d69dd union retains the
-exact tested fnv-ui Rust/fixture blobs alongside unrelated compiler, launcher,
-settings and dependency changes. Validation of an integrated graph is bound to
+[documented: source integration] Accepted Main `f5cb523f` contains the
+fnv-ui RGB consumers and fixtures alongside the named-source lookup index.
+The earlier `060d69dd` and `a0ebe1c5` checkpoints do not contain this RGB work. Validation of an integrated graph is bound to
 its exact executed source; matching Rust/fixture blobs alone does not transfer
 whole-graph qualification from the c264d430 comparison.

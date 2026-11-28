@@ -230,9 +230,181 @@ impl Game<'_> {
         match self.run_function(func, on.map(|f| Value::Ref(f.0)), args, None, ctx) {
             Ok(v) => Some(v),
             Err(error) => {
-                self.handler_failed(what.into(), error);
+                let unit = match self.callable_label(func) {
+                    Some(label) => format!("{what} ({label})"),
+                    None => what.into(),
+                };
+                self.handler_failed(unit, error);
                 None
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::common::{record, sub, tes4, top, unit, z};
+    use crate::game::{Game, GameConfig, RunCtx};
+    use crate::mod_files::{set_roots, update_roots, Roots};
+    use crate::trace::EventKind;
+    use crate::GameData;
+    use fnv_esm::{LoadOrder, Plugin, Schema};
+    use fnv_script::compile::{Env, FormInfo};
+    use fnv_script::unit::RefSlot;
+    use fnv_script::vm::XVal;
+    use fnv_script::{FunctionTable, VarDecl};
+    use fnv_sim::{FormStore, RefTable, SimConfig, World};
+    use std::sync::Arc;
+
+    const LOOP_UDF: u32 = 0x0000_0910;
+    const COND_UDF: u32 = 0x0000_0911;
+
+    struct TestEnv;
+    impl Env for TestEnv {
+        fn form(&self, name: &str) -> Option<FormInfo> {
+            let form = match name {
+                "DelayedLoopUDF" => LOOP_UDF,
+                "DelayedCondUDF" => COND_UDF,
+                _ => return None,
+            };
+            Some(FormInfo { form, sig: *b"SCPT" })
+        }
+        fn info(&self, form: u32) -> Option<FormInfo> {
+            Some(FormInfo { form, sig: *b"SCPT" })
+        }
+        fn editor_id(&self, _: u32) -> Option<String> {
+            None
+        }
+        fn local_form(&self, form: u32) -> Option<u32> {
+            Some(form)
+        }
+        fn script_vars(&self, _: u32) -> Option<Vec<VarDecl>> {
+            None
+        }
+    }
+
+    struct RootsGuard(Roots);
+    impl RootsGuard {
+        fn swap(next: Roots) -> Self {
+            let mut prev = Roots::default();
+            update_roots(|r| prev = std::mem::replace(r, next));
+            Self(prev)
+        }
+    }
+    impl Drop for RootsGuard {
+        fn drop(&mut self) {
+            set_roots(self.0.clone());
+        }
+    }
+
+    fn scpt_record(table: &FunctionTable, id: u32, name: &str, body: &str) -> Vec<u8> {
+        let text = format!("scn {name}\nBegin Function {{ }}\n{body}\nEnd\n");
+        let compiled = fnv_script::compile::compile(&text, table, &TestEnv, None);
+        assert!(compiled.errors().next().is_none(), "{name}: {:?}", compiled.diags);
+        let refs: Vec<_> = compiled
+            .refs
+            .iter()
+            .map(|r| match r {
+                RefSlot::Form(f) => *f,
+                _ => panic!("unexpected ref slot"),
+            })
+            .collect();
+        let mut fields = vec![sub(b"EDID", z(name))];
+        fields.extend(unit(0, &compiled.bytes, &[], &refs));
+        fields.push(sub(b"SCTX", text.into_bytes()));
+        record(b"SCPT", 0, id, &fields)
+    }
+
+    struct Fixture {
+        data: GameData,
+        forms: FormStore,
+        refs: RefTable,
+    }
+
+    fn build_fixture() -> Fixture {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schemas");
+        let table = FunctionTable::load(&root.join("script/functions.json")).unwrap();
+        let loop_body = "while 1\nloop";
+        let scripts = [
+            scpt_record(&table, LOOP_UDF, "DelayedLoopUDF", loop_body),
+            scpt_record(&table, COND_UDF, "DelayedCondUDF", loop_body),
+        ]
+        .concat();
+        let bytes = [tes4(), top(b"SCPT", &scripts)].concat();
+        let plugins = [Plugin::parse(&bytes, "DelayedDiag.esm".into()).unwrap()];
+        let lo = LoadOrder::new(&plugins).unwrap();
+        let schema = Schema::load_dir(root.join("fnv")).unwrap();
+        let forms = FormStore::build(&lo, &schema);
+        let refs = RefTable::build(&lo, &schema);
+        let catalog = serde_json::from_str(&std::fs::read_to_string(root.join("script/functions.json")).unwrap()).unwrap();
+        let data = GameData::build(&lo, &schema, table, &catalog, &refs);
+        Fixture { data, forms, refs }
+    }
+
+    fn script_errors(g: &Game) -> Vec<(String, String)> {
+        g.events
+            .iter()
+            .filter_map(|e| match &e.kind {
+                EventKind::ScriptError { unit, error } => Some((unit.clone(), error.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn form_id_delayed_call_and_condition_errors_name_target_udf() {
+        assert_eq!(GameConfig::default().max_steps, 100_000, "default step budget stays 100_000");
+        let f = build_fixture();
+        let mut g = Game::new(&f.data, World::new(&f.forms, &f.refs, SimConfig::default()), GameConfig { max_steps: 25, ..Default::default() });
+        g.run_query("Begin Function { }\nCallAfterFrames 1 DelayedLoopUDF\nCallWhen DelayedLoopUDF DelayedCondUDF\nEnd\n", RunCtx::default()).unwrap();
+        g.tick();
+        let errors = script_errors(&g);
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert_eq!(errors[0].0, "delayed call (DelayedDiag.esm|SCPT 0x00000910 DelayedLoopUDF)");
+        assert!(errors[0].1.contains("step budget of 25 statements exceeded"), "{errors:?}");
+        assert_eq!(errors[1].0, "delayed call's condition (DelayedDiag.esm|SCPT 0x00000911 DelayedCondUDF)");
+        assert!(errors[1].1.contains("step budget of 25 statements exceeded"), "{errors:?}");
+    }
+
+    #[test]
+    fn compiled_file_delayed_call_error_names_file_path_and_handle() {
+        let _guard = RootsGuard::swap(Roots {
+            reader: Some(Arc::new(|path: &str| {
+                path.eq_ignore_ascii_case(r"nvse\user_defined_functions\diag\delayed_loop.txt")
+                    .then(|| b"Begin Function { }\nwhile 1\nloop\nEnd\n".to_vec())
+            })),
+            ..Default::default()
+        });
+
+        let f = build_fixture();
+        let mut g = Game::new(&f.data, World::new(&f.forms, &f.refs, SimConfig::default()), GameConfig { max_steps: 25, ..Default::default() });
+        let handle = g.compile_file("diag/delayed_loop.txt", true).expect("compiled-file UDF should compile");
+        super::call(&mut g, &RunCtx::default(), "callafterframes", None, &[XVal::Num(1.0), XVal::Ref(handle)]).unwrap().unwrap();
+        g.tick();
+        let errors = script_errors(&g);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert_eq!(
+            errors[0].0,
+            format!("delayed call (CompileScript nvse\\user_defined_functions\\diag\\delayed_loop.txt 0x{handle:08X})")
+        );
+        assert!(errors[0].1.contains("step budget of 25 statements exceeded"), "{errors:?}");
+    }
+
+    #[test]
+    fn lambda_delayed_call_error_names_defining_unit_and_zero_ref_keeps_generic_unit() {
+        let f = build_fixture();
+        let mut g = Game::new(&f.data, World::new(&f.forms, &f.refs, SimConfig::default()), GameConfig { max_steps: 25, ..Default::default() });
+        g.run_query(
+            "ref missing\nBegin Function { }\nCallAfterFrames 1 (Begin Function { }\nwhile 1\nloop\nEnd)\nCallAfterFrames 1 missing\nEnd\n",
+            RunCtx::default(),
+        )
+        .unwrap();
+        g.tick();
+        let errors = script_errors(&g);
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(errors[0].0.starts_with("delayed call (") && errors[0].0.ends_with(" lambda)"), "{errors:?}");
+        assert!(errors[0].1.contains("step budget of 25 statements exceeded"), "{errors:?}");
+        assert_eq!(errors[1].0, "delayed call");
+        assert!(errors[1].1.ends_with("is not a function script"), "{errors:?}");
     }
 }

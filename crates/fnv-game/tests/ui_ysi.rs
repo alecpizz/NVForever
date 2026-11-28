@@ -186,7 +186,7 @@ fn yui_ini_gates_xml_injection_sorting_icons_and_hotkey_icons() {
     let item = fnv_sim::FormId(0x0000_0820);
 
     // 1. Shipped yUI.ini with bSortingIcons = 0 skips ySI.xml injection and disables UI gates,
-    //    yet script ySIGetTrait queries remain active [hypothesis].
+    //    yet script ySIGetTrait queries remain active (see crates/fnv-game/src/yui_ini.rs).
     let mut g_off = Game::new(&f.data, World::new(&f.forms, &f.refs, SimConfig::default()), GameConfig::default());
     g_off.small.ysi_tag.insert(item, "(fba1)".into());
     g_off.small.ysi_icon_by_tag.insert("(fba1)".into(), "Owned/item_icon.dds".into());
@@ -243,7 +243,7 @@ fn yui_ini_gates_xml_injection_sorting_icons_and_hotkey_icons() {
     ui_loading::load(&mut g_on, Box::new(src_on), paths_on);
     assert!(g_on.ui_tree.find_tile("HUDMainMenu/ySI").is_some(), "ySI.ini overlay must enable ySI.xml injection");
 
-    // 2b. yUI.ini bSortingIcons=1 + ySI.ini bSortingIcons=0 keeps XML injection & gates active [hypothesis].
+    // 2b. yUI.ini bSortingIcons=1 + ySI.ini bSortingIcons=0 keeps XML injection & gates active (see crates/fnv-game/src/yui_ini.rs).
     let yui1_ysi0 = fnv_game::yui_ini::YuiConfig::load_with(|p| {
         if p.eq_ignore_ascii_case(fnv_game::yui_ini::YUI_INI_PATH) {
             Some(b"[General]\nbSortingIcons = 1\n".to_vec())

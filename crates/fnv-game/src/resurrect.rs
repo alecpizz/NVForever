@@ -137,6 +137,9 @@ impl Game<'_> {
         // live unit, `Extra::live`, #1640).
         if !self.world.reset_inventory(r).unwrap_or(true) {
             let _ = self.world.clear_inventory_but_live(r);
+        } else {
+            self.clear_npc_weapon_mods_roll(r);
+            self.maybe_apply_npc_weapon_mods(r);
         }
         0
     }

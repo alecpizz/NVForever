@@ -1,5 +1,10 @@
 # Spec note: the quest lines at the left (quest added, completed, objectives)
 
+**NVForever's words** [design, #2984]: the original's labels are its program's own text,
+not in the data files, so NVForever shows its own: "New quest", "Quest done", "Quest
+failed" and, for a map marker found, "Place found" (`quest_messages::label`). The
+original's words below are kept only to say where its lines stand.
+
 Tags as in `nif.md`: `[documented]` cites a page or file, `[observed]` says what was
 looked at, `[hypothesis]` is a reading that nothing has confirmed yet. `[design]` marks
 what is NVForever's own. Implementation: `engine/nvf-play/src/quest_messages.rs` (the

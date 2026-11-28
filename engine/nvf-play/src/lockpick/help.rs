@@ -28,6 +28,7 @@
 //! The message's own text names keys by the executable's strings (`&-sUActnForward;`,
 //! `&sKBF;`); [`expand_keys`] writes the key bound to each [design].
 
+use fnv_util::words::{tr, trf};
 use super::screen::{Ctx, FontKind, LockButton, ParagraphLine, BUTTON_DIM};
 use super::{Help, LockpickInput};
 use crate::bindings::{Bindings, Control, GAME_CONTROLS};
@@ -158,10 +159,15 @@ pub fn scroll(
 }
 
 /// The label of a key as the help text shows it: a letter or digit as itself, the
-/// modifiers and arrows in words, else the key's name [design: the words the Controls
-/// page's INI values use].
+/// modifiers, arrows and the common named keys in words, translated (#3146), else the
+/// key's name [design: the words the Controls page's INI values use].
 pub fn key_label(k: KeyCode) -> String {
     let words = match k {
+        KeyCode::Space => "Space",
+        KeyCode::Enter => "Enter",
+        KeyCode::Tab => "Tab",
+        KeyCode::Escape => "Escape",
+        KeyCode::Backspace => "Backspace",
         KeyCode::ShiftLeft => "Left Shift",
         KeyCode::ShiftRight => "Right Shift",
         KeyCode::ControlLeft => "Left Ctrl",
@@ -178,7 +184,7 @@ pub fn key_label(k: KeyCode) -> String {
         _ => "",
     };
     if !words.is_empty() {
-        return words.into();
+        return tr(words).into();
     }
     let name = format!("{k:?}");
     name.strip_prefix("Key").or_else(|| name.strip_prefix("Digit")).map_or(name.clone(), str::to_string)
@@ -187,12 +193,12 @@ pub fn key_label(k: KeyCode) -> String {
 /// The label of a mouse button [design: the words the Controls page's INI values use].
 fn mouse_label(m: MouseButton) -> String {
     match m {
-        MouseButton::Left => "Left Mouse".into(),
-        MouseButton::Right => "Right Mouse".into(),
-        MouseButton::Middle => "Middle Mouse".into(),
-        MouseButton::Back => "Mouse 4".into(),
-        MouseButton::Forward => "Mouse 5".into(),
-        MouseButton::Other(n) => format!("Mouse {}", n + 1),
+        MouseButton::Left => tr("Left Mouse").into(),
+        MouseButton::Right => tr("Right Mouse").into(),
+        MouseButton::Middle => tr("Middle Mouse").into(),
+        MouseButton::Back => trf("Mouse {n}", &[("n", &4)]),
+        MouseButton::Forward => trf("Mouse {n}", &[("n", &5)]),
+        MouseButton::Other(n) => trf("Mouse {n}", &[("n", &(u32::from(n) + 1))]),
     }
 }
 
@@ -238,9 +244,9 @@ pub fn expand_keys(text: &str, bindings: &Bindings) -> String {
             None => None,
         };
         let mouse = match name {
-            "sMouseLeftButton" => Some("Left Mouse"),
-            "sMouseRightButton" => Some("Right Mouse"),
-            "sDeviceMouse" => Some("Mouse"),
+            "sMouseLeftButton" => Some(tr("Left Mouse")),
+            "sMouseRightButton" => Some(tr("Right Mouse")),
+            "sDeviceMouse" => Some(tr("Mouse")),
             _ => None,
         };
         match (control, name.strip_prefix("sKB"), mouse) {

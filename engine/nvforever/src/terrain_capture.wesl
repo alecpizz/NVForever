@@ -4,8 +4,9 @@
 // diffuse texture, one sampler and one small uniform, so its material group stays small
 // on a GPU without bindless textures. Colour: material x vertex x diffuse (a missing
 // texture counts as white). A base copy writes alpha 1; a layer copy writes material x
-// vertex x diffuse alpha, which its pipeline's alpha blend composites over the copies
-// before it, in the near layers' order. No lighting, scorch, fog or exposure.
+// vertex alpha (the diffuse's has no part, as in the near layers' draws, #3789), which its
+// pipeline's alpha blend composites over the copies before it, in the near layers' order.
+// No lighting, scorch, fog or exposure.
 //
 // TERRAIN_ANTI_TILING (#2551; terrain_surface.rs `SurfaceCaptureMaterial::from_source`):
 // the source draws its texture anti-tiled (nvf_assets terrain_pbr.wesl
@@ -39,14 +40,14 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
         let uv = mat2x2<f32>(surface_capture.uv_axes.xy, surface_capture.uv_axes.zw) * in.uv + surface_capture.uv_offset_flags.xy;
         // Sampled unconditionally (uniform control flow), then ignored without a texture.
         let texel = textureSample(diffuse_texture, diffuse_sampler, uv);
-        colour *= select(vec4(1.0), texel, surface_capture.uv_offset_flags.z > 0.5);
+        colour *= vec4(select(vec3(1.0), texel.rgb, surface_capture.uv_offset_flags.z > 0.5), 1.0);
     }
     // The anti-tiled read: the place in the world over the repeat, then the transform
     // (terrain_pbr.wesl `terrain_footprint`); derivatives here, in uniform control flow.
     @if(TERRAIN_ANTI_TILING) {
         let at_uv = mat2x2<f32>(surface_capture.uv_axes.xy, surface_capture.uv_axes.zw) * terrain_world_uv(in.world_position.xyz, surface_capture.anti_tiling.x) + surface_capture.uv_offset_flags.xy;
         let at_texel = terrain_sample_diffuse(diffuse_texture, diffuse_sampler, terrain_hex3(at_uv), TerrainFootprint(at_uv, dpdx(at_uv), dpdy(at_uv)));
-        colour *= select(vec4(1.0), at_texel, surface_capture.uv_offset_flags.z > 0.5);
+        colour *= vec4(select(vec3(1.0), at_texel.rgb, surface_capture.uv_offset_flags.z > 0.5), 1.0);
     }
     var out: FragmentOutput;
     out.color = vec4(colour.rgb, select(1.0, colour.a, surface_capture.uv_offset_flags.w > 0.5));

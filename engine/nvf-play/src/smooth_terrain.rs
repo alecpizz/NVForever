@@ -127,7 +127,7 @@ pub const DETAIL_AID: &str = "NVF_PLAY_TEST_SMOOTH_DETAIL";
 pub const NEAR_AID: &str = "NVF_PLAY_TEST_SMOOTH_NEAR";
 
 /// The settings row's note, NVForever's own words [design].
-pub const NOTE: &str = "Smooths height steps while keeping bumps and ridges: 2 x 2 or 4 x 4 squares per landscape square, or 4 x 4 near you and 2 x 2 further. Drawing and collision share it. Applies at the next start.";
+pub const NOTE: &str = "Smooths height steps while keeping bumps and ridges: 2 x 2 or 4 x 4 per landscape square, or 4 x 4 near and 2 x 2 further. Applies at the next start.";
 
 /// 4 × 4 near: a quadrant is drawn 4 × 4 once the camera comes within this many units of it
 /// (its square, seen from above) [design, #2676: one quadrant's side, so the quadrant the

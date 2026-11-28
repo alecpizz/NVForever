@@ -99,6 +99,28 @@ class StreamlineNotice(unittest.TestCase):
                 self.assertIn("NVIDIA Streamline 2.14.16", text)
                 self.assertIn("Permission is hereby granted", text)
 
+    def test_shared_root_vendor_runtime_is_listed_with_its_licence(self):
+        repo = Path(self.tmp.name) / "checkout"
+        app = package(repo / "engine" / "nvforever", "nvforever", "GPL-3.0-or-later", None)
+        own = package(repo / "crates" / "fnv-phys", "fnv-phys", "GPL-3.0-or-later", None)
+        shared = package(repo / "vendor" / "rapier3d", "rapier3d", "Apache-2.0", "original shared runtime licence")
+        engine = package(repo / "engine" / "vendor" / "gpu-allocator", "gpu-allocator", "MIT", "original engine runtime licence")
+        for pkg in [app, own, shared, engine]:
+            pkg["source"] = None
+        meta = {"packages": [app, own, shared, engine], "workspace_members": [app["id"]],
+                "resolve": {"nodes": [
+                    {"id": app["id"], "deps": [{"pkg": p["id"], "dep_kinds": [{"kind": None}]} for p in [own, shared, engine]]},
+                    *({"id": p["id"], "deps": []} for p in [own, shared, engine])
+                ]}}
+        with mock.patch.object(tpl, "REPO", repo):
+            selected = tpl.third_party(meta, ("nvforever",))
+            self.assertEqual({p["name"] for p in selected}, {"rapier3d", "gpu-allocator"})
+            out, missing = tpl.render(sorted(selected, key=lambda p: p["name"]), "rustc test", notices=())
+        self.assertEqual(missing, [])
+        self.assertIn("- rapier3d 1.0.0: Apache-2.0", out)
+        self.assertIn("original shared runtime licence", out)
+        self.assertIn("original engine runtime licence", out)
+
 
 
 class BundledFontLicences(unittest.TestCase):

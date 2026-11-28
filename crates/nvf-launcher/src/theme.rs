@@ -1,43 +1,63 @@
 //! The launcher's look: dark panels and the logo's gold.
 
+#[cfg(feature = "desktop")]
 use eframe::egui::{self, Color32, CornerRadius, FontId, Stroke, TextStyle};
 
-/// The site's brand colour (nv-forever.com `--accent`, its Download button).
-pub const GOLD: Color32 = Color32::from_rgb(0xF0, 0xA3, 0x2A);
+// (Desktop colour, Android field, RGB) from the site's brand and dark-blue palette.
+macro_rules! palette {
+    ($(($name:ident, $field:literal, $r:literal, $g:literal, $b:literal)),+ $(,)?) => {
+        $(
+            #[cfg(feature = "desktop")]
+            pub const $name: Color32 = Color32::from_rgb($r, $g, $b);
+        )+
+        #[cfg(any(feature = "mobile", test))]
+        pub fn android() -> serde_json::Value {
+            serde_json::json!({ $($field: 0xff00_0000u32 | ($r << 16) | ($g << 8) | $b),+ })
+        }
+    };
+}
+
+palette! {
+    (GOLD, "gold", 0xF0, 0xA3, 0x2A),
+    (ON_GOLD, "onGold", 0x15, 0x12, 0x0C),
+    (BG, "bg", 0x0F, 0x11, 0x15),
+    (PANEL, "panel", 0x15, 0x19, 0x22),
+    (CARD, "card", 0x1B, 0x20, 0x2B),
+    (BUTTON, "button", 0x21, 0x27, 0x34),
+    (TEXT, "text", 0xE7, 0xE9, 0xEE),
+    (WEAK, "weak", 0x9A, 0xA3, 0xB2),
+}
 /// The site's `--accent-hover`.
+#[cfg(feature = "desktop")]
 pub const GOLD_HOVER: Color32 = Color32::from_rgb(0xFF, 0xB8, 0x4D);
-/// The site's `--accent-text`: words on a gold button.
-pub const ON_GOLD: Color32 = Color32::from_rgb(0x15, 0x12, 0x0C);
 /// `GOLD` dimmed, for edges and borders only (3:1 or more on every background; too dark for
 /// text, and white text on it is 3.4:1).
+#[cfg(feature = "desktop")]
 pub const GOLD_DIM: Color32 = Color32::from_rgb(0xA8, 0x72, 0x1D);
 /// Small gold text (the dim headings): 5.1:1 on a card, 5.9:1 on the page (4.5:1 wanted).
+#[cfg(feature = "desktop")]
 pub const GOLD_TEXT: Color32 = Color32::from_rgb(0xC0, 0x84, 0x24);
-// The site's dark blue scheme (nv-forever.com assets/css/style.css, :root).
-/// `--bg`: the page behind everything.
-pub const BG: Color32 = Color32::from_rgb(0x0F, 0x11, 0x15);
-/// `--bg-alt`: the top, side and bottom bars.
-pub const PANEL: Color32 = Color32::from_rgb(0x15, 0x19, 0x22);
-/// `--surface`: cards and rows.
-pub const CARD: Color32 = Color32::from_rgb(0x1B, 0x20, 0x2B);
-/// A step above `--surface`, for buttons.
-pub const BUTTON: Color32 = Color32::from_rgb(0x21, 0x27, 0x34);
 /// Buttons under the pointer and pressed.
+#[cfg(feature = "desktop")]
 pub const BUTTON_HOVER: Color32 = Color32::from_rgb(0x2A, 0x31, 0x40);
+#[cfg(feature = "desktop")]
 pub const BUTTON_ACTIVE: Color32 = Color32::from_rgb(0x33, 0x3B, 0x4D);
 /// The open page's button and the countdown: `--surface` with a touch of the accent.
+#[cfg(feature = "desktop")]
 pub const SELECTED: Color32 = Color32::from_rgb(0x26, 0x25, 0x24);
 /// Selected text in a text box and a list's chosen item: the gold darkened until light text
 /// reads on it (`TEXT` 7.7:1; on `GOLD_DIM` it was 3.4:1).
+#[cfg(feature = "desktop")]
 pub const SELECTION: Color32 = Color32::from_rgb(0x5A, 0x43, 0x18);
-/// `--text` and `--muted`.
-pub const TEXT: Color32 = Color32::from_rgb(0xE7, 0xE9, 0xEE);
-pub const WEAK: Color32 = Color32::from_rgb(0x9A, 0xA3, 0xB2);
 /// `--border`.
+#[cfg(feature = "desktop")]
 pub const LINE: Color32 = Color32::from_rgb(0x2A, 0x31, 0x40);
+#[cfg(feature = "desktop")]
 pub const BAD: Color32 = Color32::from_rgb(0xE0, 0x6A, 0x50);
+#[cfg(feature = "desktop")]
 pub const GOOD: Color32 = Color32::from_rgb(0x8C, 0xC0, 0x6A);
 
+#[cfg(feature = "desktop")]
 pub fn apply(ctx: &egui::Context) {
     ctx.set_theme(egui::Theme::Dark);
     let mut style = (*ctx.global_style()).clone();

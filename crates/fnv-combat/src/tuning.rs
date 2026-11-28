@@ -371,12 +371,15 @@ pub struct CombatTuning {
     /// A thrown grenade's contacts (combat-rules.md §5): the share of the speed into a
     /// surface it keeps, out of it (the game setting `fGrenadeRestitution`, 0.01 in
     /// FalloutNV.esm [observed]; its meaning [hypothesis: from its name]); the share of the
-    /// speed along the surface it keeps when it first lands; and how fast its roll slows,
-    /// per second (the speed falls by e^(-rate × time)) [observed: both fitted to the
-    /// original's frag grenade, o26_gl frag0].
+    /// speed along the surface it keeps when it first lands (0.6); and the speed its roll
+    /// loses every second, game units a second squared, until it rests (140) [observed:
+    /// fitted to the original's frag grenade, nine throws of o32_throw 2026-11-25/26, the
+    /// share kept 0.33-1.0 by throw, 0.61 the median, rolling friction 117-418 by throw;
+    /// with 0.6 and 140 the distances at 1.0, 1.5, 2.0 s and the fuse come within about
+    /// 50 units for holds of 5-120 loops; issue #1785, combat-rules.md §5].
     pub grenade_restitution: f32,
     pub grenade_roll_keep: f32,
-    pub grenade_roll_damping: f32,
+    pub grenade_roll_friction: f32,
     /// Reload when the trigger is pulled on an empty magazine and ammo is carried.
     pub auto_reload: bool,
     /// Reload time when no reload clip length is known, seconds.
@@ -449,8 +452,8 @@ impl Default for CombatTuning {
             explosion_inner_edge: 0.2,
             default_bounce: 0.3,
             grenade_restitution: 0.01,
-            grenade_roll_keep: 0.9,
-            grenade_roll_damping: 0.66,
+            grenade_roll_keep: 0.6,
+            grenade_roll_friction: 140.0,
             auto_reload: true,
             fallback_reload: 2.0,
             power_hold: 0.4,

@@ -52,7 +52,7 @@ fn game(f: &Fixture) -> Game<'_> {
     g
 }
 
-const VARS: &str = "float fA\nfloat fB\nfloat fC\nref rNone\narray_var aR\narray_var aIn\nstring_var sOut\n";
+const VARS: &str = "float fA\nfloat fB\nfloat fC\nfloat fD\nref rNone\narray_var aR\narray_var aIn\nstring_var sOut\n";
 
 fn q(g: &mut Game, body: &str) -> XVal {
     g.run_query(&format!("{VARS}Begin Function {{ }}\n{body}\nEnd\n"), RunCtx::default()).unwrap_or_else(|e| panic!("{body}: {e}"))
@@ -100,6 +100,15 @@ fn arrays() {
     assert_eq!(n(&mut g, "let aIn := Ar_List rNone\nlet aR := Ar_List PlayerREF, aIn\nSetFunctionValue (Ar_HasInvalidRefs aR 1)"), 1.0);
     // The floats from the array [documented: the page's example].
     assert_eq!(n(&mut g, "let aR := Ar_List 3, 8, 5, 1\nAr_SetFloatsFrom aR fA fB fC\nSetFunctionValue fA * 100 + fB * 10 + fC"), 385.0);
+    // Non-numeric elements and trailing variables beyond the array length stay unchanged
+    // [observed: 2026-11-24, `w6_t1_13_sup_ar_setfloats`].
+    assert_eq!(
+        q(
+            &mut g,
+            "let aR := Ar_List 3.5, \"abc\", 8.25\nlet fA := 11\nlet fB := 22\nlet fC := 33\nlet fD := 44\nAr_SetFloatsFrom aR fA fB fC fD\nlet sOut := sv_Construct \"%.2f,%.2f,%.2f,%.2f\" fA fB fC fD\nSetFunctionValue sOut"
+        ),
+        XVal::Str("3.50,22.00,8.25,44.00".to_string())
+    );
 }
 
 #[test]

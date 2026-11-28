@@ -39,14 +39,14 @@ order (and the targets of the `"first"`/`"second"` filters, §3).
 
 | Event | First | Second | Notes |
 |---|---|---|---|
-| OnActivate | the activated reference | the activating reference | **Does not block activation**, unlike an OnActivate block; runs **before** the object's OnActivate block, and even when activation will be refused (a locked or inaccessible door) |
-| OnActorEquip (alias OnEquip) | the actor | the item (base form) | runs before the item counts as equipped, just after whatever held the same slots is unequipped |
-| OnActorUnequip (alias OnUnequip) | the actor | the item (base form) | not when equipped ammo is dropped |
-| OnAdd | the item (world reference) | the container | only when picking up from the world |
+| OnActivate | the activated reference | the activating reference | **Does not block activation**, unlike an OnActivate block; runs **before** the object's OnActivate block, and even when activation will be refused (a locked or inaccessible door); runs with `GetSelfAlt == 0` and after `ShowOff:OnPreScriptedActivate` on scripted `Activate` (suppressed when pre-scripted vetoes) [observed: 2026-11-24, Fallout: New Vegas 1.4.0.525, xNVSE 6.4.9, ShowOffNVSE 184, `GSDocMitchellHouse` (`0x00103DF9`), 10 official base masters, `tools/capture/nvse/catalogs/wave6d1_pre_scripted_activate_order.json` probes `w6d1p2_11_on_activate_and_pre_scripted_order` (`ord=S:PRE,\|caps=0->0`) and `w6d1p3_11_on_activate_noveto` (`ord0=S:PRE,ACT,\|ord1=S:PRE,ACT,\|act(s0=1,sR=0,a1=1,a2=1)`); no DLL, PDB, or third-party source consulted] |
+| OnActorEquip (alias OnEquip) | the actor | the item (base form) | just after whatever held the same slots is unequipped [documented: NVSE Event Handling]; shares one canonical handler list (`onactorequip`) with `OnEquip`, runs with `GetSelfAlt == 0` and `GetEquipped == 1` (`in=1`, contra wiki's "before the item counts as equipped") [observed: 2026-11-24, Fallout: New Vegas 1.4.0.525, xNVSE 6.4.9, JIP LN 57.30, `GSDocMitchellHouse` (`0x00103DF9`), 10 official base masters, `tools/capture/nvse/catalogs/wave6d1_on_actor_equip_unequip_alias.json` probe `w6d1_08_on_actor_equip_unequip_aliases`: `alias(g=1/1,rem=1/1)\|eq(n=1,in=1,same=0,tick=1,s0=1,sP=0,nm=onactorequip)`; no DLL, PDB, or third-party source consulted] |
+| OnActorUnequip (alias OnUnequip) | the actor | the item (base form) | shares one canonical handler list (`onactorunequip`) with `OnUnequip`; fires PRE-unequip (`GetEquipped == 1` inside callback) with `GetSelfAlt == 0` [observed: `w6d1_08_on_actor_equip_unequip_aliases`: `alias(g=1/1,rem=1/1)` and `un(n=1,in=1,s0=1,sP=0,nm=onactorunequip)`]; not when equipped ammo is dropped |
+| OnAdd | the item (world reference) | the container | only when picking up from the world (silent on scripted `AddItem`) [observed: 2026-11-24, Fallout: New Vegas 1.4.0.525, xNVSE 6.4.9, ShowOffNVSE 184, `GSDocMitchellHouse` (`0x00103DF9`), 10 official base masters, `tools/capture/nvse/catalogs/wave6d1_showoff_xnvse_events_observed.json` probe `w6d1_09_on_drop_and_xnvse_on_add`: `ai(add=0,so=1,soS0=1)\|pick(add=1,a1W=1,a2P=1,so=2,soSW=1,soS0=0)`; no DLL, PDB, or third-party source consulted] |
 | OnClose, OnOpen | the reference | the same reference | |
 | OnCombatEnd | target (actor) | ender (actor) | |
 | OnDeath | killed (actor) | killer (actor) | |
-| OnDrop | dropper | the dropped world reference | not when moving items between containers in the inventory menu, unlike the OnDrop block |
+| OnDrop | dropper | the dropped world reference | fires with `GetSelfAlt == 0`, `(dropper, worldRef)` [observed: 2026-11-24, Fallout: New Vegas 1.4.0.525, xNVSE 6.4.9, ShowOffNVSE 184, `GSDocMitchellHouse` (`0x00103DF9`), 10 official base masters, `tools/capture/nvse/catalogs/wave6d1_showoff_xnvse_events_observed.json` probe `w6d1_09_on_drop_and_xnvse_on_add`: `drp(n=1,a1P=1,a2Ref=1,sP=0,s0=1)`; no DLL, PDB, or third-party source consulted]; not when moving items between containers in the inventory menu, unlike the OnDrop block |
 | OnHit | target (any reference) | attacker: an actor, or the projectile when the target is not an actor and the weapon is not melee/unarmed | runs **before damage**, unlike the OnHit block |
 | OnHitWith | target | weapon (base form) | runs before damage |
 | OnLoad | the reference | the same | |
@@ -62,7 +62,7 @@ order (and the targets of the `"first"`/`"second"` filters, §3).
 | OnLockBroken, OnLockpickSuccess, OnLockpickBroken | — | the object | |
 | OnTerminalHacked, OnTerminalHackFailed | — | the terminal | |
 | OnRepair | — | the repaired inventory item; then the repairer and the repair kind (0 normal, 1 vendor) | four arguments |
-| OnDisable, OnEnable | — | the reference | |
+| OnDisable, OnEnable | the reference | `0` | both fire PRE-update (`GetDisabled == 0` inside `OnDisable`, `GetDisabled == 1` inside `OnEnable`) with `(ref, 0)`; `OnEnable` runs with `GetSelfAlt == 0` (`s0=1,sR=0`) and `OnDisable` runs with `GetSelfAlt != ref` (`sOk=0`) [observed: 2026-11-24, Fallout: New Vegas 1.4.0.525, xNVSE 6.4.9, JIP LN 57.30, ShowOffNVSE 184, `GSDocMitchellHouse` (`0x00103DF9`), 10 official base masters, `tools/capture/nvse/catalogs/wave6d1_on_enable_disable_pre_update.json` probes `w6d1_07_on_enable_on_disable_args` (`dis(n1=1,n2=1,sOk=0,a1Ok=1,a2z=1,inDis=0)`) and `w6d1p2_07_on_enable_tick` (`en(n1=1,n2=1,s0=1,sR=0,a1R=1,a2z=1,inDis=1)`); no DLL, PDB, or third-party source consulted]; `OnDisable` `GetSelfAlt == 0` [hypothesis: by parity with `OnEnable`] |
 
 "—" means the table gives no first argument; how many arguments those handlers take:
 open.
@@ -112,8 +112,15 @@ type-check filters on them [documented: User-Defined Event].
 - **Session only**: handlers are not saved; they last for the session, so scripts
   register them again when a session starts (GetGameRestarted) [documented:
   SetEventHandler].
-- Registering the same handler twice with the same filters: open (for
-  SetEventHandlerAlt, duplicates run twice, §4).
+- Registering the same handler twice with identical event, filters, and priority is
+  deduplicated and returns `0` on the duplicate call for both `SetEventHandler` and
+  `SetEventHandlerAlt`, firing once per dispatch [observed: 2026-11-24, Fallout: New
+  Vegas 1.4.0.525, xNVSE 6.4.9, JIP LN 57.30, `GSDocMitchellHouse` (`0x00103DF9`),
+  10 official base masters,
+  `tools/capture/nvse/catalogs/wave6d1_set_event_handler_dedup.json` probe
+  `w6d1_03_set_event_handler_dups_and_bounds`:
+  `PROBE|w6d1_03_set_event_handler_dups_and_bounds|std=1,0,n=1|alt=1,0,n=1|prio=0,1,1,0,0|arr=1,n=1`;
+  no binary, DLL, PDB, or third-party source consulted].
 
 ## 4. SetEventHandlerAlt (xNVSE 6.2.8)
 
@@ -125,8 +132,9 @@ type-check filters on them [documented: User-Defined Event].
 - **Cleared on every load**, unlike SetEventHandler's session lifetime: "all" handlers
   set with this function are flushed when a game is loaded [documented:
   SetEventHandlerAlt].
-- **Not for plugin (LN) events.** Several registrations of the same function are
-  allowed and each runs. Priority as §3.
+- **Not for plugin (LN) events.** Duplicate registrations with identical event, handler,
+  filters, and priority return `0` and fire once (contra the wiki note) [observed:
+  `w6d1_03_set_event_handler_dups_and_bounds`, `alt=1,0,n=1`]. Priority as §3.
 - **How filters match** (xNVSE 6.2.8) [documented: New xNVSE Event Filtering System]:
   - a number must equal the dispatched number; for a user-defined event a numeric filter
     is a float; a plugin's event may declare an int filter, which floors the value;
@@ -148,16 +156,34 @@ type-check filters on them [documented: User-Defined Event].
 ["priority"::n]`: removes matching handlers; returns 1 when at least one was removed.
 With no filters, every handler of that function for that event goes; with one, those
 matching it. The default priority is 0, meaning any priority [documented:
-RemoveEventHandler]. It also takes SetEventHandlerAlt's numeric indexes [documented:
-SetEventHandlerAlt].
+RemoveEventHandler]; a non-zero `"priority"::n` removes only registrations at that
+priority while leaving other priorities intact, and `"priority"::0` removes all
+priorities [observed: 2026-11-24, Fallout: New Vegas 1.4.0.525, xNVSE 6.4.9, JIP LN
+57.30, `GSDocMitchellHouse` (`0x00103DF9`), 10 official base masters,
+`tools/capture/nvse/catalogs/wave6d1_remove_event_handler_priority.json` probe
+`w6d1_02_remove_event_handler_priority`:
+`PROBE|w6d1_02_remove_event_handler_priority|r5=1,0|keys=1,0,1|n=2|r0=1,sz0=0|rf=1,n100=0,n200=1|end=1,0`;
+no binary, DLL, PDB, or third-party source consulted]. It also takes
+SetEventHandlerAlt's numeric indexes [documented: SetEventHandlerAlt].
 
 **DispatchEvent** `DispatchEvent "Name" [infoMap] [senderName]`: sends a user-defined
 event to every handler registered for that name. A handler receives one string map: by
 default `"eventName"` (the name) and `"eventSender"` (the dispatching mod's file name);
 `infoMap` replaces the whole map, and `senderName` replaces the sender string
-[documented: DispatchEvent]. Whether a replaced map still gets `eventName`: open (the
-page's example reads both from a custom map, which suggests both are added
-[hypothesis]). Whether handlers run at once, inside the dispatching line: open.
+[documented: DispatchEvent]. Returns `1`, runs handlers synchronously inside the
+dispatching line before the dispatching script continues (so in-place mutations to
+`infoMap` are visible immediately after the call), and unconditionally adds/overwrites
+`"eventName"` and `"eventSender"` alongside custom keys even when the caller-supplied
+`infoMap` already defines those keys [observed: Fallout: New Vegas 1.4.0.525 + xNVSE
+6.4.9 + JIP LN 57.30, 2026-11-23/24, `GSDocMitchellHouse` (`0x00103DF9`), 10 official
+base masters, read-only `PrintToConsole` probes `core_09_dispatch_event_custom_map_sync`
+(`tools/capture/nvse/catalogs/wave4a_extenders.json`, #3679, dispatching `"W4CustomEvent"`
+with custom stringmap `{"k": 42}` and sender `"W4Sender"` and reading the handler's side
+effects immediately afterward: `PROBE|core_09_dispatch_event_custom_map_sync|1,1,1,42`)
+and `w6d1_04_dispatch_event_map_and_sync`
+(`tools/capture/nvse/catalogs/wave6d1_dispatch_event_return_overwrite.json`:
+`PROBE|w6d1_04_dispatch_event_map_and_sync|def(r=1,n=1,en=W6D1_DEv,es=)|c1(r=1,mut=1/1,en=W6D1_DEv)|c2(r=1,en=W6D1_DEv,es=NewSnd)`);
+no binary, DLL, PDB, or third-party source consulted].
 
 **DispatchEventAlt** `[ref.]DispatchEventAlt "Name" [arg1 … arg15]` (xNVSE 6.2.8):
 calls every handler registered for that user-defined event whose filters match the
@@ -166,11 +192,19 @@ form, string, array), and an optional calling reference the handlers run on. Ret
 success flag. A handler may take **fewer** parameters than the event sends, so an event
 can add arguments later without breaking older handlers. SetEventHandlerAlt suits it
 best, since it can filter each argument by index [documented: DispatchEventAlt, pasted by the owner from geckwiki.com, 2026-10-25].
-Whether a handler may take more parameters than are sent: open.
+Returns `1`, runs handlers declaring fewer or more parameters than sent, matches `0::baseForm` against a placed calling reference, matches string filters case-insensitively, and reflects live `ar_Append` mutations to an array filter [observed: 2026-11-24, Fallout: New Vegas 1.4.0.525, xNVSE 6.4.9, JIP LN 57.30, `GSDocMitchellHouse` (`0x00103DF9`), 10 official base masters, `tools/capture/nvse/catalogs/wave6d1_showoff_xnvse_events_observed.json` probe `w6d1_05_dispatch_event_alt_arity_and_filters`: `PROBE|w6d1_05_dispatch_event_alt_arity_and_filters|ret=1/1|arity(0=1,3=1,selfDoc=1)|flt=1,1,2`; no binary, DLL, PDB, or third-party source consulted]; extra declared parameters default to 0 [hypothesis].
 
 **GetCurrentEventName** (returns a string): inside a SetEventHandler-style handler, the
 name of the event being handled, so one function can serve several events
-[documented: GetCurrentEventName, pasted by the owner from geckwiki.com, 2026-10-25]. Called outside a handler: open.
+[documented: GetCurrentEventName, pasted by the owner from geckwiki.com, 2026-10-25].
+Returns `""` outside any handler and inside JIP `SetOn*EventHandler` callbacks, and the
+registered event name inside `SetEventHandler`, `SetEventHandlerAlt`, and ShowOff
+handlers [observed: 2026-11-24, Fallout: New Vegas 1.4.0.525, xNVSE 6.4.9, JIP LN
+57.30, ShowOffNVSE 184, `GSDocMitchellHouse` (`0x00103DF9`), 10 official base masters,
+`tools/capture/nvse/catalogs/wave6d1_showoff_xnvse_events_observed.json` probe
+`w6d1_06_get_current_event_name_contexts`:
+`PROBE|w6d1_06_get_current_event_name_contexts|out=[]|std=[w6d1_evstd]|alt=[w6d1_evalt]|add=[ShowOff:OnAdd]|jip=[]`;
+no binary, DLL, PDB, or third-party source consulted].
 
 ## 6. Inspecting handlers (xNVSE 6.2.9)
 
@@ -179,7 +213,19 @@ name of the event being handled, so one function can serve several events
   priority is a map from priority to handler arrays; with a priority filter, that level
   is skipped. Each handler entry is an array: [0] the script (or, for a plugin handler,
   a string map with "Plugin" and "Handler", possibly empty), [1] a string map of its
-  filters [documented: GetEventHandlers].
+  filters [documented: GetEventHandlers]. With no handlers registered, `"ShowOff:OnAdd"`
+  returns an empty Map (`ar_Size == 0`), whereas `"OnCrosshairOn"` returns `ar_Null`
+  (`ar_Size == -1`); filter StringMap keys are `"first"` / `"second"` for
+  `SetEventHandler` and `"0"` / `"1"` (stringified argument indices) for
+  `SetEventHandlerAlt` [observed: 2026-11-24, `GSDocMitchellHouse` (`0x00103DF9`),
+  Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 + ShowOffNVSE 184 + JIP LN 57.30 with the
+  10 official base masters, isolated clean-room staging copy (read-only `PrintToConsole`
+  probe; zero writes to game install or Saves), committed probe
+  `w6t2_16_xnvse_get_event_handlers_filter_keys`
+  (`tools/capture/nvse/catalogs/wave6_t2_get_event_handlers.json`):
+  `PROBE|w6t2_16_xnvse_get_event_handlers_filter_keys|empty(cross=-1,soAdd=0)|std(first,second)|alt(0,1)`;
+  zero DLL, PDB, or third-party source consulted; hypothesis: the other 10 implemented
+  `ShowOff:*` events in `nvse_handler_lists::KNOWN` behave like `ShowOff:OnAdd`].
 - **DumpEventHandlers** (same filters): prints them by event and priority, plugin
   handlers included [documented: DumpEventHandlers].
 - **GetHigherPriorityEventHandlers / GetLowerPriorityEventHandlers** `event, handler,
@@ -187,10 +233,19 @@ name of the event being handled, so one function can serve several events
   the handlers at higher-or-equal (lower-or-equal) priority than that handler; Ar_Null
   when the handler is not at that priority [documented: each page].
 - **IsEventHandlerFirst / IsEventHandlerLast** (same arguments): 1 or 0; 0 when the
-  handler is not at that priority. The pages define First as "nothing at lower or equal
-  priority" and Last as "nothing at higher or equal", which reads reversed against
-  "higher runs first" and would always count the handler itself [documented: each page;
-  the inconsistency is ours to flag]. Real behaviour: open (to observe).
+  handler is not at that priority. Higher priority runs first; among priorities `10, 5a,
+  5b, 1` and absent `99`, `10` returns `1/0`, middle tie `5a` returns `0/0`, `1` returns
+  `0/1`, absent `99` returns `0/0`, and `GetHigherPriorityEventHandlers` /
+  `GetLowerPriorityEventHandlers` at `5a` both include the equal-priority key `5`
+  (`k5=hi(1,1),lo(1,1)`) [observed: 2026-11-24, Fallout: New Vegas 1.4.0.525, xNVSE
+  6.4.9, JIP LN 57.30, `GSDocMitchellHouse` (`0x00103DF9`), 10 official base masters,
+  `tools/capture/nvse/catalogs/wave6d1_event_handler_first_last.json` probe
+  `w6d1p2_01_priority_first_last_higher_lower`:
+  `PROBE|w6d1p2_01_priority_first_last_higher_lower|ord=S:10,5a,5b,1,|fl10=1/0|fl5a=0/0|fl1=0/1|fl99=0/0|hi=0,2,2,-1|lo=2,2,0|k5=hi(1,1),lo(1,1)`;
+  no binary, DLL, PDB, or third-party source consulted]. Returning `0` when handlers are
+  tied at the top (`IsEventHandlerFirst`) or bottom (`IsEventHandlerLast`) — i.e., no
+  other handler at higher-or-equal / lower-or-equal priority — follows the inclusive
+  equal-priority maps [hypothesis].
 
 ## 7. Order and persistence, collected
 
@@ -222,14 +277,14 @@ One row per function E1–E3 cover, then one row per built-in event, from §2–
 
 | Function | Aliases | Arguments (? = optional) | Returns | Behaviour | Edge cases |
 |---|---|---|---|---|---|
-| SetEventHandler | — | event name string; handler udf/lambda; `"first"::x`?; `"second"::y`?; `"priority"::n`? (pairs in any order) | bool | registers the handler for the event | filters: forms or form lists (any member); an array filter is ignored; priority default 1, range -9999..9999, 0 refused, higher runs first, ties by registration order (6.2.9); lasts for the session, never saved |
-| SetEventHandlerAlt | — | event name; handler; up to 16 `index::filter`?; `"priority"::n`? | bool | registers with indexed filters (6.2.8): 0 the calling reference, 1-15 the arguments | filter matching per §4; array value = any of; duplicates each run; flushed on every load; not for plugin (LN) events |
+| SetEventHandler | — | event name string; handler udf/lambda; `"first"::x`?; `"second"::y`?; `"priority"::n`? (pairs in any order) | bool | registers the handler for the event | filters: forms or form lists (any member); an array filter is ignored; priority default 1, range -9999..9999, 0 refused, higher runs first, ties by registration order (6.2.9); duplicate registrations rejected (return 0) [observed: `w6d1_03_set_event_handler_dups_and_bounds`]; lasts for the session, never saved |
+| SetEventHandlerAlt | — | event name; handler; up to 16 `index::filter`?; `"priority"::n`? | bool | registers with indexed filters (6.2.8): 0 the calling reference, 1-15 the arguments | filter matching per §4; array value = any of; duplicate registrations rejected (return 0) [observed: `w6d1_03_set_event_handler_dups_and_bounds`]; flushed on every load; not for plugin (LN) events |
 | RemoveEventHandler | — | event name; handler; filter1?; filter2?; `"priority"::n`? (default 0 = any) | bool | removes matching handlers; 1 if any was removed | no filters: all of that handler for that event; takes Alt's numeric indexes |
-| DispatchEvent | — | event name; infoMap stringmap?; senderName string? | none | calls handlers of a user-defined event with one string map | default map: eventName, eventSender (the mod file); infoMap replaces the map, senderName the sender; inline or deferred: open |
+| DispatchEvent | — | event name; infoMap stringmap?; senderName string? | bool (1) | calls handlers of a user-defined event synchronously with one string map | default map: eventName, eventSender (the mod file); infoMap replaces the map, and eventName/eventSender are overwritten even if already present [observed: `w6d1_04_dispatch_event_map_and_sync`] |
 | DispatchEventAlt | — | [ref.] event name; up to 15 values any | bool | calls handlers whose filters match the arguments (6.2.8) | optional calling reference passed on; handlers may take fewer parameters than sent |
 | GetCurrentEventName | — | — | string | the event being handled | inside a SetEventHandler-style handler; outside: open |
-| IsEventHandlerFirst | — | event name; handler; startPriority int; scriptsToIgnore?; pluginsToIgnore array?; pluginHandlersToIgnore array? | bool | 1 if no handler is at lower-or-equal priority (page's wording) | 0 when the handler is not at startPriority; the wording reads reversed against "higher runs first": open (6.2.9) |
-| IsEventHandlerLast | — | as IsEventHandlerFirst | bool | 1 if no handler is at higher-or-equal priority (page's wording) | as above (6.2.9) |
+| IsEventHandlerFirst | — | event name; handler; startPriority int; scriptsToIgnore?; pluginsToIgnore array?; pluginHandlersToIgnore array? | bool | 1 for unique highest priority, 0 for middle/lowest/absent [observed: `w6d1p2_01_priority_first_last_higher_lower`: `10->1/0`, `5a->0/0`, `1->0/1`, `99->0/0`, `k5=hi(1,1),lo(1,1)`] | 0 when not at startPriority [observed]; 0 when tied at the top [hypothesis] (6.2.9) |
+| IsEventHandlerLast | — | as IsEventHandlerFirst | bool | 1 for unique lowest priority, 0 for highest/middle/absent [observed: `w6d1p2_01_priority_first_last_higher_lower`: `10->1/0`, `5a->0/0`, `1->0/1`, `99->0/0`, `k5=hi(1,1),lo(1,1)`] | 0 when not at startPriority [observed]; 0 when tied at the bottom [hypothesis] (6.2.9) |
 | GetEventHandlers | — | eventName string?; handler?; priority int? | array | handlers matching the filters: a stringmap by event, then a map by priority, then handler arrays [script or plugin map, filters map] | only extender-managed handlers (6.2.9) |
 | Get(Higher\\|Lower)PriorityEventHandlers | — | as IsEventHandlerFirst | array (map by priority) | handlers at higher-or-equal (lower-or-equal) priority | Ar_Null when the handler is not at startPriority (6.2.9) |
 | DumpEventHandlers | — | as GetEventHandlers | none | prints them by event and priority, plugin handlers included | (6.2.9) |
@@ -239,8 +294,8 @@ One row per function E1–E3 cover, then one row per built-in event, from §2–
 | Event | Fires when | First (filter `"first"`, `1::`) | Second (filter `"second"`, `2::`) |
 |---|---|---|---|
 | OnActivate | a reference is activated; **before** its OnActivate block, even when activation is refused; does not block it | activated ref | activating ref |
-| OnActorEquip (OnEquip) | an actor equips an item, after the slot is cleared, before it counts as equipped | actor | item (base form) |
-| OnActorUnequip (OnUnequip) | an actor unequips an item; not for dropped equipped ammo | actor | item (base form) |
+| OnActorEquip (OnEquip) | an actor equips an item, just after whatever held the same slots is unequipped [documented: NVSE Event Handling]; shares canonical list with `OnEquip`, runs with `GetSelfAlt == 0` and `GetEquipped == 1` (`in=1`) inside callback [observed: `w6d1_08_on_actor_equip_unequip_aliases`] | actor | item (base form) |
+| OnActorUnequip (OnUnequip) | an actor unequips an item; shares canonical list with `OnUnequip`, fires PRE-unequip (`GetEquipped == 1` inside callback) with `GetSelfAlt == 0` [observed: `w6d1_08_on_actor_equip_unequip_aliases`]; not for dropped equipped ammo | actor | item (base form) |
 | OnAdd | an item is picked up from the world | item (world ref) | container |
 | OnClose | a reference closes | ref | same ref |
 | OnCombatEnd | an actor leaves combat | target (actor) | ender (actor) |
@@ -478,11 +533,10 @@ on `0x00144C41`) in #3679; no DLL or source consulted] Both `OnApplyIMOD` and
   snapshot assigns `Game::image_modifiers` directly without firing `OnApplyIMOD` [design].
 - [design] To keep unmodded visuals unchanged (e.g. `VCG00` re-applying
   `Addiction01ISFX` at stages 27 and 30) and prevent unbounded list growth from repeated
-  non-animatable re-applies, `nvforever::imagespace::screen_effect` draws at most one
-  active instance per `IMAD` form (the most recently applied entry), non-animatable
-  re-applies keep one `ActiveImageModifier` entry plus a counted stack in
-  `Game::image_modifier_extra_stacks`, and stacked instances per form are capped at
-  `Game::MAX_IMOD_STACK = 64`.
+  re-applies, `nvforever::imagespace::screen_effect` draws at most one active instance per
+  `IMAD` form (the most recently applied entry), while `Game::image_modifiers` keeps each
+  stacked instance (animatable and non-animatable) in application order capped at
+  `Game::MAX_IMOD_STACK = 64` per form (evicting the oldest matching entry at capacity).
 
 [design] Both dispatch sites check `Game::handled("onapplyimod")` /
 `Game::handled("onremoveimod")` before allocating an argument vector, leaving unmodded

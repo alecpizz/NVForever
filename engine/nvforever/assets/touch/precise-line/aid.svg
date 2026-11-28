@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Original NVForever geometry; Precise line family. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="currentColor" color="#ffffff" fill-rule="evenodd" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+  <title>Aid</title>
+  <path d="M 7 10 L 25 10 Q 27 10 27 12 L 27 25 Q 27 27 25 27 L 7 27 Q 5 27 5 25 L 5 12 Q 5 10 7 10 Z M 12 10 L 12 6 L 20 6 L 20 10 M 12 18 L 20 18 M 16 14 L 16 22"/>
+</svg>

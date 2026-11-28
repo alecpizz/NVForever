@@ -238,9 +238,9 @@ fn registered_files_last_for_the_session() {
 
 #[test]
 fn script_runner_files_and_compiled_scripts_share_private_aux_vars() {
-    // [hypothesis: scripts compiled at run time have no plugin of their own; observed: MCM
+    // (scripts compiled at run time have no plugin of their own: see crates/fnv-game/src/game.rs; observed: MCM
     // Extender's gr_ file writes `*MCMExt_ModName`, its CompileScript'd handler reads it,
-    // Begin Again list 2026-11-13]
+    // Begin Again list 2026-11-13)
     let _guard = files();
     let f = fixture();
     let mut g = game(&f);

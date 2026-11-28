@@ -31,6 +31,8 @@ const REF_OUT: u32 = 0x93A;
 const REF_NORTH: u32 = 0x93B;
 const IMAD: u32 = 0x93C;
 const IMAD2: u32 = 0x943;
+const IMAD_HOLD_A: u32 = 0x944;
+const IMAD_HOLD_B: u32 = 0x945;
 const RCPE: u32 = 0x93D;
 const MISC: u32 = 0x93E;
 const NPC: u32 = 0x93F;
@@ -63,9 +65,12 @@ fn plugin_bytes() -> Vec<u8> {
     .concat();
     let misc = edid(b"MISC", MISC, "TestThing", &[]);
     let imad_dnam = [u32s(&[1]), f32b(10.0), vec![0; 236]].concat();
+    let imad_hold_dnam = [u32s(&[0]), f32b(1.0), vec![0; 236]].concat();
     let imad = [
         edid(b"IMAD", IMAD, "TestModifier", &[sub(b"DNAM", imad_dnam.clone())]),
         edid(b"IMAD", IMAD2, "TestModifierTwo", &[sub(b"DNAM", imad_dnam)]),
+        edid(b"IMAD", IMAD_HOLD_A, "TestHoldModifierA", &[sub(b"DNAM", imad_hold_dnam.clone())]),
+        edid(b"IMAD", IMAD_HOLD_B, "TestHoldModifierB", &[sub(b"DNAM", imad_hold_dnam)]),
     ]
     .concat();
     let rcpe = edid(b"RCPE", RCPE, "TestRecipe", &[sub(b"FULL", z("Test Recipe"))]);
@@ -159,7 +164,7 @@ fn the_sky() {
     assert_eq!((g.script_climate(), n(&mut g, "GetCurrentClimate")), (Some(FormId(CLMT2)), f64::from(CLMT2)));
     q(&mut g, "ForceClimate");
     assert_eq!(g.script_climate(), None);
-    assert_eq!(n(&mut g, "SetCurrentClimate TestClimateTwo"), f64::from(CLMT2));
+    assert_eq!(n(&mut g, "SetCurrentClimate TestClimateTwo"), 0.0);
     assert_eq!(g.script_climate(), Some(FormId(CLMT2)));
     // Not a climate: nothing.
     q(&mut g, "ForceClimate TestStatic");
@@ -263,9 +268,10 @@ fn cells_light_and_settings() {
     // Internal markers: the marker model's own, a script's.
     assert_eq!(n(&mut g, "SetInternalMarker TestMarker"), 1.0);
     assert_eq!(n(&mut g, "SetInternalMarker TestStatic"), 0.0);
-    assert_eq!(n(&mut g, "SetInternalMarker TestStatic 1"), 1.0);
+    assert_eq!(n(&mut g, "SetInternalMarker TestStatic 1"), 0.0, "2-arg setter returns 0 [observed: w6d2p4_53]");
+    assert_eq!(n(&mut g, "SetInternalMarker TestStatic"), 1.0);
     assert!(g.internal_marker(FormId(STAT)));
-    q(&mut g, "SetInternalMarker TestMarker 0");
+    assert_eq!(n(&mut g, "SetInternalMarker TestMarker 0"), 0.0);
     assert!(!g.internal_marker(FormId(MARKER)));
 
     // Image space modifiers on: ApplyImageSpaceModifier A, B, A -> GetActiveIMODs
@@ -276,6 +282,51 @@ fn cells_light_and_settings() {
     assert_eq!(ids(&mut g, "GetActiveIMODs"), format!("{IMAD:08X}"));
     q(&mut g, "ApplyImageSpaceModifier TestModifierTwo\nApplyImageSpaceModifier TestModifier");
     assert_eq!(ids(&mut g, "GetActiveIMODs"), format!("{IMAD:08X} {IMAD2:08X} {IMAD:08X}"));
+}
+
+#[test]
+fn active_imods_preserves_non_animatable_stack_order_and_removal() {
+    let f = fixture();
+    let mut g = game(&f);
+    assert!(!f.data.image_modifiers[&FormId(IMAD_HOLD_A)].animatable);
+    assert!(!f.data.image_modifiers[&FormId(IMAD_HOLD_B)].animatable);
+    assert_eq!(ids(&mut g, "GetActiveIMODs"), "none");
+
+    // Non-animatable ApplyImageSpaceModifier A, B, A preserves exact application order
+    // and duplicates on the same tick [observed: w4d_24_active_imods_order:
+    // `n=3,0=00054E13,1=001736A8,2=00054E13`].
+    q(&mut g, "ApplyImageSpaceModifier TestHoldModifierA\nApplyImageSpaceModifier TestHoldModifierB\nApplyImageSpaceModifier TestHoldModifierA");
+    let expected = format!("{IMAD_HOLD_A:08X} {IMAD_HOLD_B:08X} {IMAD_HOLD_A:08X}");
+    assert_eq!(ids(&mut g, "GetActiveIMODs"), expected, "same-tick non-animatable [A, B, A]");
+
+    // Retained across ticks without expiring or collapsing (see docs/spec-notes/jip-world-12.md §2).
+    g.frames(10);
+    assert_eq!(ids(&mut g, "GetActiveIMODs"), expected, "next-tick non-animatable [A, B, A]");
+
+    // RemoveImageSpaceModifier A removes all matching A instances while leaving B active
+    // [observed: w1_3656_objectives_unholster_imod].
+    q(&mut g, "RemoveImageSpaceModifier TestHoldModifierA");
+    assert_eq!(n(&mut g, "IsImageSpaceActive TestHoldModifierA"), 0.0);
+    assert_eq!(n(&mut g, "IsImageSpaceActive TestHoldModifierB"), 1.0);
+    assert_eq!(ids(&mut g, "GetActiveIMODs"), format!("{IMAD_HOLD_B:08X}"));
+
+    // Removing the remaining B clears the list cleanly back to ar_Null.
+    q(&mut g, "RemoveImageSpaceModifier TestHoldModifierB");
+    assert_eq!(ids(&mut g, "GetActiveIMODs"), "none");
+
+    // At MAX_IMOD_STACK per form, re-applying evicts the oldest matching entry and
+    // appends the new one in exact application order without disturbing other forms.
+    for _ in 0..Game::MAX_IMOD_STACK {
+        q(&mut g, "ApplyImageSpaceModifier TestHoldModifierA");
+    }
+    q(&mut g, "ApplyImageSpaceModifier TestHoldModifierB\nApplyImageSpaceModifier TestHoldModifierA");
+    assert_eq!(g.image_modifiers.iter().filter(|m| m.modifier == FormId(IMAD_HOLD_A)).count(), Game::MAX_IMOD_STACK);
+    assert_eq!(g.image_modifiers.iter().filter(|m| m.modifier == FormId(IMAD_HOLD_B)).count(), 1);
+    let active_after_cap = ids(&mut g, "GetActiveIMODs");
+    let tokens: Vec<&str> = active_after_cap.split_whitespace().collect();
+    assert_eq!(tokens.len(), Game::MAX_IMOD_STACK + 1);
+    assert_eq!(tokens[Game::MAX_IMOD_STACK - 1], format!("{IMAD_HOLD_B:08X}"));
+    assert_eq!(tokens[Game::MAX_IMOD_STACK], format!("{IMAD_HOLD_A:08X}"));
 }
 
 #[test]
@@ -292,7 +343,10 @@ fn purged_references_go_with_their_cell() {
         v => panic!("{v:?}"),
     };
     assert_eq!(toggle(&mut g, ""), 0.0);
-    assert_eq!(toggle(&mut g, " 1"), 1.0);
+    assert_eq!(toggle(&mut g, " 1"), 0.0, "returns previous state [observed: w6d2_23]");
+    assert_eq!(toggle(&mut g, ""), 1.0);
+    assert_eq!(toggle(&mut g, " 0"), 1.0, "returns previous state");
+    assert_eq!(toggle(&mut g, " 1"), 0.0);
     // A placed reference is not purged [documented: dynamic references only].
     assert_eq!(n(&mut g, "TestRefOut.TogglePurgeOnUnload 1"), 0.0);
     assert!(!g.world.get(made).unwrap().deleted());

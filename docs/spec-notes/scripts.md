@@ -619,7 +619,10 @@ in the 5C captures (layer5-captures.md §5) unless tagged:
   field used whenever it is non-zero, and the observed rule is kept
   (docs/spec-notes/quests-dialogue.md §5). A stopped quest's script does not run.
   The first run after StartQuest is not modelled (it was irregular in game; the
-  scenarios skip it): the counter starts at 0 on StartQuest.
+  scenarios skip it): the counter starts at 0 on StartQuest. [observed: VMS40Timer's first
+  run came about 3.9 s after it; NVDLC03MQ01 (delay 0) first ran 98-99 game loops, about
+  1.65 s, after a console StartQuest, in 4 launches of 4, and not at all when set to 100
+  on the next loop, observer check 43, 2026-11-26, #1113.]
 - **ResetQuest keeps a SetQuestDelay override** and zeroes the variables [observed: o41,
   VMQ03aTimer, layer5-captures.md §5.7]; `reset_quest` keeps it (issue #1109).
 - **ResetQuest from another script stops the quest** [observed: o41, called from a job
@@ -755,7 +758,7 @@ state and one call per frame:
   wiki ShowMessage notes] and has a `message_box` too (`buttons: 0`): its OK is button 0,
   read once by the script that showed it [hypothesis: inferred from SCPT 0x000E9483,
   Black Mountain's Broken Mr. Handy, which waits for button 0 after such a box, #2925;
-  observer check 240]. It does not replace a box with buttons still waiting for the
+  observed 2026-11-25, observer check 240: OK on BMRhondaFixMsg repairs it]. It does not replace a box with buttons still waiting for the
   player [design, #2925]. A corner message (no Message Box flag) has none: −1.
 - Round 4 (§7.7): scripts now open menus themselves (`Game::open_menu`: a message box
   is 1001, the name, race, tag-skill, trait and S.P.E.C.I.A.L. menus have their codes),
@@ -1197,7 +1200,9 @@ Mercenary, Caravan, Tribal. In the game the next box came 0.45–1.4 s after a c
 
 **Dialogue lines** (`Game::say`, `Game::speech`). `speaker.SayTo target topic` and
 `speaker.Say topic` say the topic's first line the speaker can say. SayTo's
-`noTargetLookFlag` (4th parameter) is read for who turns to whom
+`noTargetLookFlag` (4th parameter) is read for who turns to whom (the original turns a
+standing speaker to the target with the flag 1 as with 0 [observed 2026-11-25, observer
+check 218]; ours turns nobody with 1, a difference)
 (docs/design/dialogue-play.md §9); `forceSubtitleFlag` is not (subtitles always show). Since 2026-10-10 the
 choice of the line is shared with conversations (`Game::select_line`,
 docs/spec-notes/dialogue.md §4: quest priority, then stored order, Random stacks picked

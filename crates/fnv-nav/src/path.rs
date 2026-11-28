@@ -224,6 +224,10 @@ impl std::error::Error for PathError {}
 /// How far from a point a path start or goal may be snapped onto the navmesh.
 pub const SNAP_RADIUS: f32 = 512.0;
 
+/// A path search this slow, milliseconds, is said at debug level ([`NavGraph::find_path`],
+/// #3785) [design: a frame's budget].
+const SLOW_SEARCH_MS: f64 = 16.0;
+
 /// How far a point may be above or below a triangle's surface and still be on it, for
 /// straight-line walks ([`NavGraph::walkable_line`]): less than the gap between levels
 /// stacked over each other, which is over 40 units almost everywhere in FalloutNV.esm
@@ -568,8 +572,20 @@ impl NavGraph {
         // A span for profiling and a count for diagnostics ([`probe`]); the search is
         // the same.
         let _span = tracing::info_span!("nav::find_path").entered();
+        let t0 = std::time::Instant::now();
         let found = self.search_path(from, to, p);
         probe::searched(found.is_ok());
+        // A slow search (one that ran to its limit, or searched a whole area for an
+        // unreachable place) is said at debug level with its ends and outcome, so a caller
+        // repeating one can be found (#3785).
+        let ms = t0.elapsed().as_secs_f64() * 1e3;
+        if ms >= SLOW_SEARCH_MS {
+            let outcome = match &found {
+                Ok(path) => format!("found, {:.0} units, {} triangles searched", path.length, path.expanded),
+                Err(e) => e.to_string(),
+            };
+            tracing::debug!("nav: a path search from {:?} {:.0?} to {:?} {:.0?} took {ms:.1} ms: {outcome}", from.space, from.pos, to.space, to.pos);
+        }
         found
     }
 

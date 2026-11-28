@@ -637,9 +637,9 @@ mod tests {
     #[test]
     fn hints_follow_the_input_device() {
         use crate::pad::Labels;
-        assert_eq!(hints(Labels::Keys), ["A)", "S)", "E)"]);
-        assert_eq!(hints(Labels::Xbox), ["RT)", "LT)", "B)"]);
-        assert_eq!(hints(Labels::PlayStation), ["R2)", "L2)", "Circle)"]);
+        assert_eq!(hints(Labels::Keys), ["[A]", "[S]", "[E]"]);
+        assert_eq!(hints(Labels::Xbox), ["[RT]", "[LT]", "[B]"]);
+        assert_eq!(hints(Labels::PlayStation), ["[R2]", "[L2]", "[Circle]"]);
     }
 
     #[test]

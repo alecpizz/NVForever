@@ -22,7 +22,7 @@ struct Ao {
     // distance (game units) beyond which the effect has faded out.
     params: vec4<f32>,
     // x, y: the projection's x and y scale (clip_from_view[0][0], [1][1]); z: the
-    // largest radius on the screen (pixels); w: the distance where the fade starts.
+    // largest radius on the screen (a share of the height); w: the distance where the fade starts.
     proj: vec4<f32>,
     // x, y: the size the depth prepass was drawn at; z, w: the picture's size. They differ
     // under FSR's upscaling (fsr.rs `prepare`), whose depth is expanded to the picture's
@@ -39,7 +39,8 @@ struct Ao {
     // The candidate remedies for the ground-truth estimate's shimmer on plants (debug aid
     // NVF_PLAY_DEBUG_AO_VARIANT, ssao.rs `AoVariant`), all 0 for the estimate as shipped:
     // x slice directions (0: SLICES), y depth samples on each side of a slice (0: STEPS),
-    // z the VARIANT_* flags, w unused.
+    // z the VARIANT_* flags, w 0 for the sample pattern as it lies, else 1 + the frame's
+    // number in 0..15 (`frame_shift`: while the camera jitters).
     variant: vec4<f32>,
 }
 
@@ -134,6 +135,21 @@ const SPARSE_NONE: f32 = 8.0;
 const SOFT_TOLERANCE: f32 = 0.5;
 const SOFT_PULL: f32 = 0.75;
 const THIN_DECAY: f32 = 0.25;
+
+// Where the 4 x 4 sample pattern lies this frame: moved by a cell of its own grid each
+// frame while the camera jitters (TAA, FSR, DLSS; ssao.rs `follow_projection`), through
+// all sixteen. The denoise's 4 x 4 texels still hold every turn once, so a plane's factor
+// does not change; where few texels share a pixel's surface (leaves, silhouettes) the
+// grain that was fixed on the screen, which no temporal method could average, becomes
+// noise that one does.
+fn frame_shift() -> vec2<i32> {
+    let f = i32(ao.variant.w);
+    if f == 0 {
+        return vec2(0);
+    }
+    let k = ((f - 1) * 5 + 3) & 15;
+    return vec2(k & 3, k >> 2u);
+}
 
 fn dims() -> vec2<i32> {
     if ao.area.x > 0.0 {
@@ -255,7 +271,9 @@ fn occlusion(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let n = normal_at(px, d);
     let radius = ao.params.x;
     let size = vec2<f32>(dims());
-    let on_screen = min(radius * ao.proj.y * 0.5 * size.y / dist, ao.proj.z);
+    // The largest radius on the screen is a share of the picture's height (ssao.rs
+    // `MAX_SCREEN_RADIUS`), so every size shades as far.
+    let on_screen = min(radius * ao.proj.y * 0.5 * size.y / dist, ao.proj.z * size.y);
     if on_screen < 1.0 {
         return texel(1.0, dist);
     }
@@ -280,7 +298,7 @@ fn occlusion(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
 fn old_openness(half: vec2<i32>, c: vec2<f32>, p: vec3<f32>, n: vec3<f32>, on_screen: f32) -> f32 {
     let radius = ao.params.x;
     // Turned by the half-resolution texel, so the 4 x 4 blur in `apply` sees every turn.
-    let turn = pattern(half) * TAU;
+    let turn = pattern(half + frame_shift()) * TAU;
     var sum = 0.0;
     for (var i = 0; i < SAMPLES; i++) {
         let a = (f32(i) + 0.5) / f32(SAMPLES);
@@ -319,8 +337,8 @@ fn gtao_visibility(half: vec2<i32>, c: vec2<f32>, p: vec3<f32>, n: vec3<f32>, on
     let size = vec2<f32>(dims());
     let radius = ao.params.x;
     let v = normalize(-p);
-    let turn = pattern(half);
-    let offset = step_offset(half);
+    let turn = pattern(half + frame_shift());
+    let offset = step_offset(half + frame_shift());
     var visible = 0.0;
     var unblocked = 0.0;
     // The variants' slice and step counts (NVF_PLAY_DEBUG_AO_VARIANT); SLICES and STEPS

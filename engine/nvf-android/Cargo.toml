@@ -1,0 +1,15 @@
+[package]
+name = "nvf-android"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[target.'cfg(target_os = "android")'.dependencies]
+bevy = { workspace = true, features = ["android-native-activity"] }
+nvforever = { path = "../nvforever" }
+jni = "0.21"
+nvf-launcher = { path = "../../crates/nvf-launcher", default-features = false, features = ["mobile"] }

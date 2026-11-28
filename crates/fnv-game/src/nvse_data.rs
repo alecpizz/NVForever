@@ -45,6 +45,17 @@ impl Game<'_> {
     pub fn clones(&self) -> &std::collections::HashMap<FormId, FormId> {
         &self.clones
     }
+
+    /// Snapshot `source`'s session `MODL/` override (if any) onto `clone` at
+    /// `TempCloneForm` creation time so pre-clone `SetModelPath` / `SetIdleAnimPath`
+    /// edits carry onto `clone`, while post-clone edits to `source` remain isolated
+    /// [observed: `w4g_02_tempcloneform_world_proj_csty`,
+    /// `w4g_13_isidleplaying_and_idle_replace`].
+    pub(crate) fn snapshot_model_path(&mut self, source: FormId, clone: FormId) {
+        if let Some(val) = self.field_overrides.get(&(source, "MODL/".into())).cloned() {
+            self.field_overrides.insert((clone, "MODL/".into()), val);
+        }
+    }
 }
 
 /// The functions of this file; `None` for any other name.
@@ -118,11 +129,13 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
             g.snapshot_explosion_traits(f, id);
             g.snapshot_sound_flags(f, id);
             g.snapshot_magic_traits(f, id);
+            g.snapshot_magic_effects(f, id);
             g.snapshot_ammo_traits(f, id);
             g.snapshot_projectile_traits(f, id);
             g.snapshot_weapon_sounds(f, id);
             g.snapshot_object_effect(f, id);
             g.snapshot_weapon_crit_damage(f, id);
+            g.snapshot_model_path(f, id);
             g.clones.insert(id, f);
             // A clone of an item goes into containers (MCM's list of mods, `World`).
             g.world.add_clone_item(id, f);

@@ -13,6 +13,7 @@
 //! hour waited or slept (aid-items.md §6, §11), and at exit
 //! `aid summary: …`.
 
+use fnv_util::words::{tr, trf};
 use crate::script::{with_world, Runtime, ScriptState};
 use crate::sim::SimState;
 use bevy::prelude::*;
@@ -115,13 +116,13 @@ pub fn use_poison(rt: &mut Runtime, item: FormId) {
     let name = |rt: &Runtime, f: FormId| rt.game.data.name(f);
     let used = rt.game.use_poison(item);
     let text = match used {
-        PoisonUse::Applied { weapon } => format!("{} poisoned with {}", name(rt, weapon), name(rt, item)),
+        PoisonUse::Applied { weapon } => trf("{weapon} poisoned with {item}", &[("weapon", &name(rt, weapon)), ("item", &name(rt, item))]),
         // [design: our own words]
-        PoisonUse::Asks { weapon } => format!("Use {} again to poison your {}", name(rt, item), name(rt, weapon)),
+        PoisonUse::Asks { weapon } => trf("Use {item} again to poison your {weapon}", &[("item", &name(rt, item)), ("weapon", &name(rt, weapon))]),
         // The game's own words [observed: FalloutNV.esm sPoisonNoWeaponMessage], ours without them.
         PoisonUse::NoWeapon => match rt.game.world.setting_value("sPoisonNoWeaponMessage") {
             Some(fnv_sim::settings::Setting::Str(s)) if !s.trim().is_empty() => s.clone(),
-            _ => "Equip a weapon that can be poisoned first.".into(),
+            _ => tr("Equip a weapon that can be poisoned first.").into(),
         },
     };
     if !matches!(used, PoisonUse::Applied { .. }) {

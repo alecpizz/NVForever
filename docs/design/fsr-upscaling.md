@@ -265,6 +265,39 @@ lattices, broken-wall stones, signs and glass shards. Dirty or clear glass stays
 the reactive mean fell from 0.082 to 0.005, and the mean frame-to-frame change from 0.0040
 to 0.0008. Smoke `fsr-corn-cutouts` turns FSR on and off there and checks both switches.
 
+## Blended shapes drawn opaque (#3230)
+
+`nif_spawn::blend_is_opaque` draws a shape opaque when it asks to be blended (SRC_ALPHA /
+INV_SRC_ALPHA) but nothing can thin it: an opaque texture in every texel, material alpha 1,
+no vertex alpha, alpha animation, falloff, light, decal, refraction, hair or window
+environment map. With alpha 1 everywhere the blend gives the same pixels; the shape then
+also goes into the depth and motion prepasses. The placed T-45d Power Armor
+(`armor\powerarmor\powerarmorgo.nif`) was the reported case (#3347).
+
+[observed 2026-11-27, `cargo run --release -p nvf-assets --example blend_opaque_survey --
+<Data> schemas/nif <archives>`, which calls the rule's own code] Every model in the named
+archives:
+
+| Archives | Models | Shapes drawn blended | Drawn opaque by the rule | Alpha test off / on | Kept blended only by a window map |
+|---|---|---|---|---|---|
+| New Vegas base (`Fallout - Meshes`, `- Textures`, `- Textures2`, `- Misc`, `Update`) | 14,911 | 4,125 | 89 shapes in 82 models | 68 / 21 | 0 |
+| Tale of Two Wastelands (`Fallout3 - Meshes`, `- Textures`, TTW's `Main` and `Textures`, with New Vegas' textures) | 11,284 | 1,615 | 43 shapes in 38 models | 30 / 13 | 0 |
+
+In the base game, 45 of the 82 models are Anchorage-style metal corridors and pipes left
+in `dlcanch\` (`Fallout - Meshes.bsa`); the rest are the displacer and zap gloves, the
+throwing spear, the train station, the Sunsets Sarsaparilla glass and sign, McCarran's
+terminal, The Tops' neon wall, the drinking glass and pitcher, the NCR glasses, two thrones,
+the ootheca, three `go.nif` outfits and the power armour. In TTW, most are the `temp\` building blocks, a few weapons of the add-ons'
+folders and TTW's food tins. No shape anywhere was kept blended by the window exclusion
+alone.
+
+[observed 2026-11-27, TTW, interior 0x0A015157 at (624, 9900, −511), the placed armour
+0x0A01EF22 faced by `NVF_PLAY_TEST_FACE`, Enhanced look, 1920×1080] The armour on the table
+is solid with DLSS Performance (frame generation did not start: DLSS's needs
+hardware-accelerated GPU scheduling, off on this machine) and with FSR 3.1 Performance and
+FSR frame generation running. The room's haze is drawn over it as over the table. The
+report's faint outline was not seen.
+
 ## Mip bias, the Pip-Boy and the Strip
 
 Players reported shimmering roofs and fences, on the Strip and in the Pip-Boy (2026-11-08).

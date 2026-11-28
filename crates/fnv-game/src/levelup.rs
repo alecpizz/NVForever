@@ -297,7 +297,8 @@ impl PerkSheet {
     /// has every rank is left out [hypothesis: none was seen], and so are the perks of
     /// least level 0, the challenges' rewards scripts give [observed: Bug Stomper and Set
     /// Lasers for Fun, level 0 without conditions, are not on the owner's list, which
-    /// starts with Confirmed Bachelor].
+    /// starts with Confirmed Bachelor]. The co-op perks are offered only in a co-op game
+    /// (`crate::coop_perks`), so a single player game lists what the original does [design].
     pub fn of_player(g: &mut Game, level: i32) -> PerkSheet {
         let offered: Vec<FormId> = g
             .data
@@ -305,9 +306,10 @@ impl PerkSheet {
             .keys()
             .copied()
             .filter(|id| {
-                g.perk_def(*id).is_some_and(|p| {
-                    !p.is_trait && p.playable && !p.hidden && p.min_level > 0 && g.player.perks.get(id).copied().unwrap_or(0) < p.ranks.max(1)
-                })
+                (g.coop_session || !crate::coop_perks::is_coop_perk(*id))
+                    && g.perk_def(*id).is_some_and(|p| {
+                        !p.is_trait && p.playable && !p.hidden && p.min_level > 0 && g.player.perks.get(id).copied().unwrap_or(0) < p.ranks.max(1)
+                    })
             })
             .collect();
         let mut rows: Vec<(bool, u8, String, FormId)> = offered

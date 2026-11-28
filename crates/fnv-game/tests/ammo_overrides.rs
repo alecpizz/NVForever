@@ -324,3 +324,45 @@ fn temp_clone_form_ammo_and_amef_overrides_stay_isolated_and_reach_consumers() {
     assert_eq!(child.effects, vec![FormId(AMEF_DMG), FormId(amef_clone), FormId(AMEF_DT)]);
     assert_eq!(n(&mut g, &format!("ApplyAmmoEffects {ammo_clone2:#010X} 2 12")), 7.0);
 }
+
+#[test]
+fn set_ammo_projectile_explicit_null_is_noop_and_omitted_arg_clears() {
+    let f = fixture();
+    let mut g = game(&f);
+
+    // Baseline: OwnedAmmoA has authored projectile OwnedProjA.
+    assert_eq!(q(&mut g, "SetFunctionValue (GetAmmoProjectile OwnedAmmoA)"), XVal::Ref(PROJ_A));
+    assert_eq!(g.ammo_traits(FormId(AMMO_A)).unwrap().projectile, Some(FormId(PROJ_A)));
+
+    // Explicit null ref (rNull = 0) via script MUST NOT clear the authored projectile.
+    q(&mut g, "ref rNull\nlet rNull := 0\nSetAmmoProjectile OwnedAmmoA rNull");
+    assert_eq!(q(&mut g, "SetFunctionValue (GetAmmoProjectile OwnedAmmoA)"), XVal::Ref(PROJ_A));
+    assert_eq!(g.ammo_traits(FormId(AMMO_A)).unwrap().projectile, Some(FormId(PROJ_A)));
+    assert_eq!(
+        g.projectile_for_launch(FormId(WEAP_A), Some(FormId(AMMO_A)), Some(FormId(PROJ_B)), Some(FormId(PROJ_A))),
+        (Some(FormId(PROJ_A)), Some("ammo"))
+    );
+
+    // Direct host calls with explicit XVal::Ref(0) or XVal::Num(0.0) are also no-ops.
+    fnv_game::nvse::call(&mut g, &RunCtx::default(), "setammoprojectile", None, &[XVal::Ref(AMMO_A), XVal::Ref(0)]).unwrap().unwrap();
+    fnv_game::nvse::call(&mut g, &RunCtx::default(), "setammoprojectile", None, &[XVal::Ref(AMMO_A), XVal::Num(0.0)]).unwrap().unwrap();
+    assert_eq!(g.ammo_traits(FormId(AMMO_A)).unwrap().projectile, Some(FormId(PROJ_A)));
+
+    // Omitting the optional 2nd argument clears the ammo projectile to 0 and falls back to weapon projectile.
+    q(&mut g, "SetAmmoProjectile OwnedAmmoA");
+    assert_eq!(q(&mut g, "SetFunctionValue (GetAmmoProjectile OwnedAmmoA)"), XVal::Ref(0));
+    assert_eq!(g.ammo_traits(FormId(AMMO_A)).unwrap().projectile, None);
+    assert_eq!(
+        g.projectile_for_launch(FormId(WEAP_A), Some(FormId(AMMO_A)), Some(FormId(PROJ_B)), Some(FormId(PROJ_A))),
+        (Some(FormId(PROJ_B)), Some("weapon"))
+    );
+
+    // After setting a session projectile (OwnedProjB), explicit null ref again leaves it unchanged,
+    // while omitting the 2nd argument clears it back to 0.
+    q(&mut g, "SetAmmoProjectile OwnedAmmoA OwnedProjB\nref rNull\nlet rNull := 0\nSetAmmoProjectile OwnedAmmoA rNull");
+    assert_eq!(q(&mut g, "SetFunctionValue (GetAmmoProjectile OwnedAmmoA)"), XVal::Ref(PROJ_B));
+    assert_eq!(g.ammo_traits(FormId(AMMO_A)).unwrap().projectile, Some(FormId(PROJ_B)));
+    q(&mut g, "SetAmmoProjectile OwnedAmmoA");
+    assert_eq!(q(&mut g, "SetFunctionValue (GetAmmoProjectile OwnedAmmoA)"), XVal::Ref(0));
+    assert_eq!(g.ammo_traits(FormId(AMMO_A)).unwrap().projectile, None);
+}

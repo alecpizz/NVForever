@@ -334,6 +334,15 @@ pub enum SimulationLightSystems {
     CheckLightVisibility,
 }
 
+/// NVForever small casters (graphics pass 2026-11-23): a sun shadow caster whose bounding
+/// radius is below this many texels of a cascade's map is left out of that cascade. With
+/// the Smooth filter's 3x3 kernel such a shadow is a faint smudge of a few texels at most.
+/// `NVF_SMALL_CASTER_TEXELS=<n>` (0 turns it off); default 1.
+pub fn nvf_small_caster_texels() -> f32 {
+    static TEXELS: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *TEXELS.get_or_init(|| std::env::var("NVF_SMALL_CASTER_TEXELS").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0f32).max(0.0))
+}
+
 /// Updates the visibility for [`DirectionalLight`]s so that shadow map
 /// rendering can work.
 ///
@@ -348,6 +357,8 @@ pub fn check_dir_light_mesh_visibility(
             &mut CascadesVisibleEntities,
             Option<&RenderLayers>,
             &ViewVisibility,
+            // NVForever small casters: each cascade's texel size.
+            Option<&Cascades>,
         ),
         Without<SpotLight>,
     >,
@@ -374,7 +385,8 @@ pub fn check_dir_light_mesh_visibility(
 ) {
     let visible_entity_ranges = visible_entity_ranges.as_deref();
 
-    for (directional_light, frusta, mut visible_entities, maybe_view_mask, light_view_visibility) in
+    let small_texels = nvf_small_caster_texels();
+    for (directional_light, frusta, mut visible_entities, maybe_view_mask, light_view_visibility, cascades) in
         &mut directional_lights
     {
         let mut views_to_remove = Vec::new();
@@ -406,6 +418,14 @@ pub fn check_dir_light_mesh_visibility(
         let view_mask = maybe_view_mask.unwrap_or_default();
 
         for (view, view_frusta) in &frusta.frusta {
+            // NVForever small casters: per cascade, the bounding radius below which a
+            // caster is left out of its map (0: none).
+            let mut min_radius = [0.0f32; 8];
+            if let Some(cs) = cascades.and_then(|c| c.cascades.get(view)) {
+                for (r, c) in min_radius.iter_mut().zip(cs) {
+                    *r = small_texels * c.texel_size;
+                }
+            }
             // Resize any per-thread buffer left at a stale state from a prior frame.
             // Threads receiving no work this frame won't run the `init` closure from `par_iter`, and without this
             // their buffer might be indexed out-of-bounds during collection if the number of cascades has increased.
@@ -449,10 +469,20 @@ pub fn check_dir_light_mesh_visibility(
 
                     if let (Some(aabb), Some(transform)) = (maybe_aabb, maybe_transform) {
                         let mut visible = false;
-                        for (frustum, frustum_visible_entities) in view_frusta
+                        // NVForever small casters: the caster's bounding radius in the world.
+                        let affine = transform.affine();
+                        let radius = aabb.half_extents.length()
+                            * affine.matrix3.x_axis.length().max(affine.matrix3.y_axis.length()).max(affine.matrix3.z_axis.length());
+                        for (cascade, (frustum, frustum_visible_entities)) in view_frusta
                             .iter()
                             .zip(view_visible_entities_local_queue.iter_mut())
+                            .enumerate()
                         {
+                            // NVForever small casters: under about a texel of this cascade's
+                            // map, a caster's shadow is filtered away; it is left out.
+                            if !has_no_frustum_culling && radius < min_radius.get(cascade).copied().unwrap_or(0.0) {
+                                continue;
+                            }
                             // Disable near-plane culling, as a shadow caster could lie before the near plane.
                             if !has_no_frustum_culling
                                 && !frustum.intersects_obb(aabb, &transform.affine(), false, true)

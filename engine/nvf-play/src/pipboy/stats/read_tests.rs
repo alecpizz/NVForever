@@ -229,15 +229,15 @@ fn pipboy_stats_snapshot_resolves_ttw_ini_karma_titles_for_levels_1_through_50()
     let mut sim = SimState::new(lo, schema, &fnv_world::WorldIndex::default());
     let mut script = ScriptState::over_plugins(plugins);
 
-    // Vanilla (no TTW.ini): level 45 Evil clamps to vanilla level 30 ("Devil"), and tile
-    // setting title is None (no sKarmicTitle* GMST in the synthetic plugin).
+    // No TTW.ini and no sKarmicTitle* setting in the synthetic plugin: the title is the
+    // alignment word, and the tile's setting title is None.
     {
         let g = &mut script.rt.as_mut().unwrap().game;
         g.player.level = Some(45);
         gf::set_actor_value_current(g, P, av::KARMA, -500.0).unwrap();
     }
     let vanilla = snapshot(&mut forms, &mut sim, Some(&mut script));
-    assert_eq!(vanilla.karma_title.as_deref(), Some("Devil"));
+    assert_eq!(vanilla.karma_title.as_deref(), Some("Evil"));
     assert_eq!(vanilla.karma_setting_title, None);
 
     // Synthetic TTW.ini with level 1..=50 titles across Good, Neutral, and Evil.

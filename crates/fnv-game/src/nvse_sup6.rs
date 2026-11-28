@@ -245,7 +245,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
             outputs(g, 0.0, &[x, y])
         }
         // `xOut yOut request`: this frame's movement (0) or the last (1), only in a menu
-        // [documented: GetMouseMovement]; 0 0 out of menus [hypothesis]. The VM leaves
+        // [documented: GetMouseMovement]; 0 0 out of menus (see docs/spec-notes/ext-sup6.md §1). The VM leaves
         // the two output variables out of `args`: the request is the first left.
         "getmousemovement" => {
             let m = g.sup.mouse;
@@ -298,7 +298,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         }
         // `trait [start [end [duration [mode]]]]`: no more than the trait stops the
         // change where it is [documented: "SetCursorTraitGradual 0 Will stop"]; a start
-        // alone sets it [hypothesis: as SetUIFloatGradual]. Modes over 3 read 0.
+        // alone sets it (see docs/spec-notes/ext-sup6.md §2). Modes over 3 read 0.
         "setcursortraitgradual" => {
             let k = num(args, 0, -1.0);
             if (0.0..CURSOR_TRAITS as f64).contains(&k) {
@@ -321,13 +321,18 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
             zero
         }
         // ---- the debug texts ----
-        // `name x y text`: made, or moved and changed when it is there [documented:
-        // DebugTextCreate; hypothesis: an existing name is changed, not doubled].
+        // `name x y text`: creates a new debug text and returns 1; if `name` already
+        // exists, updates its position and text in place (preserving zoom) [documented:
+        // DebugTextCreate; hypothesis: an existing name is moved and changed, not doubled]
+        // while returning -1 [observed: Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 +
+        // SUP NVSE 855, 2026-11-24, `GSDocMitchellHouse` (`0x00103DF9`), 10 official
+        // base masters, `w4c_b4_03_sup6_bobbypin_debugtext`: `dt(1,-1)`].
         "debugtextcreate" => {
             let Some(n) = text(args, 0) else { return Some(Ok(zero)) };
+            let existed = g.sup.debug_texts.contains_key(&n);
             let zoom = g.sup.debug_texts.get(&n).map_or(DEBUG_TEXT_ZOOM, |d| d.zoom);
             g.sup.debug_texts.insert(n, DebugText { x: num(args, 1, 0.0) as f32, y: num(args, 2, 0.0) as f32, text: text(args, 3).unwrap_or_default(), zoom });
-            zero
+            XVal::Num(if existed { -1.0 } else { 1.0 })
         }
         "debugtextdestroy" => {
             if let Some(n) = text(args, 0) {

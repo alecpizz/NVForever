@@ -31,6 +31,10 @@ fn yes(b: bool) -> XVal {
 /// EDID Fists].
 const FISTS: FormId = FormId(0x1F4);
 
+#[cfg(test)]
+#[path = "w6d12_islimbcrippled_tests.rs"]
+mod w6d12_islimbcrippled_tests;
+
 /// The limbs' condition actor values in the pages' order: head, torso, left arm, right
 /// arm, left leg, right leg, brain [documented: IsLimbCrippled; GetCrippledLimbsAsBitMask].
 const LIMB_AVS: [&str; 7] = ["PerceptionCondition", "EnduranceCondition", "LeftAttackCondition", "RightAttackCondition", "LeftMobilityCondition", "RightMobilityCondition", "BrainCondition"];
@@ -76,9 +80,10 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
             let Some(a) = subject else { return Some(Ok(zero)) };
             let limb = num(args, 0, -1.0) as i64;
             let c = crippled(g, a, num(args, 1, 0.0));
-            yes(match usize::try_from(limb).ok() {
-                Some(i) => c.get(i).copied().unwrap_or(false),
-                None => c.iter().any(|&x| x),
+            yes(match limb {
+                -1 => c.iter().any(|&x| x),
+                0..=6 => c[limb as usize],
+                _ => false,
             })
         }
         "getcrippledlimbsasbitmask" | "getnumcrippledlimbs" => {
@@ -193,9 +198,22 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         // [documented: IsBaseForm, a valid base form; IsReferenceCloned, a reference made
         // in play, mod index 0xFF; IsActorAlt, an actor reference or an NPC or creature
         // base].
-        // A base form: a record that is no placed reference [hypothesis: the page does not
-        // say how cells and worldspaces count].
-        "isbaseform" => yes(form(args, 0).is_some_and(|f| f.0 >> 24 != 0xFF && g.world.placed.get(f).is_none() && g.data.sig(f).is_some_and(|s| !matches!(&s, b"REFR" | b"ACHR" | b"ACRE" | b"PGRE" | b"PMIS")))),
+        // A base form: returns 1 for authored base forms (WEAP, NPC_, CELL, WRLD, QUST,
+        // FACT, FLST) and TempCloneForm 0xFF base forms, and 0 for Player, DocMitchellRef,
+        // and doors [observed: 2026-11-24, Fallout: New Vegas 1.4.0.525, xNVSE 6.4.9,
+        // ShowOffNVSE 184, GSDocMitchellHouse (0x00103DF9), 10 official base masters,
+        // `tools/capture/nvse/catalogs/wave6d1_is_base_form_tempclone.json` probe
+        // `w6d1_35_showoff_is_base_form_and_fade_state`:
+        // `base(w=1,cl=1,n=1,ce=1,wr=1,qu=1,fa=1,fl=1,doc=0,pc=0,dr=0)`;
+        // no DLL, PDB, or third-party source consulted]. Rejecting 0xFF PlaceAtMe placed
+        // refs and temporary inventory refs via `world.placed`, `temp_item`, and `clones`
+        // follows [documented: IsBaseForm, a valid base form; design].
+        "isbaseform" => yes(form(args, 0).is_some_and(|f| {
+            g.world.placed.get(f).is_none()
+                && g.temp_item(f).is_none()
+                && (f.0 >> 24 != 0xFF || g.clones.contains_key(&f))
+                && g.data.sig(g.unclone(f)).is_some_and(|s| !matches!(&s, b"REFR" | b"ACHR" | b"ACRE" | b"PGRE" | b"PMIS"))
+        })),
         "isreferencecloned" => yes(subject.is_some_and(|r| r.0 >> 24 == 0xFF)),
         "isactoralt" => {
             let f = form(args, 0).or(subject).map(|f| base(g, f));

@@ -20,7 +20,7 @@ use fnv_sim::FormId;
 use nvf_assets::{GameData, NifHidden, NifMaterial};
 use nvf_play::script::ScriptState;
 use nvf_play::RefVisual;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub struct NifMirrorPlugin;
 
@@ -72,6 +72,233 @@ struct Memory {
     props: HashMap<String, HashMap<String, Props>>,
     /// Each model's node tree as its file holds it, for items drawn as flat shapes.
     files: HashMap<String, Vec<FileNode>>,
+    /// Incremental index of root `RefVisual` entities keyed by reference FormID, kept in
+    /// sync from Bevy change detection so frames with undrawn watched refs avoid scanning
+    /// every `RefVisual` entity in the world [design].
+    visual_cache: VisualRootCache,
+}
+
+/// Incremental `RefVisual(r) -> root Entity` index maintained across frames via Bevy
+/// change detection (`Added`/`Changed`/`RemovedComponents`) instead of scanning all
+/// `RefVisual` entities every frame when undrawn references remain in `watched` [design].
+#[derive(Default)]
+struct VisualRootCache {
+    initialized: bool,
+    roots: HashMap<u32, Vec<Entity>>,
+    entity_ref: HashMap<Entity, u32>,
+}
+
+type VisualChangedQuery<'w, 's> = Query<
+    'w,
+    's,
+    (Entity, &'static RefVisual, Option<&'static ChildOf>),
+    (
+        crate::lights::NotLightSource,
+        Without<nvf_play::DrawOnly>,
+        Or<(Added<RefVisual>, Changed<RefVisual>, Added<ChildOf>, Changed<ChildOf>)>,
+    ),
+>;
+
+type VisualExcludedAddedQuery<'w, 's> = Query<
+    'w,
+    's,
+    Entity,
+    (
+        With<RefVisual>,
+        Or<(
+            Added<nvf_play::DrawOnly>,
+            Added<PointLight>,
+            Added<SpotLight>,
+            Added<crate::lights::SessionLight>,
+        )>,
+    ),
+>;
+
+#[derive(bevy::ecs::system::SystemParam)]
+struct VisualChanges<'w, 's> {
+    changed: VisualChangedQuery<'w, 's>,
+    excluded_added: VisualExcludedAddedQuery<'w, 's>,
+    children: Query<'w, 's, &'static Children>,
+    removed_visual: RemovedComponents<'w, 's, RefVisual>,
+    removed_parent: RemovedComponents<'w, 's, ChildOf>,
+    removed_draw_only: RemovedComponents<'w, 's, nvf_play::DrawOnly>,
+    removed_point_light: RemovedComponents<'w, 's, PointLight>,
+    removed_spot_light: RemovedComponents<'w, 's, SpotLight>,
+    removed_session_light: RemovedComponents<'w, 's, crate::lights::SessionLight>,
+}
+
+impl VisualRootCache {
+    fn is_root(v: u32, p: Option<&ChildOf>, visuals: &Visuals) -> bool {
+        p.is_none_or(|p| visuals.get(p.parent()).map_or(true, |(_, pv, _)| pv.0 != v))
+    }
+
+    fn remove_entity(&mut self, e: Entity) -> Option<u32> {
+        let old = self.entity_ref.remove(&e)?;
+        if let Some(list) = self.roots.get_mut(&old) {
+            list.retain(|&x| x != e);
+            if list.is_empty() {
+                self.roots.remove(&old);
+            }
+        }
+        Some(old)
+    }
+
+    fn insert_root(&mut self, r: u32, e: Entity) {
+        if let Some(old) = self.entity_ref.insert(e, r) {
+            if old != r {
+                if let Some(list) = self.roots.get_mut(&old) {
+                    list.retain(|&x| x != e);
+                    if list.is_empty() {
+                        self.roots.remove(&old);
+                    }
+                }
+            }
+        }
+        let list = self.roots.entry(r).or_default();
+        if !list.contains(&e) {
+            list.push(e);
+        }
+    }
+
+    fn revalidate_ref(&mut self, r: u32, visuals: &Visuals) {
+        let Some(mut list) = self.roots.remove(&r) else { return };
+        list.retain(|&e| {
+            let keep = visuals.get(e).ok().is_some_and(|(_, v, p)| v.0 == r && Self::is_root(r, p, visuals));
+            if !keep && self.entity_ref.get(&e) == Some(&r) {
+                self.entity_ref.remove(&e);
+            }
+            keep
+        });
+        if !list.is_empty() {
+            self.roots.insert(r, list);
+        }
+    }
+
+    fn refresh_entity(&mut self, e: Entity, visuals: &Visuals) {
+        match visuals.get(e) {
+            Ok((_, v, p)) if v.0 != FormId::PLAYER_REF.0 => {
+                if Self::is_root(v.0, p, visuals) {
+                    self.insert_root(v.0, e);
+                } else {
+                    self.remove_entity(e);
+                }
+                self.revalidate_ref(v.0, visuals);
+            }
+            _ => {
+                self.remove_entity(e);
+            }
+        }
+    }
+
+    /// Re-evaluate direct children of `parent` whenever `parent` loses `RefVisual`, gains an
+    /// exclusion component (`DrawOnly`/`PointLight`/`SpotLight`/`SessionLight`), or mutates
+    /// its `RefVisual` so any direct child carrying the old reference is promoted to root.
+    fn promote_children(&mut self, parent: Entity, visuals: &Visuals, children: &Query<&Children>) {
+        let Ok(kids) = children.get(parent) else { return };
+        for child in kids.iter() {
+            if visuals.get(child).is_ok() {
+                self.refresh_entity(child, visuals);
+            }
+        }
+    }
+
+    fn drain_removed(changes: &mut VisualChanges) {
+        for _ in changes.removed_visual.read() {}
+        for _ in changes.removed_parent.read() {}
+        for _ in changes.removed_draw_only.read() {}
+        for _ in changes.removed_point_light.read() {}
+        for _ in changes.removed_spot_light.read() {}
+        for _ in changes.removed_session_light.read() {}
+    }
+
+    /// Idle-frame maintenance when `rt` is `None` or nothing wants a reference:
+    /// drain `RemovedComponents` readers without scanning `Added`/`Changed` queries
+    /// and reset `initialized` so the next active frame rebuilds the cache once.
+    fn suspend(&mut self, changes: &mut VisualChanges) {
+        Self::drain_removed(changes);
+        self.initialized = false;
+        self.roots.clear();
+        self.entity_ref.clear();
+    }
+
+    fn sync(&mut self, visuals: &Visuals, changes: &mut VisualChanges) {
+        if !self.initialized {
+            // Drain any initial deltas before doing the one-time full scan.
+            Self::drain_removed(changes);
+            self.roots.clear();
+            self.entity_ref.clear();
+            for (e, v, p) in visuals.iter() {
+                if v.0 != FormId::PLAYER_REF.0 && Self::is_root(v.0, p, visuals) {
+                    self.insert_root(v.0, e);
+                }
+            }
+            self.initialized = true;
+            return;
+        }
+
+        // 1. Removals / despawns of `RefVisual`: evict and promote any direct children
+        //    that kept `RefVisual` if the parent entity itself survived.
+        for e in changes.removed_visual.read() {
+            self.remove_entity(e);
+            self.promote_children(e, visuals, &changes.children);
+        }
+
+        // 2. Added exclusion components (`DrawOnly`, `PointLight`, `SpotLight`, `SessionLight`):
+        //    evict the excluded entity and promote any direct `RefVisual` children.
+        for e in changes.excluded_added.iter() {
+            self.remove_entity(e);
+            self.promote_children(e, visuals, &changes.children);
+        }
+
+        // 3. Removals of `ChildOf`, `DrawOnly`, `PointLight`, `SpotLight`, `SessionLight`
+        //    can make an existing `RefVisual` entity become a valid root (or shadow a child).
+        for e in changes.removed_parent.read() {
+            self.refresh_entity(e, visuals);
+        }
+        for e in changes.removed_draw_only.read() {
+            self.refresh_entity(e, visuals);
+        }
+        for e in changes.removed_point_light.read() {
+            self.refresh_entity(e, visuals);
+        }
+        for e in changes.removed_spot_light.read() {
+            self.refresh_entity(e, visuals);
+        }
+        for e in changes.removed_session_light.read() {
+            self.refresh_entity(e, visuals);
+        }
+
+        // 4. Added or mutated `RefVisual` / `ChildOf`: update the entity and promote direct
+        //    children in case `RefVisual` changed from `old_r` to `new_r` or `PLAYER_REF`.
+        for (e, v, p) in changes.changed.iter() {
+            if v.0 == FormId::PLAYER_REF.0 {
+                self.remove_entity(e);
+            } else if Self::is_root(v.0, p, visuals) {
+                self.insert_root(v.0, e);
+                self.revalidate_ref(v.0, visuals);
+            } else {
+                self.remove_entity(e);
+                self.revalidate_ref(v.0, visuals);
+            }
+            self.promote_children(e, visuals, &changes.children);
+        }
+    }
+
+    /// Look up the live root entity for `r`, defensively pruning any stale entry.
+    fn get_live(&mut self, r: u32, visuals: &Visuals) -> Option<Entity> {
+        let list = self.roots.get_mut(&r)?;
+        while let Some(&e) = list.first() {
+            if visuals.get(e).ok().is_some_and(|(_, v, p)| v.0 == r && Self::is_root(r, p, visuals)) {
+                return Some(e);
+            }
+            list.remove(0);
+            if self.entity_ref.get(&e) == Some(&r) {
+                self.entity_ref.remove(&e);
+            }
+        }
+        self.roots.remove(&r);
+        None
+    }
 }
 
 /// A node of a model file: its name, its parent's index, its local transform.
@@ -290,6 +517,7 @@ type DrawnMaterials<'w, 's> = Query<
         Option<&'static MeshMaterial3d<NifMaterial>>,
         Option<&'static crate::mesh_terrain_blend::BlendShape>,
         Option<&'static nvf_assets::nif_material::MaterialOverride>,
+        Option<&'static nvf_play::fade::Fading>,
     ),
 >;
 
@@ -298,6 +526,9 @@ type EmitterSummary = (String, Option<String>, [f32; 21]);
 
 /// Clone-on-write a shape entity's `NifMaterial` (sharing one private copy across
 /// multiple edits in the same frame via `made_now` / `owned`) and run `mutate`.
+/// While a fade or `SetActorAlpha` owns a see-through copy (`nvf_play::fade::Fading`),
+/// edits target the mesh's own persistent material and refresh the see-through copy in
+/// place so the edit survives when the fade ends [design, #3105].
 #[allow(clippy::too_many_arguments)]
 fn mutate_shape_material(
     e: Entity,
@@ -309,21 +540,21 @@ fn mutate_shape_material(
     mutate: impl FnOnce(&mut NifMaterial),
 ) {
     let Some(assets) = assets else { return };
-    let Ok((handle, blend, drawing)) = drawn.get(e) else { return };
+    let Ok((handle, blend, drawing, fading)) = drawn.get(e) else { return };
     let Some(handle) = nvf_assets::nif_surface_blend::source_material(handle, blend) else { return };
     // A private copy made earlier in this drain is not drawn yet (deferred
     // insert): a later edit of the same shape goes to that copy, or a second
     // copy of the old material would win with the first edit lost (#2981).
     let source = match made_now.get(&e) {
         Some(h) => h.clone(),
-        None => nvf_assets::nif_material::plain_material(handle, drawing).clone(),
+        None => nvf_play::fade::persistent_material(handle, drawing, fading).clone(),
     };
-    match owned.get(&e).filter(|h| **h == source).cloned() {
+    let h = match owned.get(&e).filter(|h| **h == source).cloned() {
         Some(h) => {
             if let Some(mut m) = assets.get_mut(&h) {
                 mutate(&mut m);
             }
-            commands.entity(e).insert(MeshMaterial3d(h));
+            h
         }
         None => {
             let Some(mut m) = assets.get(&source).cloned() else { return };
@@ -331,8 +562,13 @@ fn mutate_shape_material(
             let h = assets.add(m);
             owned.insert(e, h.clone());
             made_now.insert(e, h.clone());
-            commands.entity(e).insert(MeshMaterial3d(h));
+            h
         }
+    };
+    if fading.is_some() {
+        nvf_play::fade::queue_retarget(commands, e, h);
+    } else {
+        commands.entity(e).insert(MeshMaterial3d(h));
     }
 }
 
@@ -558,7 +794,181 @@ type Materials<'w, 's> = (Option<Res<'w, GameData>>, DrawnMaterials<'w, 's>, Opt
 /// item whose shapes hang straight from its root is drawn flat.
 type Dropped<'w, 's> = (Query<'w, 's, (&'static nvf_play::dropped::DroppedRoot, Option<&'static nvf_play::dropped::DroppedModel>, Option<&'static Children>)>, Query<'w, 's, (), With<Children>>);
 
+/// Per-frame O(1) lookup index for [`mirror_game`], built with a single scan over
+/// `rigs`, `dropped`, and `visuals` instead of rescanning every `RefVisual` for each
+/// watched or edited reference (`O(V + R + D + W)` instead of `O(W * V)`).
+#[derive(Default)]
+struct MirrorIndex<'a> {
+    player_third: Option<(Entity, ActorRig)>,
+    player_first: Option<(Entity, ActorRig)>,
+    rigs_by_ref: HashMap<u32, (Entity, &'a ActorRig)>,
+    visual_roots: HashMap<u32, Entity>,
+    flat_by_ref: HashMap<u32, String>,
+}
+
+impl<'a> MirrorIndex<'a> {
+    fn build_from_cache(
+        wanted_refs: &HashSet<u32>,
+        rigs: &'a Rigs,
+        visuals: &Visuals,
+        (roots, nested): &Dropped,
+        cache: &mut VisualRootCache,
+    ) -> Self {
+        if wanted_refs.is_empty() {
+            return Self::default();
+        }
+        let (actors, player) = rigs;
+        let (player_third, player_first) = if wanted_refs.contains(&FormId::PLAYER_REF.0) {
+            match player.as_deref() {
+                Some(p) => (p.script_rig(false), p.script_rig(true)),
+                None => (None, None),
+            }
+        } else {
+            (None, None)
+        };
+        let mut rigs_by_ref = HashMap::new();
+        for (e, a) in actors.iter() {
+            if wanted_refs.contains(&a.reference) {
+                rigs_by_ref.entry(a.reference).or_insert((e, a));
+            }
+        }
+        let mut flat_by_ref = HashMap::new();
+        for (d, m, ch) in roots.iter() {
+            if wanted_refs.contains(&d.0)
+                && !flat_by_ref.contains_key(&d.0)
+                && ch.is_some_and(|c| c.iter().all(|e| !nested.contains(e)))
+            {
+                let m = m.map(|m| m.0.as_str()).unwrap_or_default();
+                let m = m.get(..7).filter(|p| p.eq_ignore_ascii_case("meshes\\")).map_or(m, |_| &m[7..]).to_string();
+                flat_by_ref.insert(d.0, m);
+            }
+        }
+        let mut visual_roots = HashMap::new();
+        for &r in wanted_refs {
+            if r == FormId::PLAYER_REF.0 || rigs_by_ref.contains_key(&r) {
+                continue;
+            }
+            if let Some(e) = cache.get_live(r, visuals) {
+                visual_roots.insert(r, e);
+            }
+        }
+        Self { player_third, player_first, rigs_by_ref, visual_roots, flat_by_ref }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn build(
+        wanted_refs: &HashSet<u32>,
+        rigs: &'a Rigs,
+        visuals: &Visuals,
+        (roots, nested): &Dropped,
+    ) -> Self {
+        if wanted_refs.is_empty() {
+            return Self::default();
+        }
+        let (actors, player) = rigs;
+        let (player_third, player_first) = if wanted_refs.contains(&FormId::PLAYER_REF.0) {
+            match player.as_deref() {
+                Some(p) => (p.script_rig(false), p.script_rig(true)),
+                None => (None, None),
+            }
+        } else {
+            (None, None)
+        };
+        let mut rigs_by_ref = HashMap::new();
+        for (e, a) in actors.iter() {
+            if wanted_refs.contains(&a.reference) {
+                rigs_by_ref.entry(a.reference).or_insert((e, a));
+            }
+        }
+        let mut flat_by_ref = HashMap::new();
+        for (d, m, ch) in roots.iter() {
+            if wanted_refs.contains(&d.0)
+                && !flat_by_ref.contains_key(&d.0)
+                && ch.is_some_and(|c| c.iter().all(|e| !nested.contains(e)))
+            {
+                // The drop's path is under meshes already; the tables here take it without.
+                let m = m.map(|m| m.0.as_str()).unwrap_or_default();
+                let m = m.get(..7).filter(|p| p.eq_ignore_ascii_case("meshes\\")).map_or(m, |_| &m[7..]).to_string();
+                flat_by_ref.insert(d.0, m);
+            }
+        }
+        let needs_visuals = wanted_refs
+            .iter()
+            .any(|&r| r != FormId::PLAYER_REF.0 && !rigs_by_ref.contains_key(&r));
+        let mut visual_roots = HashMap::new();
+        if needs_visuals {
+            for (e, v, p) in visuals.iter() {
+                if !wanted_refs.contains(&v.0)
+                    || v.0 == FormId::PLAYER_REF.0
+                    || rigs_by_ref.contains_key(&v.0)
+                    || visual_roots.contains_key(&v.0)
+                {
+                    continue;
+                }
+                if p.is_none_or(|p| visuals.get(p.parent()).map_or(true, |(_, pv, _)| pv.0 != v.0)) {
+                    visual_roots.insert(v.0, e);
+                }
+            }
+        }
+        Self { player_third, player_first, rigs_by_ref, visual_roots, flat_by_ref }
+    }
+
+    fn rig_of(&self, r: u32, view: ModelView) -> Option<(Entity, &ActorRig)> {
+        if r == FormId::PLAYER_REF.0 {
+            if view == ModelView::Reference { return None; }
+            return selected_player_rig(
+                view,
+                || self.player_third.as_ref().map(|(e, a)| (*e, a)),
+                || self.player_first.as_ref().map(|(e, a)| (*e, a)),
+            );
+        }
+        self.rigs_by_ref.get(&r).copied()
+    }
+
+    fn root_of(&self, r: u32, view: ModelView) -> Option<Entity> {
+        if let Some((e, _)) = self.rig_of(r, view) {
+            return Some(e);
+        }
+        if r == FormId::PLAYER_REF.0 { return None; }
+        self.visual_roots.get(&r).copied()
+    }
+
+    fn rig_names(&self, r: u32, view: ModelView) -> RigNames {
+        self.rig_of(r, view)
+            .map(|(root, a)| RigNames {
+                root: Some(root),
+                names: a.nodes.iter().zip(&a.skel.names).filter_map(|(e, n)| n.clone().map(|n| (*e, n))).collect(),
+            })
+            .unwrap_or_default()
+    }
+
+    fn drawn_flat(&self, r: u32) -> Option<&str> {
+        self.flat_by_ref.get(&r).map(String::as_str)
+    }
+}
+
+fn edit_ref(edit: &SceneEdit) -> Option<FormId> {
+    match edit {
+        SceneEdit::Translation { r, .. }
+        | SceneEdit::Rotation { r, .. }
+        | SceneEdit::Scale { r, .. }
+        | SceneEdit::Flags { r, .. }
+        | SceneEdit::ChildFlags { r, .. }
+        | SceneEdit::Rename { r, .. }
+        | SceneEdit::Remove { r, .. }
+        | SceneEdit::Insert { r, .. }
+        | SceneEdit::Attach { r, .. }
+        | SceneEdit::Light { r, .. }
+        | SceneEdit::Material { r, .. }
+        | SceneEdit::AlphaProperty { r, .. }
+        | SceneEdit::StencilProperty { r, .. }
+        | SceneEdit::Particle { r, .. } => Some(*r),
+        SceneEdit::ForModel { edit, .. } => edit_ref(edit),
+    }
+}
+
 /// The model of `r` when it is a created item drawn as flat shapes (no node entities).
+#[cfg(test)]
 fn drawn_flat(r: u32, (roots, nested): &Dropped) -> Option<String> {
     roots.iter().find(|(d, _, ch)| d.0 == r && ch.is_some_and(|c| c.iter().all(|e| !nested.contains(e)))).map(|(_, m, _)| {
         // The drop's path is under meshes already; the tables here take it without.
@@ -575,6 +985,7 @@ fn mirror(
     mut script: Option<ResMut<ScriptState>>,
     rigs: Rigs,
     visuals: Visuals,
+    mut visual_changes: VisualChanges,
     parents: Query<&ChildOf>,
     nodes: NodeQuery,
     commands: Commands,
@@ -584,15 +995,49 @@ fn mirror(
     extra: Extra,
     dropped: Dropped,
 ) {
-    let Some(rt) = script.as_deref_mut().and_then(|s| s.rt.as_mut()) else { return };
-    mirror_game(&mut rt.game, rigs, visuals, parents, nodes, commands, &mut mem, materials, shapes, extra, dropped);
+    let Some(rt) = script.as_deref_mut().and_then(|s| s.rt.as_mut()) else {
+        mem.visual_cache.suspend(&mut visual_changes);
+        return;
+    };
+    mirror_game_impl(
+        &mut rt.game,
+        rigs,
+        visuals,
+        parents,
+        nodes,
+        commands,
+        &mut mem,
+        materials,
+        shapes,
+        extra,
+        dropped,
+        Some(&mut visual_changes),
+    );
 }
 
 /// The real mirror producer, separated from ScriptState acquisition so authored
 /// CPU controls can exercise the PlayerBody-to-script-to-ECS pipeline without a
 /// game-data loader or renderer. This is also the production mirror's implementation.
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(test), allow(dead_code))]
 fn mirror_game(
+    game: &mut fnv_game::game::Game<'_>,
+    rigs: Rigs,
+    visuals: Visuals,
+    parents: Query<&ChildOf>,
+    nodes: NodeQuery,
+    commands: Commands,
+    mem: &mut Memory,
+    materials: Materials,
+    shapes: Shapes,
+    extra: Extra,
+    dropped: Dropped,
+) {
+    mirror_game_impl(game, rigs, visuals, parents, nodes, commands, mem, materials, shapes, extra, dropped, None);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn mirror_game_impl(
     game: &mut fnv_game::game::Game<'_>,
     rigs: Rigs,
     visuals: Visuals,
@@ -604,26 +1049,57 @@ fn mirror_game(
     (shapes, meshes): Shapes,
     (globals, boxes, mut particles, world, sim): Extra,
     dropped: Dropped,
+    visual_changes: Option<&mut VisualChanges>,
 ) {
-    let Memory { logged, held, bound_held, pending_held, edit_order, tables, materials, alpha_props, stencil_props, owned, attachment_materials, attachment_alpha, attachment_stencil, props, files } = mem;
+    let Memory { logged, held, bound_held, pending_held, edit_order, tables, materials, alpha_props, stencil_props, owned, attachment_materials, attachment_alpha, attachment_stencil, props, files, visual_cache } = mem;
     game.scene.use_separate_player_models();
     let edits = game.scene.take_targeted_edits();
+    // Collect watched refs and wanted vertices upfront so a single per-frame pass
+    // indexes rigs, flat drops, and RefVisual roots for every ref touched this frame.
+    let mut watched: Vec<FormId> = game.scene.watched().collect();
+    if !watched.is_empty() {
+        let mut seen_watched: HashSet<u32> = watched.iter().map(|r| r.0).collect();
+        let created = rigs.0.iter().map(|(_, a)| a.reference).filter(|r| r >> 24 == 0xFF).chain(dropped.0.iter().map(|(d, _, _)| d.0));
+        for r in std::iter::once(FormId::PLAYER_REF.0).chain(created) {
+            if seen_watched.insert(r) {
+                watched.push(FormId(r));
+            }
+        }
+    }
+    let wanted: Vec<(FormId, String)> = game.scene.wanted_vertices().cloned().collect();
+    let mut wanted_refs: HashSet<u32> = HashSet::with_capacity(
+        edits.len() + held.len() + pending_held.len() + bound_held.len() + watched.len() + wanted.len(),
+    );
+    for queued in &edits {
+        if let Some(r) = edit_ref(&queued.edit) {
+            wanted_refs.insert(r.0);
+        }
+    }
+    wanted_refs.extend(held.keys().map(|(r, _, _)| *r));
+    wanted_refs.extend(pending_held.keys().map(|(r, _, _)| *r));
+    wanted_refs.extend(bound_held.keys().map(|(r, _, _)| *r));
+    wanted_refs.extend(watched.iter().map(|r| r.0));
+    wanted_refs.extend(wanted.iter().map(|(r, _)| r.0));
+    let index = if let Some(visual_changes) = visual_changes {
+        if wanted_refs.is_empty() {
+            visual_cache.suspend(visual_changes);
+            MirrorIndex::default()
+        } else {
+            visual_cache.sync(&visuals, visual_changes);
+            MirrorIndex::build_from_cache(&wanted_refs, &rigs, &visuals, &dropped, visual_cache)
+        }
+    } else {
+        MirrorIndex::build(&wanted_refs, &rigs, &visuals, &dropped)
+    };
     let mut edits_rest = Vec::new();
     for queued in edits {
         let (view, edit) = queued.edit.into_model();
-        let r = match &edit {
-            SceneEdit::Translation { r, .. } | SceneEdit::Rotation { r, .. } | SceneEdit::Scale { r, .. }
-            | SceneEdit::Flags { r, .. } | SceneEdit::ChildFlags { r, .. } | SceneEdit::Rename { r, .. }
-            | SceneEdit::Remove { r, .. } | SceneEdit::Insert { r, .. } | SceneEdit::Attach { r, .. } | SceneEdit::Light { r, .. }
-            | SceneEdit::Material { r, .. } | SceneEdit::AlphaProperty { r, .. } | SceneEdit::StencilProperty { r, .. }
-            | SceneEdit::Particle { r, .. } => *r,
-            SceneEdit::ForModel { .. } => continue,
-        };
+        let Some(r) = edit_ref(&edit) else { continue };
         let view = concrete_view(r.0, view);
         // File-only publications deliberately keep their original legacy contract:
         // transforms are remembered even when no RefVisual root can be resolved,
         // and non-transforms still reach the original name-based handlers below.
-        if queued.target == SceneTarget::Legacy && drawn_flat(r.0, &dropped).is_some() {
+        if queued.target == SceneTarget::Legacy && index.drawn_flat(r.0).is_some() {
             if !remember_transform(view, &edit, held) { edits_rest.push((view, edit, None)); }
             continue;
         }
@@ -631,7 +1107,7 @@ fn mirror_game(
         // The file-only legacy route above keeps its existing behavior.
         let Some(order) = edit_order.checked_add(1) else { continue };
         *edit_order = order;
-        let root = root_of(r.0, view, &rigs, &visuals);
+        let root = index.root_of(r.0, view);
         if matches!(queued.target, SceneTarget::Legacy | SceneTarget::Model(_)) {
             let captured = match queued.target { SceneTarget::Model(model) => Some(model), _ => None };
             if captured.is_some_and(|model| root.is_none_or(|root| root.to_bits() != model || nodes.get(root).is_err())) {
@@ -661,7 +1137,7 @@ fn mirror_game(
             continue;
         }
         let Some(root) = root else { continue };
-        let rig = rig_names(r.0, view, &rigs);
+        let rig = index.rig_names(r.0, view);
         let entity = match queued.target {
             SceneTarget::Node(identity) => {
                 let Some(entity) = bound_entity(root, identity, &nodes, &rig) else { continue };
@@ -678,12 +1154,9 @@ fn mirror_game(
     // The private material copies made in this drain, by shape (`SceneEdit::Material`).
     let mut made_now: HashMap<Entity, Handle<NifMaterial>> = HashMap::new();
     for (view, edit, entity) in edits_rest {
-        let r = match &edit {
-            SceneEdit::Translation { r, .. } | SceneEdit::Rotation { r, .. } | SceneEdit::Scale { r, .. } | SceneEdit::Flags { r, .. } | SceneEdit::ChildFlags { r, .. } | SceneEdit::Rename { r, .. } | SceneEdit::Remove { r, .. } | SceneEdit::Insert { r, .. } | SceneEdit::Attach { r, .. } | SceneEdit::Light { r, .. } | SceneEdit::Material { r, .. } | SceneEdit::AlphaProperty { r, .. } | SceneEdit::StencilProperty { r, .. } | SceneEdit::Particle { r, .. } => *r,
-            SceneEdit::ForModel { .. } => continue,
-        };
-        let Some(root) = root_of(r.0, view, &rigs, &visuals) else { continue };
-        let rig = rig_names(r.0, view, &rigs);
+        let Some(r) = edit_ref(&edit) else { continue };
+        let Some(root) = index.root_of(r.0, view) else { continue };
+        let rig = index.rig_names(r.0, view);
         // Cold compatibility and the legacy file path resolve once by name/index. Keeping
         // an absent entity is significant: particle/material handlers historically
         // did work before or without finding a concrete shape.
@@ -873,20 +1346,20 @@ fn mirror_game(
     // The held transforms, over this frame's pose.
     let keys: Vec<(u32, ModelView, String)> = held.keys().cloned().collect();
     for (r, view, node) in keys {
-        let Some(root) = root_of(r, view, &rigs, &visuals) else { continue };
-        let rig = rig_names(r, view, &rigs);
+        let Some(root) = index.root_of(r, view) else { continue };
+        let rig = index.rig_names(r, view);
         let h = held[&(r, view, node.clone())];
         apply_held(root, &node, h, &mut nodes, &rig);
     }
     // Name-based startup holds acquire a model as soon as it exists. They may
     // wait for a late child only in that model, then become concrete node holds.
     pending_held.retain(|&(r, view, ref name), pending| {
-        let Some(root) = root_of(r, view, &rigs, &visuals) else { return pending.model.is_none() };
+        let Some(root) = index.root_of(r, view) else { return pending.model.is_none() };
         if nodes.get(root).is_err() { return pending.model.is_none() }
         let model = root.to_bits();
         if pending.model.is_some_and(|captured| captured != model) { return false }
         pending.model = Some(model);
-        let rig = rig_names(r, view, &rigs);
+        let rig = index.rig_names(r, view);
         let Some(entity) = find(root, name, &nodes, &rig) else { return true };
         let identity = SceneIdentity { model, node: entity.to_bits() };
         if bound_entity(root, identity, &nodes, &rig).is_none() { return true }
@@ -897,8 +1370,8 @@ fn mirror_game(
     // An edit holds over animation only while this exact model/node lives. A
     // disappearance, immediate root replacement, child ABA or subtree departure expires it.
     bound_held.retain(|&(r, view, identity), value| {
-        let Some(root) = root_of(r, view, &rigs, &visuals) else { return false };
-        let rig = rig_names(r, view, &rigs);
+        let Some(root) = index.root_of(r, view) else { return false };
+        let rig = index.rig_names(r, view);
         let Some(entity) = bound_entity(root, identity, &nodes, &rig) else { return false };
         apply_value(entity, value.value, &mut nodes);
         true
@@ -926,20 +1399,11 @@ fn mirror_game(
     // set's first reads of the player, of Doc's copy and of the pistol, #2132]. Any other
     // reference is told from the frame after a script first asks about it. A game whose
     // scripts never use them walks no tree here.
-    let mut watched: Vec<FormId> = game.scene.watched().collect();
-    if !watched.is_empty() {
-        let created = rigs.0.iter().map(|(_, a)| a.reference).filter(|r| r >> 24 == 0xFF).chain(dropped.0.iter().map(|(d, _, _)| d.0));
-        for r in std::iter::once(FormId::PLAYER_REF.0).chain(created).map(FormId) {
-            if !watched.contains(&r) {
-                watched.push(r);
-            }
-        }
-    }
     for r in watched {
-        if let Some(model) = drawn_flat(r.0, &dropped) {
+        if let Some(model) = index.drawn_flat(r.0) {
             let Some(d) = data.as_deref() else { continue };
-            let file = files.entry(model.clone()).or_insert_with(|| file_tree(d, &model));
-            let table = tables.entry(model.clone()).or_insert_with(|| material_table(d, &model));
+            let file = files.entry(model.to_string()).or_insert_with(|| file_tree(d, model));
+            let table = tables.entry(model.to_string()).or_insert_with(|| material_table(d, model));
             let tree = file_scene(r, file, table, held, materials);
             if logged.insert(r.0 ^ 0x4000_0000) {
                 info!("nif mirror: {:08X} told from its model file {model:?} (drawn flat), {} nodes, first {:?}", r.0, tree.len(), tree.iter().take(4).map(|n| n.name.as_str()).collect::<Vec<_>>());
@@ -951,7 +1415,7 @@ fn mirror_game(
             &[ModelView::ThirdPerson, ModelView::FirstPerson]
         } else { &[ModelView::Reference] };
         for &view in views {
-            let Some(root) = root_of(r.0, view, &rigs, &visuals) else {
+            let Some(root) = index.root_of(r.0, view) else {
                 if logged.insert(r.0) {
                     info!("nif mirror: {:08X} watched, not drawn", r.0);
                 }
@@ -964,21 +1428,23 @@ fn mirror_game(
                 game.scene.forget_model(r, view);
                 continue;
             }
-            let rig = rig_names(r.0, view, &rigs);
+            let rig = index.rig_names(r.0, view);
             let mut seen: HashMap<String, u32> = HashMap::new();
             // Per-view cache keys do not establish per-view file ownership. Until
             // the first-person model's actual shape source is supplied, metadata
             // from MODL/placed systems of the reference is unavailable for that rig.
             let model = if view == ModelView::FirstPerson { None }
                 else { fnv_game::nif_blocks::model_of(game, r) };
-            let table = match (data.as_deref(), model.as_deref()) {
-                (Some(d), Some(model)) => tables.entry(model.to_string()).or_insert_with(|| material_table(d, model)).clone(),
-                _ => HashMap::new(),
-            };
-            let props = match (data.as_deref(), model.as_deref()) {
-                (Some(d), Some(model)) => props.entry(model.to_string()).or_insert_with(|| property_table(d, model)).clone(),
-                _ => HashMap::new(),
-            };
+            if let (Some(d), Some(model)) = (data.as_deref(), model.as_deref()) {
+                if !tables.contains_key(model) {
+                    tables.insert(model.to_string(), material_table(d, model));
+                }
+                if !props.contains_key(model) {
+                    props.insert(model.to_string(), property_table(d, model));
+                }
+            }
+            let table = model.as_deref().and_then(|m| tables.get(m));
+            let prop_table = model.as_deref().and_then(|m| props.get(m));
             let systems: Vec<(String, Option<String>, [f32; 21])> = if view == ModelView::FirstPerson { Vec::new() } else { particles
                 .as_deref_mut()
                 .map(|p| crate::particles::placed_systems(p, r.0).into_iter().map(|d| (d.name.clone(), d.emitter.object.clone(), crate::particles::script_values(d))).collect())
@@ -1025,17 +1491,23 @@ fn mirror_game(
                     let (z, y, x) = t.rotation.inverse().to_euler(EulerRot::ZYX);
                     let material = if let Some(attached) = attached { attachment_materials.get(&e).copied().or(attached.material) }
                         else if view == ModelView::FirstPerson { None }
-                        else { materials.get(&(r.0, view, shown.clone())).or_else(|| table.get(&base)).copied() };
+                        else {
+                            (!materials.is_empty())
+                                .then(|| materials.get(&(r.0, view, shown.clone())))
+                                .flatten()
+                                .or_else(|| table.and_then(|t| t.get(&base)))
+                                .copied()
+                        };
                     let (alpha, stencil) = if let Some(attached) = attached {
                         (
                             attachment_alpha.get(&e).copied().or(attached.source.alpha),
                             attachment_stencil.get(&e).copied().or(attached.source.stencil),
                         )
                     } else {
-                        let (base_alpha, base_stencil) = props.get(&base).copied().unwrap_or_default();
+                        let (base_alpha, base_stencil) = prop_table.and_then(|p| p.get(&base)).copied().unwrap_or_default();
                         (
-                            alpha_props.get(&(r.0, view, shown.clone())).copied().or(base_alpha),
-                            stencil_props.get(&(r.0, view, shown.clone())).copied().or(base_stencil),
+                            (!alpha_props.is_empty()).then(|| alpha_props.get(&(r.0, view, shown.clone())).copied()).flatten().or(base_alpha),
+                            (!stencil_props.is_empty()).then(|| stencil_props.get(&(r.0, view, shown.clone())).copied()).flatten().or(base_stencil),
                         )
                     };
                     let emitter = if let Some(attached) = attached {
@@ -1083,11 +1555,11 @@ fn mirror_game(
     // The vertices of the shapes scripts asked about (SUP's NifBlockGetVerticles), in the
     // shape's own space as its mesh holds them; none for a mesh kept on the GPU only
     // [hypothesis: a skinned shape's are its bind pose].
-    let wanted: Vec<(FormId, String)> = game.scene.wanted_vertices().cloned().collect();
     for (r, node) in wanted {
         let view = concrete_view(r.0, ModelView::Reference);
-        let verts = root_of(r.0, view, &rigs, &visuals)
-            .and_then(|root| find(root, &node, &nodes, &rig_names(r.0, view, &rigs)))
+        let verts = index
+            .root_of(r.0, view)
+            .and_then(|root| find(root, &node, &nodes, &index.rig_names(r.0, view)))
             .and_then(|e| shapes.get(e).ok())
             .and_then(|m| meshes.as_deref()?.get(&m.0))
             // `try_`: a mesh extracted to the render world gives none, where `attribute` panics (#2202).
@@ -1113,9 +1585,58 @@ mod attachment_tests;
 mod camera_overlay_tests;
 
 #[cfg(test)]
+#[path = "nif_mirror/visual_index_tests.rs"]
+mod visual_index_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
+
+    /// The light in the air draws solid cores of some shapes (solid_cores.rs, #3032), loose
+    /// entities of their own: switching it on and off leaves the shapes' components (their
+    /// archetype) and children, the reference's root, the node walk and a dropped item's flat
+    /// look as they were.
+    #[test]
+    fn the_lights_solid_cores_leave_the_model_as_it_is() {
+        use crate::solid_cores::tests as cores;
+        const R: u32 = 7;
+        let mut app = cores::app(Some(true));
+        let m = cores::add(&mut app, cores::tank());
+        let plain = cores::add(&mut app, nvf_assets::nif_material(StandardMaterial::default()));
+        // A reference drawn as two flat shapes of its cell, one with a core; one with nodes.
+        let w = app.world_mut();
+        let cell = w.spawn((Transform::IDENTITY, Visibility::Inherited)).id();
+        let root = w.spawn((nvf_play::RefVisual(8), Transform::IDENTITY, Visibility::Inherited)).id();
+        let item = w.spawn((nvf_play::dropped::DroppedRoot(9), nvf_play::dropped::DroppedModel("meshes\\item.nif".into()), Transform::IDENTITY, Visibility::Inherited)).id();
+        let shapes = [(&m, cell, R), (&plain, cell, R), (&m, root, 8), (&m, item, 9)].map(|(m, parent, r)| {
+            let e = cores::place(&mut app, m);
+            app.world_mut().entity_mut(e).insert((nvf_play::RefVisual(r), Name::new("Shape"), ChildOf(parent)));
+            e
+        });
+        app.world_mut().spawn((Transform::IDENTITY, Visibility::Inherited, Name::new("Below"), ChildOf(shapes[2])));
+        let mut told = |on: bool| {
+            app.insert_resource(crate::medium_air_demand::AirDraws(on));
+            app.update();
+            assert_eq!(cores::cores(&mut app).len(), if on { 3 } else { 0 });
+            let w = app.world_mut();
+            let kept = [cell, root, item, shapes[0], shapes[1], shapes[2], shapes[3]].map(|e| (w.entity(e).archetype().id(), w.get::<Children>(e).map(|c| c.to_vec())));
+            let seen = w
+                .run_system_once(move |rigs: Rigs, visuals: Visuals, nodes: NodeQuery, dropped: Dropped| {
+                    let tops = [R, 8, 9].map(|r| root_of(r, ModelView::Reference, &rigs, &visuals));
+                    let drawn: Vec<Entity> = visuals.iter().map(|v| v.0).collect();
+                    (tops, drawn, walk(root, &nodes, &RigNames::default()), drawn_flat(9, &dropped))
+                })
+                .unwrap();
+            (kept, seen)
+        };
+        let off = told(false);
+        assert_eq!(off.1.2.len(), 2, "the shape and the node below it");
+        assert_eq!(off.1.3.as_deref(), Some("item.nif"));
+        for on in [true, false, true] {
+            assert!(told(on) == off, "light {on}");
+        }
+    }
 
     /// #2981: a script's alpha-only edit writes every value back, glossiness included; on an
     /// authored material the set's roughness and reflectance stay, the glossiness goes to the
@@ -1265,5 +1786,160 @@ mod tests {
         assert_eq!(world.get::<Transform>(third_bone).unwrap().translation, Vec3::new(30.0, 0.0, 0.0));
         assert_eq!(world.get::<Transform>(first_bone).unwrap().scale, Vec3::splat(2.0));
         assert_eq!(world.get::<Transform>(third_bone).unwrap().scale, Vec3::splat(3.0));
+    }
+
+    /// #3105: a script material edit (`mutate_shape_material`) made while a presence fade
+    /// (or overlapping `SetActorAlpha`) runs targets the mesh's own persistent material,
+    /// refreshes the see-through copy in place at the combined opacity, and survives after
+    /// the fade ends.
+    #[test]
+    fn a_script_material_edit_during_a_fade_is_kept_after_the_fade_ends() {
+        let mut world = World::new();
+        world.init_resource::<Assets<NifMaterial>>();
+        let mut mat = nvf_assets::nif_material(StandardMaterial::default());
+        mat.extension.depth_write = true;
+        let own = world.resource_mut::<Assets<NifMaterial>>().add(mat);
+        let e = world.spawn(MeshMaterial3d(own.clone())).id();
+        // Start both presence fade (0.5) and actor alpha (0.5) -> combined factor 0.25.
+        nvf_play::fade::apply_factor(&mut world, e, nvf_play::fade::FadeChannel::Presence, Some(0.5));
+        nvf_play::fade::apply_factor(&mut world, e, nvf_play::fade::FadeChannel::ActorAlpha, Some(0.5));
+        let fade_copy = world.get::<nvf_play::fade::Fading>(e).unwrap().copy().clone();
+        let mut owned = HashMap::new();
+        let mut made_now = HashMap::new();
+        // First script edit during the fade: emissive + alpha = 0.8 + glossiness.
+        let vals = [0.2, 0.3, 0.4, 0.9, 0.1, 0.2, 20.0, 0.8, 1.0];
+        let mut owned_out = std::mem::take(&mut owned);
+        let mut made_out = std::mem::take(&mut made_now);
+        world.run_system_once(move |drawn: DrawnMaterials, mut assets: ResMut<Assets<NifMaterial>>, mut commands: Commands| {
+            mutate_shape_material(e, &drawn, Some(&mut assets), &mut owned_out, &mut made_out, &mut commands, |m| {
+                set_material(m, &vals, 3);
+            });
+            // A second edit in the same frame updates the same private persistent copy.
+            let vals2 = [0.2, 0.3, 0.4, 0.9, 0.5, 0.2, 20.0, 0.8, 1.0];
+            mutate_shape_material(e, &drawn, Some(&mut assets), &mut owned_out, &mut made_out, &mut commands, |m| {
+                set_material(m, &vals2, 4);
+            });
+            assert_eq!(owned_out.len(), 1);
+        }).unwrap();
+        let edited = world.get::<nvf_play::fade::Fading>(e).expect("still fading").original().clone();
+        assert_ne!(edited, own, "edit created a private persistent material");
+        // While fading: the see-through copy shows the edited emissive and 0.8 * 0.25 alpha.
+        {
+            let mats = world.resource::<Assets<NifMaterial>>();
+            let drawn = mats.get(&fade_copy).unwrap();
+            assert_eq!(drawn.base.emissive, LinearRgba::rgb(0.9, 0.5, 0.2));
+            assert!((drawn.base.base_color.alpha() - 0.8 * 0.25).abs() < 1e-6);
+            // The persistent material itself keeps full edited alpha (0.8) and opaque mode.
+            let base = mats.get(&edited).unwrap();
+            assert_eq!(base.base.emissive, LinearRgba::rgb(0.9, 0.5, 0.2));
+            assert!((base.base.base_color.alpha() - 0.8).abs() < 1e-6);
+            assert_eq!(base.base.alpha_mode, AlphaMode::Opaque);
+            assert!(base.extension.depth_write);
+        }
+        // End both fades: the edited material is put back, not the pre-edit original.
+        nvf_play::fade::apply_factor(&mut world, e, nvf_play::fade::FadeChannel::Presence, None);
+        nvf_play::fade::apply_factor(&mut world, e, nvf_play::fade::FadeChannel::ActorAlpha, None);
+        assert!(world.get::<nvf_play::fade::Fading>(e).is_none());
+        assert_eq!(world.get::<MeshMaterial3d<NifMaterial>>(e).unwrap().0, edited);
+        let final_mat = world.resource::<Assets<NifMaterial>>().get(&edited).unwrap();
+        assert_eq!(final_mat.base.emissive, LinearRgba::rgb(0.9, 0.5, 0.2));
+        assert!((final_mat.base.base_color.alpha() - 0.8).abs() < 1e-6);
+        assert_eq!(final_mat.base.alpha_mode, AlphaMode::Opaque);
+    }
+
+    #[test]
+    fn mirror_index_matches_root_of_and_drawn_flat_across_hierarchies_and_drops() {
+        const PARENT_CHILD_REF: u32 = 0x401;
+        const CHILD_UNDER_OTHER_REF: u32 = 0x402;
+        const LIGHT_ONLY_REF: u32 = 0x403;
+        const DRAW_ONLY_REF: u32 = 0x404;
+        const FLAT_DROP_REF: u32 = 0xFF00_0010;
+        const NESTED_DROP_REF: u32 = 0xFF00_0011;
+        const MISSING_REF: u32 = 0x4200_1234;
+
+        let mut world = World::new();
+        // Hierarchy where parent and child share the same RefVisual: parent wins.
+        let top = world.spawn((Transform::IDENTITY, RefVisual(PARENT_CHILD_REF))).id();
+        world.spawn((Transform::IDENTITY, RefVisual(PARENT_CHILD_REF), ChildOf(top)));
+        // RefVisual entity parented under a different RefVisual: still its own root.
+        let nested_other = world.spawn((Transform::IDENTITY, RefVisual(CHILD_UNDER_OTHER_REF), ChildOf(top))).id();
+        // Light-only and DrawOnly entities are excluded.
+        world.spawn((PointLight::default(), RefVisual(LIGHT_ONLY_REF)));
+        world.spawn((Transform::IDENTITY, RefVisual(DRAW_ONLY_REF), nvf_play::DrawOnly));
+        // Flat dropped item (children have no children of their own).
+        let flat_root = world.spawn((
+            nvf_play::dropped::DroppedRoot(FLAT_DROP_REF),
+            nvf_play::dropped::DroppedModel("Meshes\\weapons\\pistol.nif".into()),
+        )).id();
+        world.spawn((Transform::IDENTITY, ChildOf(flat_root)));
+        // Nested dropped item (child has a grandchild, so not drawn flat).
+        let nested_root = world.spawn((
+            nvf_play::dropped::DroppedRoot(NESTED_DROP_REF),
+            nvf_play::dropped::DroppedModel("meshes\\clutter\\box.nif".into()),
+        )).id();
+        let nested_mid = world.spawn((Transform::IDENTITY, ChildOf(nested_root))).id();
+        world.spawn((Transform::IDENTITY, ChildOf(nested_mid)));
+
+        let all_refs = [
+            PARENT_CHILD_REF,
+            CHILD_UNDER_OTHER_REF,
+            LIGHT_ONLY_REF,
+            DRAW_ONLY_REF,
+            FLAT_DROP_REF,
+            NESTED_DROP_REF,
+            MISSING_REF,
+            FormId::PLAYER_REF.0,
+        ];
+        world.run_system_once(move |rigs: Rigs, visuals: Visuals, dropped: Dropped| {
+            let wanted: HashSet<u32> = all_refs.into_iter().collect();
+            let index = MirrorIndex::build(&wanted, &rigs, &visuals, &dropped);
+            for r in all_refs {
+                for view in [ModelView::Reference, ModelView::ThirdPerson, ModelView::FirstPerson] {
+                    assert_eq!(
+                        index.root_of(r, view),
+                        root_of(r, view, &rigs, &visuals),
+                        "root mismatch for 0x{r:08X} ({view:?})",
+                    );
+                }
+                assert_eq!(
+                    index.drawn_flat(r).map(str::to_string),
+                    drawn_flat(r, &dropped),
+                    "drawn_flat mismatch for 0x{r:08X}",
+                );
+            }
+            assert_eq!(index.root_of(PARENT_CHILD_REF, ModelView::Reference), Some(top));
+            assert_eq!(index.root_of(CHILD_UNDER_OTHER_REF, ModelView::Reference), Some(nested_other));
+            assert_eq!(index.root_of(LIGHT_ONLY_REF, ModelView::Reference), None);
+            assert_eq!(index.root_of(DRAW_ONLY_REF, ModelView::Reference), None);
+            assert_eq!(index.drawn_flat(FLAT_DROP_REF), Some("weapons\\pistol.nif"));
+            assert_eq!(index.drawn_flat(NESTED_DROP_REF), None);
+            assert_eq!(index.root_of(MISSING_REF, ModelView::Reference), None);
+        }).unwrap();
+    }
+
+    #[test]
+    fn mirror_index_handles_thousands_of_watched_undrawn_refs_and_scene_visuals() {
+        let mut world = World::new();
+        let mut expected_root = None;
+        for i in 0..2_000u32 {
+            let r = 0x0010_0000 + i;
+            let parent = world.spawn((Transform::IDENTITY, RefVisual(r))).id();
+            world.spawn((Transform::IDENTITY, RefVisual(r), ChildOf(parent)));
+            if i == 1_500 {
+                expected_root = Some((r, parent));
+            }
+        }
+        let (drawn_ref, drawn_entity) = expected_root.unwrap();
+        let mut wanted: HashSet<u32> = (0..1_600u32).map(|i| 0x4200_0000 + i).collect();
+        wanted.insert(drawn_ref);
+
+        world.run_system_once(move |rigs: Rigs, visuals: Visuals, dropped: Dropped| {
+            let index = MirrorIndex::build(&wanted, &rigs, &visuals, &dropped);
+            assert_eq!(index.root_of(drawn_ref, ModelView::Reference), Some(drawn_entity));
+            assert_eq!(index.visual_roots.len(), 1, "unwatched scene visuals must not populate the index");
+            for i in 0..1_600u32 {
+                assert_eq!(index.root_of(0x4200_0000 + i, ModelView::Reference), None);
+            }
+        }).unwrap();
     }
 }

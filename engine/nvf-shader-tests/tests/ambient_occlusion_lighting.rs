@@ -35,6 +35,8 @@ fn every_material_that_reads_the_occlusion_compiles_with_and_without_the_def() {
         ("nvforever/terrain.wesl", &[][..]),
         ("nvforever/grass.wesl", &[][..]),
         ("nvforever/tree.wesl", &["TREE_LEAVES"][..]),
+        // The leaf cards' main pass takes the sun's shadow outside their crown (tree.rs).
+        ("nvforever/tree.wesl", &["TREE_LEAVES", "NVF_CROWN_SHADOW"][..]),
         // Bevy's own fragment: the bark (tree.rs `BarkWind` has a vertex shader only) and
         // every StandardMaterial that writes depth.
         ("bevy_pbr/render/pbr.wesl", &[][..]),

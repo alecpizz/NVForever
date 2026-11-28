@@ -66,7 +66,7 @@ fn gun_damage_skill_and_dt() {
 #[test]
 fn a_damage_type_takes_its_resistance_as_well_as_dr() {
     // DR cuts a laser's hit [observed, damage-armour.md §4] and Energy Resistance does
-    // too [hypothesis, weapon-data-fields.md §3]; DT first.
+    // too (see docs/spec-notes/weapon-data-fields.md §3); DT first.
     let laser = WeaponStats { resist: Some("Energy Resistance".into()), ..gun(20) };
     assert_eq!(damage::resistance_of(&laser), Some("Energy Resistance"));
     let d = hit(&laser, 1, &skilled(), &Target { dt: 5.0, dr: 50.0, resist: 20.0, ..Target::default() }, &[], HitPart::default(), 0.99);
@@ -1521,6 +1521,14 @@ fn thrown_grenades_roll_launcher_rounds_do_not() {
     let fall = (2.0 * 110.0 / (1.5 * G)).sqrt();
     assert!((at - fall).abs() < 0.02 && (point[0] - 1750.0 * fall).abs() < 20.0, "{point:?} {at}");
     assert!(matches!(&ev[..], [ProjEvent::Hit { .. }, ProjEvent::Explode { point: p, .. }] if (p[0] - point[0]).abs() < 1e-3), "{ev:?}");
+    // A slow roll comes to rest before the fuse, as the original's taps did (o32_throw):
+    // 300 units/s keeps 180, which 140 a second stops in about 1.3 s, some 115 units on.
+    let tap = ProjectileStats { alt_trigger_timer: 2.5, ..proj("Lobber", &["Explosion", "Alt. Trigger"], 300.0, 1.0) };
+    let mut slow = Projectile::spawn(&tap, Some(BOOM), [0.0, 0.0, 20.0], [1.0, 0.0, 0.0], Some(1), G, &t);
+    fly(&mut slow, &floor, 2.2);
+    let (landed_at, _) = slow.first_contact.expect("it landed");
+    let rolled = slow.pos[0] - landed_at[0];
+    assert!(slow.landed && (80.0..160.0).contains(&rolled), "{rolled} {:?}", slow.pos);
     // A frag mine is no thrown grenade: it settles where it lands.
     let mine = ProjectileStats { alt_trigger_timer: 1.0, alt_trigger_proximity: 100.0, ..proj("Lobber", &["Explosion", "Alt. Trigger"], 0.0, 1.0) };
     assert!(!Projectile::spawn(&mine, Some(BOOM), [0.0; 3], [1.0, 0.0, 0.0], Some(1), G, &t).rolls);

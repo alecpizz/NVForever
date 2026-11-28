@@ -227,7 +227,7 @@ mod tests {
         let rig = Rig {
             nodes: vec![RigNode { name: Some("OwnedFog".into()), parent: None, local: Transform::IDENTITY, hidden: false, billboard: None }],
             shapes: vec![RigShape { node: 0, mesh: source.clone(), material: default(), skin: None,
-                look: ("OwnedFog".into(), [0.0; 3], 1.0, 1.0), refraction: 0.0, animated: false, morph: Some(morph) }],
+                look: ("OwnedFog".into(), [0.0; 3], 1.0, 1.0), refraction: 0.0, animated: false, morph: Some(morph), block: 0 }],
             idle: None, door: None, groups: vec![clip.clone()], effect: None,
         };
         let parent = app.world_mut().spawn_empty().id();

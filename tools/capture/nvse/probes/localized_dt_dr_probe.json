@@ -1,0 +1,220 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "localized_dt_dr_probe",
+  "description": "Strictly read-only, console-only black-box probe verifying that under JIP LN 57.30 bIgnoreDTDRFix=1 + bLocalizedDTDR=1 vs 0 (staged in an isolated copy), explosions apply full worn head+body armor DT and actor innate DT (AV 76) still applies everywhere (#3843).",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)"
+  },
+  "batches": [
+    {
+      "id": "w4e_localized_dtdr",
+      "title": "Wave 4E Localized Armor DT/DR Explosion & Innate DT Probe (#3843)",
+      "extender": "JIP LN NVSE 57.30",
+      "required_plugins": [
+        "jip_nvse.dll"
+      ],
+      "probes": [
+        {
+          "id": "w4e_c02_jip_localized_dtdr_explosions_innate",
+          "bucket": "A",
+          "extender": "JIP LN NVSE 57.30",
+          "required_plugins": [
+            "jip_nvse.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": true,
+          "spec_file": "docs/spec-notes/localized-dt-dr.md",
+          "spec_line": 23,
+          "functions_tested": [
+            "GetAV",
+            "ModAV",
+            "EquipItem",
+            "UnequipItem",
+            "PlaceAtMe",
+            "GetHitHealthDamage",
+            "GetHitBaseWeaponDamage"
+          ],
+          "claim": "Under JIP LN 57.30 bIgnoreDTDRFix=1 and bLocalizedDTDR=1 vs 0 in an isolated staging copy, MineFragExplosion (0x0007078B) applies full worn head+body armor DT and innate actor DT (DamageThreshold AV 76) still applies identically.",
+          "expected": "c1_naked:dt=0|dmg=150.00|hhd=150.00|hbd=100.00; c2_body:dt=15|dmg=127.50|hhd=127.50; c3_helm:dt=3|dmg=145.50|hhd=145.50; c4_both:dt=18|dmg=123.00|hhd=123.00; c5_innate:dt=15|dmg=127.50|hhd=127.50",
+          "script_lines": [
+            "ref rMk = GetFormFromMod \"FalloutNV.esm\" \"CDF51\"",
+            "Player.MoveTo rMk",
+            "Player.SetAV Health 1000",
+            "Player.RestoreAV Health 1000",
+            "ref rBody = GetFormFromMod \"FalloutNV.esm\" \"20420\"",
+            "ref rHelm = GetFormFromMod \"FalloutNV.esm\" \"20426\"",
+            "Player.AddItem rBody 1 1",
+            "Player.AddItem rHelm 1 1",
+            "Player.UnequipItem rBody 0 1",
+            "Player.UnequipItem rHelm 0 1",
+            "PrintToConsole \"PROBE|w4e_c02_jip_localized_dtdr_explosions_innate|moved_ready\""
+          ],
+          "wait_ticks_after": 3,
+          "extra_steps": [
+            {
+              "suffix": "c1_naked",
+              "wait_ticks": 2,
+              "script_lines": [
+                "Player.RestoreAV Health 1000",
+                "float fH0 = Player.GetAV Health",
+                "float fDT0 = Player.GetAV DamageThreshold",
+                "ref rExpl = GetFormFromMod \"FalloutNV.esm\" \"7078B\"",
+                "Player.PlaceAtMe rExpl 1",
+                "Player.AuxVarSetFlt \"*w4e_h0\" fH0",
+                "Player.AuxVarSetFlt \"*w4e_dt0\" fDT0"
+              ]
+            },
+            {
+              "suffix": "c1_read",
+              "wait_ticks": 1,
+              "script_lines": [
+                "float fH0 = Player.AuxVarGetFlt \"*w4e_h0\"",
+                "float fDT0 = Player.AuxVarGetFlt \"*w4e_dt0\"",
+                "float fH1 = Player.GetAV Health",
+                "float fDmg = fH0 - fH1",
+                "float fHhd = Player.GetHitHealthDamage",
+                "float fHbd = Player.GetHitBaseWeaponDamage",
+                "PrintToConsole \"PROBE|w4e_c02_jip_localized_dtdr_explosions_innate|c1_naked:dt=%g|dmg=%.2f|hhd=%.2f|hbd=%.2f\" fDT0 fDmg fHhd fHbd",
+                "ref rBody = GetFormFromMod \"FalloutNV.esm\" \"20420\"",
+                "Player.EquipItem rBody 0 1",
+                "Player.RestoreAV Health 1000"
+              ]
+            },
+            {
+              "suffix": "c2_body",
+              "wait_ticks": 2,
+              "script_lines": [
+                "Player.RestoreAV Health 1000",
+                "float fH0 = Player.GetAV Health",
+                "float fDT0 = Player.GetAV DamageThreshold",
+                "ref rExpl = GetFormFromMod \"FalloutNV.esm\" \"7078B\"",
+                "Player.PlaceAtMe rExpl 1",
+                "Player.AuxVarSetFlt \"*w4e_h0\" fH0",
+                "Player.AuxVarSetFlt \"*w4e_dt0\" fDT0"
+              ]
+            },
+            {
+              "suffix": "c2_read",
+              "wait_ticks": 1,
+              "script_lines": [
+                "float fH0 = Player.AuxVarGetFlt \"*w4e_h0\"",
+                "float fDT0 = Player.AuxVarGetFlt \"*w4e_dt0\"",
+                "float fH1 = Player.GetAV Health",
+                "float fDmg = fH0 - fH1",
+                "float fHhd = Player.GetHitHealthDamage",
+                "PrintToConsole \"PROBE|w4e_c02_jip_localized_dtdr_explosions_innate|c2_body:dt=%g|dmg=%.2f|hhd=%.2f\" fDT0 fDmg fHhd",
+                "ref rBody = GetFormFromMod \"FalloutNV.esm\" \"20420\"",
+                "ref rHelm = GetFormFromMod \"FalloutNV.esm\" \"20426\"",
+                "Player.UnequipItem rBody 0 1",
+                "Player.EquipItem rHelm 0 1",
+                "Player.RestoreAV Health 1000"
+              ]
+            },
+            {
+              "suffix": "c3_helm",
+              "wait_ticks": 2,
+              "script_lines": [
+                "Player.RestoreAV Health 1000",
+                "float fH0 = Player.GetAV Health",
+                "float fDT0 = Player.GetAV DamageThreshold",
+                "ref rExpl = GetFormFromMod \"FalloutNV.esm\" \"7078B\"",
+                "Player.PlaceAtMe rExpl 1",
+                "Player.AuxVarSetFlt \"*w4e_h0\" fH0",
+                "Player.AuxVarSetFlt \"*w4e_dt0\" fDT0"
+              ]
+            },
+            {
+              "suffix": "c3_read",
+              "wait_ticks": 1,
+              "script_lines": [
+                "float fH0 = Player.AuxVarGetFlt \"*w4e_h0\"",
+                "float fDT0 = Player.AuxVarGetFlt \"*w4e_dt0\"",
+                "float fH1 = Player.GetAV Health",
+                "float fDmg = fH0 - fH1",
+                "float fHhd = Player.GetHitHealthDamage",
+                "PrintToConsole \"PROBE|w4e_c02_jip_localized_dtdr_explosions_innate|c3_helm:dt=%g|dmg=%.2f|hhd=%.2f\" fDT0 fDmg fHhd",
+                "ref rBody = GetFormFromMod \"FalloutNV.esm\" \"20420\"",
+                "Player.EquipItem rBody 0 1",
+                "Player.RestoreAV Health 1000"
+              ]
+            },
+            {
+              "suffix": "c4_both",
+              "wait_ticks": 2,
+              "script_lines": [
+                "Player.RestoreAV Health 1000",
+                "float fH0 = Player.GetAV Health",
+                "float fDT0 = Player.GetAV DamageThreshold",
+                "ref rExpl = GetFormFromMod \"FalloutNV.esm\" \"7078B\"",
+                "Player.PlaceAtMe rExpl 1",
+                "Player.AuxVarSetFlt \"*w4e_h0\" fH0",
+                "Player.AuxVarSetFlt \"*w4e_dt0\" fDT0"
+              ]
+            },
+            {
+              "suffix": "c4_read",
+              "wait_ticks": 1,
+              "script_lines": [
+                "float fH0 = Player.AuxVarGetFlt \"*w4e_h0\"",
+                "float fDT0 = Player.AuxVarGetFlt \"*w4e_dt0\"",
+                "float fH1 = Player.GetAV Health",
+                "float fDmg = fH0 - fH1",
+                "float fHhd = Player.GetHitHealthDamage",
+                "PrintToConsole \"PROBE|w4e_c02_jip_localized_dtdr_explosions_innate|c4_both:dt=%g|dmg=%.2f|hhd=%.2f\" fDT0 fDmg fHhd",
+                "ref rBody = GetFormFromMod \"FalloutNV.esm\" \"20420\"",
+                "ref rHelm = GetFormFromMod \"FalloutNV.esm\" \"20426\"",
+                "Player.UnequipItem rBody 0 1",
+                "Player.UnequipItem rHelm 0 1",
+                "Player.ModAV DamageThreshold 15",
+                "Player.RestoreAV Health 1000"
+              ]
+            },
+            {
+              "suffix": "c5_innate",
+              "wait_ticks": 2,
+              "script_lines": [
+                "Player.RestoreAV Health 1000",
+                "float fH0 = Player.GetAV Health",
+                "float fDT0 = Player.GetAV DamageThreshold",
+                "ref rExpl = GetFormFromMod \"FalloutNV.esm\" \"7078B\"",
+                "Player.PlaceAtMe rExpl 1",
+                "Player.AuxVarSetFlt \"*w4e_h0\" fH0",
+                "Player.AuxVarSetFlt \"*w4e_dt0\" fDT0"
+              ]
+            },
+            {
+              "suffix": "c5_read",
+              "wait_ticks": 1,
+              "script_lines": [
+                "float fH0 = Player.AuxVarGetFlt \"*w4e_h0\"",
+                "float fDT0 = Player.AuxVarGetFlt \"*w4e_dt0\"",
+                "float fH1 = Player.GetAV Health",
+                "float fDmg = fH0 - fH1",
+                "float fHhd = Player.GetHitHealthDamage",
+                "PrintToConsole \"PROBE|w4e_c02_jip_localized_dtdr_explosions_innate|c5_innate:dt=%g|dmg=%.2f|hhd=%.2f\" fDT0 fDmg fHhd",
+                "Player.ModAV DamageThreshold -15"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,239 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6c_jg_on_av_change_filter",
+  "description": "Wave 6C strictly read-only console-only probes verifying SetOnActorValueChangeEventHandler -1 wildcard filter and flag=0 truncation vs flag=1 exact float behavior.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)",
+    "JohnnyGuitarNVSE": "528"
+  },
+  "batches": [
+    {
+      "id": "w6c_jg_on_av_change_filter",
+      "title": "Wave 6C - SetOnActorValueChangeEventHandler Wildcard and Truncation",
+      "extender": "JohnnyGuitar 528 + JIP LN 57.30",
+      "required_plugins": [
+        "jip_nvse.dll",
+        "johnnyguitar.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6t2p2_10_jg_on_av_change_timed",
+          "bucket": "B",
+          "extender": "JohnnyGuitar 528",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "johnnyguitar.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-jg8.md",
+          "spec_line": 31,
+          "functions_tested": [
+            "SetOnActorValueChangeEventHandler"
+          ],
+          "claim": "Verify SetOnActorValueChangeEventHandler across two 0.6 Health drops (200.0 -> 199.4 -> 198.8) showing flag=0 truncates 199.4 -> 198.8 to 199.0 -> 198.0.",
+          "expected": "h0=200.0,syn=0|d06(ni=0:0.0->0.0,nf=0:0.00->0.00,m1=0,om=0)|d12(ni=1:199.0->198.0)",
+          "script_lines": [
+            "ref cbI = CompileScript \"nvseprobe_s_p2_10_i.gek\"",
+            "ref cbF = CompileScript \"nvseprobe_s_p2_10_f.gek\"",
+            "ref cbM = CompileScript \"nvseprobe_s_p2_10_m.gek\"",
+            "ref cbO = CompileScript \"nvseprobe_s_p2_10_o.gek\"",
+            "Player.AuxVarSetRef \"*p2_10_cbi\" cbI",
+            "Player.AuxVarSetRef \"*p2_10_cbf\" cbF",
+            "Player.AuxVarSetRef \"*p2_10_cbm\" cbM",
+            "Player.AuxVarSetRef \"*p2_10_cbo\" cbO",
+            "Player.AuxVarSetFlt \"*p2_10_ni\" 0",
+            "Player.AuxVarSetFlt \"*p2_10_nf\" 0",
+            "Player.AuxVarSetFlt \"*p2_10_nm\" 0",
+            "Player.AuxVarSetFlt \"*p2_10_no\" 0",
+            "int iM1 = -1",
+            "SetOnActorValueChangeEventHandler 1 cbI 0 16",
+            "SetOnActorValueChangeEventHandler 1 cbF 1 16",
+            "SetOnActorValueChangeEventHandler 1 cbM 0 iM1",
+            "SetOnActorValueChangeEventHandler 1 cbO 0",
+            "Player.AuxVarSetFlt \"*p2_10_h0\" (Player.GetAV Health)",
+            "Player.DamageAV Health 0.6",
+            "Player.AuxVarSetFlt \"*p2_10_sync\" (Player.AuxVarGetFlt \"*p2_10_nf\")"
+          ],
+          "wait_ticks_after": 2,
+          "helper_scripts": {
+            "nvseprobe_s_p2_10_i.gek": [
+              "begin Function { int iAv, float fOld, float fNew }",
+              "Player.AuxVarSetFlt \"*p2_10_ni\" ((Player.AuxVarGetFlt \"*p2_10_ni\") + 1)",
+              "Player.AuxVarSetFlt \"*p2_10_io\" fOld",
+              "Player.AuxVarSetFlt \"*p2_10_in\" fNew"
+            ],
+            "nvseprobe_s_p2_10_f.gek": [
+              "begin Function { int iAv, float fOld, float fNew }",
+              "Player.AuxVarSetFlt \"*p2_10_nf\" ((Player.AuxVarGetFlt \"*p2_10_nf\") + 1)",
+              "Player.AuxVarSetFlt \"*p2_10_fo\" fOld",
+              "Player.AuxVarSetFlt \"*p2_10_fn\" fNew"
+            ],
+            "nvseprobe_s_p2_10_m.gek": [
+              "begin Function { int iAv, float fOld, float fNew }",
+              "Player.AuxVarSetFlt \"*p2_10_nm\" ((Player.AuxVarGetFlt \"*p2_10_nm\") + 1)"
+            ],
+            "nvseprobe_s_p2_10_o.gek": [
+              "begin Function { int iAv, float fOld, float fNew }",
+              "Player.AuxVarSetFlt \"*p2_10_no\" ((Player.AuxVarGetFlt \"*p2_10_no\") + 1)"
+            ]
+          },
+          "extra_steps": [
+            {
+              "suffix": "dmg2",
+              "wait_ticks": 2,
+              "script_lines": [
+                "Player.AuxVarSetFlt \"*p2_10_ni1\" (Player.AuxVarGetFlt \"*p2_10_ni\")",
+                "Player.AuxVarSetFlt \"*p2_10_io1\" (Player.AuxVarGetFlt \"*p2_10_io\")",
+                "Player.AuxVarSetFlt \"*p2_10_in1\" (Player.AuxVarGetFlt \"*p2_10_in\")",
+                "Player.AuxVarSetFlt \"*p2_10_nf1\" (Player.AuxVarGetFlt \"*p2_10_nf\")",
+                "Player.AuxVarSetFlt \"*p2_10_fo1\" (Player.AuxVarGetFlt \"*p2_10_fo\")",
+                "Player.AuxVarSetFlt \"*p2_10_fn1\" (Player.AuxVarGetFlt \"*p2_10_fn\")",
+                "Player.AuxVarSetFlt \"*p2_10_nm1\" (Player.AuxVarGetFlt \"*p2_10_nm\")",
+                "Player.AuxVarSetFlt \"*p2_10_no1\" (Player.AuxVarGetFlt \"*p2_10_no\")",
+                "Player.DamageAV Health 0.6"
+              ]
+            },
+            {
+              "suffix": "read",
+              "wait_ticks": 0,
+              "script_lines": [
+                "float h0 = Player.AuxVarGetFlt \"*p2_10_h0\"",
+                "int syn = Player.AuxVarGetFlt \"*p2_10_sync\"",
+                "int ni1 = Player.AuxVarGetFlt \"*p2_10_ni1\"",
+                "float io1 = Player.AuxVarGetFlt \"*p2_10_io1\"",
+                "float in1 = Player.AuxVarGetFlt \"*p2_10_in1\"",
+                "int nf1 = Player.AuxVarGetFlt \"*p2_10_nf1\"",
+                "float fo1 = Player.AuxVarGetFlt \"*p2_10_fo1\"",
+                "float fn1 = Player.AuxVarGetFlt \"*p2_10_fn1\"",
+                "int nm1 = Player.AuxVarGetFlt \"*p2_10_nm1\"",
+                "int no1 = Player.AuxVarGetFlt \"*p2_10_no1\"",
+                "int ni2 = Player.AuxVarGetFlt \"*p2_10_ni\"",
+                "float io2 = Player.AuxVarGetFlt \"*p2_10_io\"",
+                "float in2 = Player.AuxVarGetFlt \"*p2_10_in\"",
+                "int iM1 = -1",
+                "SetOnActorValueChangeEventHandler 0 (Player.AuxVarGetRef \"*p2_10_cbi\") 0 16",
+                "SetOnActorValueChangeEventHandler 0 (Player.AuxVarGetRef \"*p2_10_cbf\") 1 16",
+                "SetOnActorValueChangeEventHandler 0 (Player.AuxVarGetRef \"*p2_10_cbm\") 0 iM1",
+                "SetOnActorValueChangeEventHandler 0 (Player.AuxVarGetRef \"*p2_10_cbo\") 0",
+                "Player.RestoreAV Health 5",
+                "string_var s1 = sv_Construct \"h0=%.1f,syn=%g|d06(ni=%g:%.1f->%.1f,nf=%g:%.2f->%.2f,m1=%g,om=%g)\" h0 syn ni1 io1 in1 nf1 fo1 fn1 nm1 no1",
+                "PrintToConsole \"PROBE|w6t2p2_10_jg_on_av_change_timed|%z|d12(ni=%g:%.1f->%.1f)\" s1 ni2 io2 in2"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "w6t2p3_10_av_m1_exact",
+          "bucket": "B",
+          "extender": "JohnnyGuitar 528",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "johnnyguitar.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-jg8.md",
+          "spec_line": 31,
+          "functions_tested": [
+            "SetOnActorValueChangeEventHandler"
+          ],
+          "claim": "Verify SetOnActorValueChangeEventHandler after baseline tick: -1 filter wildcard, omitted filter wildcard, flag=0 truncation (200.0->199.0), and flag=1 exact float (200.00->199.40).",
+          "expected": "int(n=1,200.0->199.0)|flt(n=1,200.00->199.40)|m1=1,om=1",
+          "script_lines": [
+            "ref cbI = CompileScript \"nvseprobe_s_p3_10_i.gek\"",
+            "ref cbF = CompileScript \"nvseprobe_s_p3_10_f.gek\"",
+            "ref cbM = CompileScript \"nvseprobe_s_p3_10_m.gek\"",
+            "ref cbO = CompileScript \"nvseprobe_s_p3_10_o.gek\"",
+            "Player.AuxVarSetRef \"*p3_10_cbi\" cbI",
+            "Player.AuxVarSetRef \"*p3_10_cbf\" cbF",
+            "Player.AuxVarSetRef \"*p3_10_cbm\" cbM",
+            "Player.AuxVarSetRef \"*p3_10_cbo\" cbO",
+            "Player.AuxVarSetFlt \"*p3_10_ni\" 0",
+            "Player.AuxVarSetFlt \"*p3_10_nf\" 0",
+            "Player.AuxVarSetFlt \"*p3_10_nm\" 0",
+            "Player.AuxVarSetFlt \"*p3_10_no\" 0",
+            "int iM1 = -1",
+            "SetOnActorValueChangeEventHandler 1 cbI 0 16",
+            "SetOnActorValueChangeEventHandler 1 cbF 1 16",
+            "SetOnActorValueChangeEventHandler 1 cbM 0 iM1",
+            "SetOnActorValueChangeEventHandler 1 cbO 0"
+          ],
+          "wait_ticks_after": 2,
+          "helper_scripts": {
+            "nvseprobe_s_p3_10_i.gek": [
+              "begin Function { int iAv, float fOld, float fNew }",
+              "Player.AuxVarSetFlt \"*p3_10_ni\" ((Player.AuxVarGetFlt \"*p3_10_ni\") + 1)",
+              "Player.AuxVarSetFlt \"*p3_10_io\" fOld",
+              "Player.AuxVarSetFlt \"*p3_10_in\" fNew"
+            ],
+            "nvseprobe_s_p3_10_f.gek": [
+              "begin Function { int iAv, float fOld, float fNew }",
+              "Player.AuxVarSetFlt \"*p3_10_nf\" ((Player.AuxVarGetFlt \"*p3_10_nf\") + 1)",
+              "Player.AuxVarSetFlt \"*p3_10_fo\" fOld",
+              "Player.AuxVarSetFlt \"*p3_10_fn\" fNew"
+            ],
+            "nvseprobe_s_p3_10_m.gek": [
+              "begin Function { int iAv, float fOld, float fNew }",
+              "Player.AuxVarSetFlt \"*p3_10_nm\" ((Player.AuxVarGetFlt \"*p3_10_nm\") + 1)"
+            ],
+            "nvseprobe_s_p3_10_o.gek": [
+              "begin Function { int iAv, float fOld, float fNew }",
+              "Player.AuxVarSetFlt \"*p3_10_no\" ((Player.AuxVarGetFlt \"*p3_10_no\") + 1)"
+            ]
+          },
+          "extra_steps": [
+            {
+              "suffix": "dmg1",
+              "wait_ticks": 2,
+              "script_lines": [
+                "Player.DamageAV Health 0.6"
+              ]
+            },
+            {
+              "suffix": "read",
+              "wait_ticks": 0,
+              "script_lines": [
+                "int ni = Player.AuxVarGetFlt \"*p3_10_ni\"",
+                "float io = Player.AuxVarGetFlt \"*p3_10_io\"",
+                "float inV = Player.AuxVarGetFlt \"*p3_10_in\"",
+                "int nf = Player.AuxVarGetFlt \"*p3_10_nf\"",
+                "float fo = Player.AuxVarGetFlt \"*p3_10_fo\"",
+                "float fnV = Player.AuxVarGetFlt \"*p3_10_fn\"",
+                "int nm = Player.AuxVarGetFlt \"*p3_10_nm\"",
+                "int no = Player.AuxVarGetFlt \"*p3_10_no\"",
+                "int iM1 = -1",
+                "SetOnActorValueChangeEventHandler 0 (Player.AuxVarGetRef \"*p3_10_cbi\") 0 16",
+                "SetOnActorValueChangeEventHandler 0 (Player.AuxVarGetRef \"*p3_10_cbf\") 1 16",
+                "SetOnActorValueChangeEventHandler 0 (Player.AuxVarGetRef \"*p3_10_cbm\") 0 iM1",
+                "SetOnActorValueChangeEventHandler 0 (Player.AuxVarGetRef \"*p3_10_cbo\") 0",
+                "Player.RestoreAV Health 5",
+                "PrintToConsole \"PROBE|w6t2p3_10_av_m1_exact|int(n=%g,%.1f->%.1f)|flt(n=%g,%.2f->%.2f)|m1=%g,om=%g\" ni io inV nf fo fnV nm no"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

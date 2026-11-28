@@ -146,3 +146,15 @@ fn aux_var_get_flt_cond_takes_a_quest_and_an_index() {
     assert!(matches!(c.params[0], fnv_script::vm::ArgValue::Value(fnv_script::vm::Value::Ref(q)) if q == QUEST.0));
     assert!(matches!(c.params[1], fnv_script::vm::ArgValue::Value(fnv_script::vm::Value::Num(n)) if n == 3.0));
 }
+
+#[test]
+fn reaches_handler_answers_as_the_named_bridge_does() {
+    let f = fixture();
+    let mut g = game(&f);
+    // The tools' probe (`fnvtool script coverage` / `stubs`, #1408) agrees with the
+    // bridge on the sixteen, and an opcode no table names reaches nothing.
+    for (op, name, _) in SIXTEEN {
+        assert!(crate::nvse::reaches_handler(&mut g, &f.data.table, op), "{name}");
+    }
+    assert!(!crate::nvse::reaches_handler(&mut g, &f.data.table, 0xFFF0));
+}

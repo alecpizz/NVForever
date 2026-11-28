@@ -943,7 +943,8 @@ mod tests {
                         blocks.list.push(block);
                     } else {
                         let ch = phys.world.add_character(id, fnv_phys::CharacterParams::default(), at);
-                        phys.npcs.insert(id, NpcBody { ch, prev_feet: at, velocity: [25.0, 0.0], jump: false, sink: 0.0, lift: Default::default() });
+                        let standing_height = ch.params.height;
+                        phys.npcs.insert(id, NpcBody { ch, prev_feet: at, velocity: [25.0, 0.0], jump: false, sink: 0.0, lift: Default::default(), standing_height, sneak_crouch: false });
                     }
                 }
                 let bodies = CombatBodies::new(Some(&phys), Some(&blocks));

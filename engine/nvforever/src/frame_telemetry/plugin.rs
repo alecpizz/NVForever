@@ -496,6 +496,7 @@ fn terminal_reason(timestamp_queries: Option<bool>) -> DiagnosticReason {
 fn build_features() -> Vec<String> {
     [
         ("default", cfg!(feature = "default")),
+        ("dev-aids", cfg!(feature = "dev-aids")),
         ("intro-video", cfg!(feature = "intro-video")),
         ("profile", cfg!(feature = "profile")),
         ("tracy", cfg!(feature = "tracy")),

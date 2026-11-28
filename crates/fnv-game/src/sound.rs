@@ -38,10 +38,33 @@ pub struct SoundRequest {
     pub point: Option<[f32; 3]>,
 }
 
+/// A script effect a co-op host's guests play too ([`Game::coop_effects`]) [design].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoopEffect {
+    /// A sound at a reference other than the host's player (PlaySound3D).
+    Sound { sound: FormId, at: FormId },
+    /// A music type (PlayMusic).
+    Music(FormId),
+    /// A script moved the player (MoveTo, PositionCell...): the guests go with it.
+    PlayerMoved,
+    /// A script played an animation group on a reference (`PlayGroup`, flag 0-2): the
+    /// guests' copies play it too (a rocket bay opening, a gate rising).
+    Anim { on: FormId, group: u16, flag: i32 },
+    /// A script reset a reference's animation state (`Reset3DState`).
+    AnimReset(FormId),
+}
+
 impl Game<'_> {
     /// Queue a sound for the engine and trace it.
     pub fn ask_sound(&mut self, mut r: SoundRequest) {
         self.emit(EventKind::SoundAsked { sound: r.sound, at: r.at, system: r.system });
+        // A world sound goes to a host's guests too; the host's own 2D and player
+        // sounds do not (they are its player's) [design].
+        if let (Some(out), Some(at)) = (self.coop_effects.as_mut(), r.at.filter(|&a| a != FormId::PLAYER_REF)) {
+            if out.len() < MAX_PENDING {
+                out.push(CoopEffect::Sound { sound: r.sound, at });
+            }
+        }
         r.id = self.gaps.sounds.ask(r.sound, r.at, self.frame);
         if self.sound_requests.len() >= MAX_PENDING {
             self.sound_requests.remove(0);
@@ -63,6 +86,9 @@ impl Game<'_> {
     /// Queue a music type for the engine and trace it.
     pub fn ask_music(&mut self, music: FormId) {
         self.emit(EventKind::MusicAsked { music });
+        if let Some(out) = self.coop_effects.as_mut().filter(|o| o.len() < MAX_PENDING) {
+            out.push(CoopEffect::Music(music));
+        }
         self.gaps.music_type = Some(music);
         if self.music_requests.len() >= MAX_PENDING {
             self.music_requests.remove(0);

@@ -539,9 +539,14 @@ impl Detections {
             .map(|((d, _), (det, _))| (*d, *det))
     }
 
-    /// Forget every pair one of whose actors is `r` (it unloaded, died or was disabled).
+    /// Forget every pair involving `r` after unload or disable.
     pub fn forget(&mut self, r: FormId) {
         self.pairs.retain(|(d, t), _| *d != r && *t != r);
+    }
+
+    /// Forget detections made by `r`, preserving other actors' detections of it.
+    pub fn forget_detector(&mut self, r: FormId) {
+        self.pairs.retain(|(d, _), _| *d != r);
     }
 
     /// Forget pairs not measured since `time`.
@@ -588,7 +593,7 @@ impl Game<'_> {
     }
 
     pub fn player_detected_for_sneak(&self) -> bool {
-        self.detection.highest_among(FormId::PLAYER_REF, |d| !self.with_player(d)).is_some_and(|(_, d)| d.band == Band::Detected)
+        self.detection.highest_among(FormId::PLAYER_REF, |d| !self.with_player(d) && !self.is_dead(d)).is_some_and(|(_, d)| d.band == Band::Detected)
     }
 
     /// Whether `actor` may force-greet `target` as far as sight goes: nothing solid
@@ -784,7 +789,7 @@ impl Game<'_> {
 pub fn get_detected(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
     let detector = ctx.subject()?;
     let target = a.form(0)?;
-    let d = g.detection.get(detector, target).is_some_and(|d| d.band == Band::Detected);
+    let d = !g.is_dead(detector) && g.detection.get(detector, target).is_some_and(|d| d.band == Band::Detected);
     Ok(Value::Num(if d { 1.0 } else { 0.0 }))
 }
 
@@ -880,7 +885,7 @@ mod tests {
             assert!(near(standing.value, sneaking.value), "{distance}: {} vs {}", standing.value, sneaking.value);
             assert_eq!(sneaking.target_skill, 0.0);
         }
-        // Seen, sneaking still lowers it; heard while unseen too [hypothesis].
+        // Seen, sneaking still lowers it; heard while unseen too (see production `evaluate` above).
         let seen = outdoors(50.0);
         assert!(s.evaluate(&p, &Situation { sneaking: true, ..seen }).value < s.evaluate(&p, &seen).value);
         let heard = Situation { in_view: false, moving: true, ..outdoors(50.0) };
@@ -960,7 +965,7 @@ mod tests {
         assert_eq!(q.band, Band::Noticed);
         let shot = Situation { action_sound: s.firing_sound("Loud"), ..quiet };
         // a = (2200/2500)² = 0.7744; sound 0.7744 · 0.1 · 1.6 · 200 ≈ 24.8; heard, the
-        // Sneak skill counts again [hypothesis].
+        // Sneak skill counts again (see production `evaluate` above).
         let d = s.evaluate(&p, &shot);
         assert!(near(d.sound, 0.7744 * 0.1 * 1.6 * 200.0));
         assert!(near(d.value, -35.0 + d.sound + 0.5 * (0.7744 * 50.0 - 40.0)));

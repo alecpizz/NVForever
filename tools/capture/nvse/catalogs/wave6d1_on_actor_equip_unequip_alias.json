@@ -1,0 +1,135 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6d1_on_actor_equip_unequip_alias",
+  "description": "Wave 6D-1 strictly read-only console-only clean-room probe catalog verifying xNVSE OnEquip/OnActorEquip and OnUnequip/OnActorUnequip canonical aliasing, null calling reference (GetSelfAlt == 0), and PRE-unequip timing.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)",
+    "lStewieAl's Tweaks": "1005"
+  },
+  "batches": [
+    {
+      "id": "w6d1_on_actor_equip_unequip_alias",
+      "title": "Wave 6D-1 - OnActorEquip / OnActorUnequip Canonical Aliases and Pre-Unequip",
+      "extender": "xNVSE 6.4.9 + JIP LN 57.30",
+      "required_plugins": [
+        "jip_nvse.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6d1_08_on_actor_equip_unequip_aliases",
+          "bucket": "A",
+          "extender": "xNVSE 6.4.9",
+          "required_plugins": [
+            "jip_nvse.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-events.md",
+          "spec_line": 43,
+          "functions_tested": [
+            "OnActorEquip",
+            "OnEquip",
+            "OnActorUnequip",
+            "OnUnequip",
+            "GetEventHandlers",
+            "RemoveEventHandler"
+          ],
+          "claim": "Verify OnActorEquip/OnEquip and OnActorUnequip/OnUnequip alias identity in GetEventHandlers/RemoveEventHandler, GetSelfAlt, args (actor, itemBase), GetEquipped PRE-vs-POST inside callbacks, and filters.",
+          "expected": "Check whether OnEquip & OnActorEquip share one handler registry, whether GetEquipped is 0 (PRE-update) inside OnActorEquip and 1/0 inside OnActorUnequip.",
+          "script_lines": [
+            "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+            "ref cbEq = CompileScript \"nvseprobe_s_w6d1_08_eq.gek\"",
+            "ref cbUn = CompileScript \"nvseprobe_s_w6d1_08_un.gek\"",
+            "Player.AuxVarSetRef \"*w6d1_08_cbeq\" cbEq",
+            "Player.AuxVarSetRef \"*w6d1_08_cbun\" cbUn",
+            "Player.AuxVarSetFlt \"*w6d1_08_eqn\" 0",
+            "Player.AuxVarSetFlt \"*w6d1_08_unn\" 0",
+            "SetEventHandler \"OnActorEquip\" cbEq \"first\"::Player \"second\"::r10",
+            "array_var aAliasEq = GetEventHandlers \"OnEquip\"",
+            "Player.AuxVarSetFlt \"*w6d1_08_aliaseq\" (ar_Size aAliasEq)",
+            "SetEventHandler \"OnActorUnequip\" cbUn \"first\"::Player \"second\"::r10",
+            "array_var aAliasUn = GetEventHandlers \"OnUnequip\"",
+            "Player.AuxVarSetFlt \"*w6d1_08_aliasun\" (ar_Size aAliasUn)",
+            "Player.AddItem r10 1 1",
+            "Player.EquipItem r10 0 1",
+            "Player.AuxVarSetFlt \"*w6d1_08_eq_same\" (Player.GetEquipped r10)"
+          ],
+          "wait_ticks_after": 2,
+          "helper_scripts": {
+            "nvseprobe_s_w6d1_08_eq.gek": [
+              "begin Function { ref rAct, ref rIt }",
+              "Player.AuxVarSetFlt \"*w6d1_08_eqn\" ((Player.AuxVarGetFlt \"*w6d1_08_eqn\") + 1)",
+              "Player.AuxVarSetFlt \"*w6d1_08_eq_in\" (rAct.GetEquipped rIt)",
+              "Player.AuxVarSetRef \"*w6d1_08_eq_s\" (GetSelfAlt)",
+              "Player.AuxVarSetStr \"*w6d1_08_eq_nm\" (GetCurrentEventName)"
+            ],
+            "nvseprobe_s_w6d1_08_un.gek": [
+              "begin Function { ref rAct, ref rIt }",
+              "Player.AuxVarSetFlt \"*w6d1_08_unn\" ((Player.AuxVarGetFlt \"*w6d1_08_unn\") + 1)",
+              "Player.AuxVarSetFlt \"*w6d1_08_un_in\" (rAct.GetEquipped rIt)",
+              "Player.AuxVarSetRef \"*w6d1_08_un_s\" (GetSelfAlt)",
+              "Player.AuxVarSetStr \"*w6d1_08_un_nm\" (GetCurrentEventName)"
+            ]
+          },
+          "extra_steps": [
+            {
+              "suffix": "unequip",
+              "wait_ticks": 2,
+              "script_lines": [
+                "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+                "Player.AuxVarSetFlt \"*w6d1_08_eq_tick\" (Player.GetEquipped r10)",
+                "Player.UnequipItem r10 0 1"
+              ]
+            },
+            {
+              "suffix": "read",
+              "wait_ticks": 0,
+              "script_lines": [
+                "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+                "ref cbEq = Player.AuxVarGetRef \"*w6d1_08_cbeq\"",
+                "ref cbUn = Player.AuxVarGetRef \"*w6d1_08_cbun\"",
+                "int remAliasEq = RemoveEventHandler \"OnEquip\" cbEq",
+                "int remAliasUn = RemoveEventHandler \"OnUnequip\" cbUn",
+                "RemoveEventHandler \"OnActorEquip\" cbEq",
+                "RemoveEventHandler \"OnActorUnequip\" cbUn",
+                "Player.RemoveItem r10 1 1",
+                "int alEq = Player.AuxVarGetFlt \"*w6d1_08_aliaseq\"",
+                "int alUn = Player.AuxVarGetFlt \"*w6d1_08_aliasun\"",
+                "int eqN = Player.AuxVarGetFlt \"*w6d1_08_eqn\"",
+                "int eqIn = Player.AuxVarGetFlt \"*w6d1_08_eq_in\"",
+                "int eqSame = Player.AuxVarGetFlt \"*w6d1_08_eq_same\"",
+                "int eqTick = Player.AuxVarGetFlt \"*w6d1_08_eq_tick\"",
+                "int eqS0 = ((Player.AuxVarGetRef \"*w6d1_08_eq_s\") == 0)",
+                "int eqSP = ((Player.AuxVarGetRef \"*w6d1_08_eq_s\") == Player)",
+                "string_var eqNm = Player.AuxVarGetStr \"*w6d1_08_eq_nm\"",
+                "int unN = Player.AuxVarGetFlt \"*w6d1_08_unn\"",
+                "int unIn = Player.AuxVarGetFlt \"*w6d1_08_un_in\"",
+                "int unS0 = ((Player.AuxVarGetRef \"*w6d1_08_un_s\") == 0)",
+                "int unSP = ((Player.AuxVarGetRef \"*w6d1_08_un_s\") == Player)",
+                "string_var unNm = Player.AuxVarGetStr \"*w6d1_08_un_nm\"",
+                "PrintToConsole \"PROBE|w6d1_08_on_actor_equip_unequip_aliases|alias(g=%g/%g,rem=%g/%g)|eq(n=%g,in=%g,same=%g,tick=%g,s0=%g,sP=%g,nm=%z)|un(n=%g,in=%g,s0=%g,sP=%g,nm=%z)\" alEq alUn remAliasEq remAliasUn eqN eqIn eqSame eqTick eqS0 eqSP eqNm unN unIn unS0 unSP unNm"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -14,6 +14,17 @@
 //!
 //! Quarter-size passes on the tonemapped picture after the temporal anti-aliasing and
 //! before bloom and sharpening; on the main camera only, while it carries [`LightShafts`].
+//!
+//! **Yielding to the light in the air** [design, #3032 stage 3: only while the
+//! air actually draws]: decided in the render world,
+//! per view and per frame. The light's composite (medium_air_compose.rs `air_compose_pass`,
+//! before early post) records a view when it issued its draw of the light
+//! (`AirComposedViews`); this pass, after tonemapping in the same frame, skips on such a view
+//! ([`shafts_skip`]), so the two never add rays to the same picture, and the shafts stay
+//! whenever the light did not draw (a refused view, a pipeline still compiling, the gate
+//! shut). The shafts' own uniform is left as it is. One log line when a view's shafts start
+//! yielding and one when they resume. The game's settings page greys the Sun shafts row while
+//! the light is wanted at a strength above 0 (settings.rs `shafts_status`).
 
 use crate::fly::FlyCam;
 use crate::sky::SkyState;
@@ -73,8 +84,9 @@ impl Plugin for ShaftsPlugin {
             .add_systems(PostUpdate, follow_sun.after(bevy::camera::CameraUpdateSystems).after(bevy::transform::TransformSystems::Propagate));
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else { return };
         render_app
+            .init_resource::<crate::medium_air_compose::AirComposedViews>()
             .add_systems(RenderStartup, init_pipelines)
-            .add_systems(Render, prepare.in_set(RenderSystems::PrepareResources))
+            .add_systems(Render, (prepare, crate::medium_air_compose::forget_composed).in_set(RenderSystems::PrepareResources))
             .add_systems(
                 Core3d,
                 shafts_pass
@@ -93,6 +105,33 @@ impl Plugin for ShaftsPlugin {
 /// strength (the alpha of a weather fade into or out of no fog).
 pub fn haze(fog_far: f32, fog_strength: f32) -> f32 {
     (HAZE_REF / fog_far.max(1.0)).min(1.0) * fog_strength.clamp(0.0, 1.0)
+}
+
+/// The log lines of the yield: one when the shafts start yielding to the light in the air,
+/// one when they resume; none while the answer is the one before.
+pub(crate) fn yield_step(was: &mut bool, now: bool) -> Option<&'static str> {
+    if *was == now {
+        return None;
+    }
+    *was = now;
+    Some(if now { "sun shafts: yielding to the light in the air" } else { "sun shafts: the light in the air no longer draws, the shafts resume" })
+}
+
+/// Whether a view's shafts skip this frame: the light in the air composited on that view in
+/// this render frame (`composed.now`). Keeps `composed.yielded` and returns the yield's log
+/// line when the answer changed for that view ([`yield_step`]) [design].
+pub(crate) fn shafts_skip(composed: &mut crate::medium_air_compose::AirComposedViews, view: Entity) -> (bool, Option<&'static str>) {
+    let now = composed.now.contains(&view);
+    let mut was = composed.yielded.contains(&view);
+    let line = yield_step(&mut was, now);
+    if line.is_some() {
+        if was {
+            composed.yielded.push(view);
+        } else {
+            composed.yielded.retain(|v| *v != view);
+        }
+    }
+    (now, line)
 }
 
 /// The sun's place on the screen and the strength and tint of its shafts this frame.
@@ -295,10 +334,21 @@ pub(crate) fn shafts_pass(
     view: ViewQuery<(&ViewTarget, &DynamicUniformIndex<LightShafts>, &LightShafts, &ShaftsView, &ViewPrepassTextures)>,
     pipelines: Res<ShaftsPipelines>,
     cache: Res<PipelineCache>,
-    uniforms: Res<ComponentUniforms<LightShafts>>,
+    (uniforms, composed): (Res<ComponentUniforms<LightShafts>>, Option<ResMut<crate::medium_air_compose::AirComposedViews>>),
     device: Res<RenderDevice>,
     mut ctx: RenderContext,
 ) {
+    let entity = view.entity();
+    // The light in the air drew on this view this frame: the shafts yield (the module doc).
+    if let Some(mut composed) = composed {
+        let (skip, line) = shafts_skip(&mut composed, entity);
+        if let Some(line) = line {
+            info!("{line}");
+        }
+        if skip {
+            return;
+        }
+    }
     let (target, index, shafts, sv, prepass) = view.into_inner();
     if shafts.sun.z <= 0.0 {
         return;
@@ -333,12 +383,77 @@ pub(crate) fn shafts_pass(
 
 #[cfg(test)]
 mod tests {
-    use super::haze;
+    use super::{follow_sun, haze, shafts_skip, yield_step, LightShafts};
+    use crate::fly::FlyCam;
+    use crate::medium_air_compose::AirComposedViews;
+    use crate::sky::SkyState;
+    use bevy::prelude::*;
 
     #[test]
     fn haze_follows_the_fog_far_distance() {
         assert!((haze(200_000.0, 1.0) - 0.1).abs() < 1e-6);
         assert_eq!(haze(10_000.0, 1.0), 1.0);
         assert_eq!(haze(10_000.0, 0.0), 0.0);
+    }
+
+    /// The yield's log: a line when it starts and one when it ends, nothing in between.
+    #[test]
+    fn the_yield_says_when_it_starts_and_ends() {
+        let mut was = false;
+        assert_eq!(yield_step(&mut was, false), None);
+        assert_eq!(yield_step(&mut was, true), Some("sun shafts: yielding to the light in the air"));
+        assert_eq!(yield_step(&mut was, true), None);
+        assert_eq!(yield_step(&mut was, false), Some("sun shafts: the light in the air no longer draws, the shafts resume"));
+        assert_eq!(yield_step(&mut was, false), None);
+    }
+
+    /// The render pass's decision, per view and per frame: skip only on a view whose air
+    /// composite drew this frame; another view keeps its shafts; a frame without the
+    /// composite (refused, compiling, gate shut) gives them back, each change said once.
+    #[test]
+    fn the_shafts_skip_only_where_the_air_composited_this_frame() {
+        let (a, b) = (Entity::from_raw_u32(7).unwrap(), Entity::from_raw_u32(8).unwrap());
+        let mut c = AirComposedViews::default();
+        assert_eq!(shafts_skip(&mut c, a), (false, None), "nothing composited: the shafts draw");
+        c.now.push(a);
+        assert_eq!(shafts_skip(&mut c, a), (true, Some("sun shafts: yielding to the light in the air")));
+        assert_eq!(shafts_skip(&mut c, a), (true, None), "said once");
+        assert_eq!(shafts_skip(&mut c, b), (false, None), "another view keeps its shafts");
+        // The next frame: emptied before the graph (forget_composed); the composite did not draw.
+        c.now.clear();
+        assert_eq!(shafts_skip(&mut c, a), (false, Some("sun shafts: the light in the air no longer draws, the shafts resume")));
+        assert_eq!(shafts_skip(&mut c, a), (false, None));
+        assert!(c.yielded.is_empty());
+    }
+
+    /// The frame's list is emptied before the graph runs (the render world's PrepareResources).
+    #[test]
+    fn the_composited_views_are_forgotten_each_frame() {
+        let mut world = World::new();
+        world.insert_resource(AirComposedViews { now: vec![Entity::from_raw_u32(3).unwrap()], yielded: vec![Entity::from_raw_u32(3).unwrap()] });
+        let mut schedule = bevy::ecs::schedule::Schedule::default();
+        schedule.add_systems(crate::medium_air_compose::forget_composed);
+        schedule.run(&mut world);
+        let c = world.resource::<AirComposedViews>();
+        assert!(c.now.is_empty() && c.yielded.len() == 1, "{c:?}: the yield's memory stays for its resume line");
+    }
+
+    /// The main world no longer touches the shafts' strength for the light: a day sun in view
+    /// draws its shafts (the yield is the render pass's alone).
+    #[test]
+    fn follow_sun_leaves_the_strength_to_the_sun() {
+        let mut app = App::new();
+        let mut sky = SkyState::default();
+        sky.interior = None;
+        sky.climate.sunrise = (6.0, 7.0);
+        sky.climate.sunset = (18.0, 19.0);
+        sky.hour = 13.0;
+        let to_sun = sky.sun_dir();
+        app.insert_resource(sky).add_systems(Update, follow_sun);
+        let look = Transform::default().looking_to(to_sun, Vec3::Y);
+        app.world_mut().spawn((FlyCam { yaw: 0.0, pitch: 0.0, speed: 0.0 }, Projection::default(), GlobalTransform::from(look), LightShafts::default()));
+        app.update();
+        let mut q = app.world_mut().query::<&LightShafts>();
+        assert!(q.single(app.world()).expect("one camera").sun.z > 0.0);
     }
 }

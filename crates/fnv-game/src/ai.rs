@@ -189,6 +189,13 @@ impl<'a> Game<'a> {
         }
     }
 
+    /// Whether `package`'s own conditions pass for `actor`, regardless of its schedule.
+    fn package_conditions_pass(&mut self, actor: FormId, package: FormId) -> bool {
+        let Some(def) = self.package_def(&package) else { return false };
+        let target = self.package_target(actor, def);
+        self.conditions_pass(&def.conditions, Some(actor), target, &format!("PACK {package}"))
+    }
+
     /// The package an actor runs when it evaluates its packages.
     ///
     /// - A script package (AddScriptPackage) overrides the list until its goal is met;
@@ -239,7 +246,13 @@ impl<'a> Game<'a> {
         let valid = list.iter().copied().find(|&p| self.check_package(actor, p) == PackageCheck::Valid);
         let kept = match valid {
             Some(_) => None,
-            None => self.extra.get(&actor).and_then(|e| e.current_package).filter(|c| list.contains(c)).filter(|&c| self.check_package(actor, c) != PackageCheck::ConditionsFail),
+            // Keep the current list package when no other applies and its conditions
+            // pass. Check them directly because a schedule or target problem can
+            // short-circuit check_package before it reaches the conditions (#3041).
+            None => self.extra.get(&actor).and_then(|e| e.current_package).filter(|c| list.contains(c)).filter(|&c| {
+                self.check_package(actor, c) != PackageCheck::ConditionsFail
+                    && self.package_conditions_pass(actor, c)
+            }),
         };
         self.choosing_package.pop();
         valid.or(kept)
@@ -247,7 +260,7 @@ impl<'a> Game<'a> {
 
     /// Whether the AI runs packages itself (their begin, end and change scripts and the
     /// periodic choice) rather than leaving them to the runner's inputs.
-    pub(crate) fn runs_packages(&self) -> bool {
+    pub fn runs_packages(&self) -> bool {
         self.cfg.package_interval.is_some()
     }
 
@@ -269,6 +282,7 @@ impl<'a> Game<'a> {
         }
         e.current_package = package;
         e.package_goal_met = false;
+        e.package_relocated = false;
         if let Some(p) = package.filter(|p| self.package_def(p).is_some_and(|d| d.has(flags::ONCE_PER_DAY))) {
             let now = self.world.calendar().map(|c| c.days_passed).unwrap_or(0.0);
             self.extra.entry(actor).or_default().package_chosen_at.insert(p, now);
@@ -285,17 +299,19 @@ impl<'a> Game<'a> {
                 self.package_doors(actor, p, flags::LOCK_DOORS_AT_START, flags::UNLOCK_DOORS_AT_START);
                 self.package_doors(actor, p, flags::LOCK_DOORS_AT_LOCATION, flags::UNLOCK_DOORS_AT_LOCATION);
             }
+            // Keep `current_package` at `package` while the outgoing package's Change
+            // script and OnPackageChange run: if either calls EvaluatePackage,
+            // `set_package` sees the new package instead of `old` and does not re-enter
+            // `old`'s Change script recursively.
             if let Some(o) = old {
-                self.package_event(actor, o, 2);
+                self.run_package_event(actor, o, 2);
             }
+            // Only run the new package's Begin script if the Change script did not
+            // already switch the actor to another package.
             if let Some(p) = package {
-                self.package_event(actor, p, 0);
-            }
-            // The events' scripts may have chosen again; if not, the choice stands
-            // (`package_event` makes its package current, the old one included).
-            let e = self.extra.entry(actor).or_default();
-            if e.current_package == old {
-                e.current_package = package;
+                if self.extra.get(&actor).and_then(|e| e.current_package) == package {
+                    self.run_package_event(actor, p, 0);
+                }
             }
         }
     }
@@ -342,7 +358,7 @@ impl<'a> Game<'a> {
     pub fn evaluate_package(&mut self, actor: FormId) -> Option<FormId> {
         let p = self.select_package(actor);
         self.set_package(actor, p);
-        p
+        self.extra.get(&actor).and_then(|e| e.current_package)
     }
 
     /// The actor's current package: the one last chosen, or chosen now when it never
@@ -381,7 +397,7 @@ impl<'a> Game<'a> {
         let Some(e) = self.extra.get_mut(&actor) else { return };
         e.package_goal_met = true;
         if self.runs_packages() {
-            self.package_event(actor, p, 1);
+            self.run_package_event(actor, p, 1);
         }
     }
 
@@ -555,6 +571,13 @@ impl<'a> Game<'a> {
         }
         if reference != FormId::PLAYER_REF {
             self.teleported.insert(reference);
+            // A script relocating an actor running a Must Complete / Must Reach Location
+            // package lets the next choice drop it if it is no longer valid (issue #3041:
+            // VERStalkersSouth01 moves the night stalkers to their holding interior and
+            // clears StalkersOn without calling EvaluatePackage) [design].
+            if let Some(e) = self.extra.get_mut(&reference).filter(|e| e.current_package.is_some()) {
+                e.package_relocated = true;
+            }
             // A drawn object is redrawn at its destination, as after SetPos.
             if !is_actor_base(self.world.forms, functions::base_of(self, reference).unwrap_or(FormId(0))) {
                 self.turned.insert(reference);
@@ -589,7 +612,7 @@ impl<'a> Game<'a> {
     pub fn package_held(&self, actor: FormId) -> Option<&'static str> {
         let e = self.extra.get(&actor)?;
         let def = self.package_def(&e.current_package?)?;
-        if def.has(flags::MUST_COMPLETE | flags::MUST_REACH_LOCATION) && !e.package_goal_met {
+        if def.has(flags::MUST_COMPLETE | flags::MUST_REACH_LOCATION) && !e.package_goal_met && !e.package_relocated {
             return Some(if def.has(flags::MUST_COMPLETE) { "must complete" } else { "must reach location" });
         }
         let cell = self.cell_of(actor);
@@ -675,6 +698,7 @@ impl<'a> Game<'a> {
             // An actor walking into a loaded cell for the first time dresses as one loaded
             // there (`Game::outfit_loaded_actors`).
             let _ = self.world.outfit(a);
+            self.maybe_apply_npc_weapon_mods(a);
             let due = match self.extra.get(&a).and_then(|e| e.package_due) {
                 Some(d) => d,
                 None => {

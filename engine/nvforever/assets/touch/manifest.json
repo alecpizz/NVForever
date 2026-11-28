@@ -1,0 +1,217 @@
+{
+  "schema": 2,
+  "profile": "nvf-touch-svg/2",
+  "viewBox": [
+    0,
+    0,
+    32,
+    32
+  ],
+  "license": "GPL-3.0-or-later",
+  "icons": [
+    {
+      "id": "pause",
+      "label": "Pause",
+      "file": "pause.svg",
+      "legacyIndex": 0
+    },
+    {
+      "id": "pip-boy",
+      "label": "Pip-Boy",
+      "file": "pip-boy.svg",
+      "legacyIndex": 1
+    },
+    {
+      "id": "vats",
+      "label": "V.A.T.S.",
+      "file": "vats.svg",
+      "legacyIndex": 2
+    },
+    {
+      "id": "reload",
+      "label": "Reload",
+      "file": "reload.svg",
+      "legacyIndex": 3
+    },
+    {
+      "id": "jump",
+      "label": "Jump",
+      "file": "jump.svg",
+      "legacyIndex": 4
+    },
+    {
+      "id": "interact",
+      "label": "Interact",
+      "file": "interact.svg",
+      "legacyIndex": 5
+    },
+    {
+      "id": "aim",
+      "label": "Aim",
+      "file": "aim.svg",
+      "legacyIndex": 6
+    },
+    {
+      "id": "fire",
+      "label": "Fire",
+      "file": "fire.svg",
+      "legacyIndex": 7
+    },
+    {
+      "id": "sneak",
+      "label": "Sneak",
+      "file": "sneak.svg",
+      "legacyIndex": 8
+    },
+    {
+      "id": "menu-up",
+      "label": "Up",
+      "file": "menu-up.svg",
+      "legacyIndex": 9
+    },
+    {
+      "id": "menu-down",
+      "label": "Down",
+      "file": "menu-down.svg",
+      "legacyIndex": 10
+    },
+    {
+      "id": "menu-left",
+      "label": "Left",
+      "file": "menu-left.svg",
+      "legacyIndex": 11
+    },
+    {
+      "id": "menu-right",
+      "label": "Right",
+      "file": "menu-right.svg",
+      "legacyIndex": 12
+    },
+    {
+      "id": "confirm",
+      "label": "Confirm",
+      "file": "confirm.svg",
+      "legacyIndex": 13
+    },
+    {
+      "id": "back",
+      "label": "Back",
+      "file": "back.svg",
+      "legacyIndex": 14
+    },
+    {
+      "id": "tab-next",
+      "label": "Next tab",
+      "file": "tab-next.svg",
+      "legacyIndex": 15
+    },
+    {
+      "id": "page-up",
+      "label": "Page up",
+      "file": "page-up.svg",
+      "legacyIndex": 16
+    },
+    {
+      "id": "page-down",
+      "label": "Page down",
+      "file": "page-down.svg",
+      "legacyIndex": 17
+    },
+    {
+      "id": "settings",
+      "label": "Settings",
+      "file": "settings.svg",
+      "legacyIndex": 18
+    },
+    {
+      "id": "help",
+      "label": "Help",
+      "file": "help.svg",
+      "legacyIndex": 19
+    },
+    {
+      "id": "sprint",
+      "label": "Sprint",
+      "file": "sprint.svg",
+      "legacyIndex": 20
+    },
+    {
+      "id": "quickwheel",
+      "label": "Quickwheel",
+      "file": "quickwheel.svg",
+      "legacyIndex": 21
+    },
+    {
+      "id": "close",
+      "label": "Close",
+      "file": "close.svg",
+      "legacyIndex": 22
+    },
+    {
+      "id": "companion",
+      "label": "Companion",
+      "file": "companion.svg",
+      "legacyIndex": 23
+    },
+    {
+      "id": "aid",
+      "label": "Aid",
+      "file": "aid.svg",
+      "legacyIndex": 24
+    },
+    {
+      "id": "block",
+      "label": "Block",
+      "file": "block.svg",
+      "legacyIndex": 25
+    },
+    {
+      "id": "gyro",
+      "label": "Gyro",
+      "file": "gyro.svg",
+      "legacyIndex": 26
+    }
+  ],
+  "families": [
+    {
+      "id": "precise-line",
+      "label": "Precise line",
+      "directory": "precise-line",
+      "strokeWidth": 1.6,
+      "strokeLinecap": "round",
+      "strokeLinejoin": "round",
+      "fill": "none",
+      "stroke": "currentColor"
+    },
+    {
+      "id": "bold-filled",
+      "label": "Bold filled",
+      "directory": "bold-filled",
+      "strokeWidth": 0.0,
+      "strokeLinecap": "round",
+      "strokeLinejoin": "round",
+      "fill": "currentColor",
+      "stroke": "none"
+    },
+    {
+      "id": "rounded",
+      "label": "Rounded",
+      "directory": "rounded",
+      "strokeWidth": 2.5,
+      "strokeLinecap": "round",
+      "strokeLinejoin": "round",
+      "fill": "none",
+      "stroke": "currentColor"
+    },
+    {
+      "id": "industrial",
+      "label": "Industrial",
+      "directory": "industrial",
+      "strokeWidth": 1.8,
+      "strokeLinecap": "square",
+      "strokeLinejoin": "bevel",
+      "fill": "none",
+      "stroke": "currentColor"
+    }
+  ]
+}

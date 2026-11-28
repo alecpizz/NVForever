@@ -415,7 +415,7 @@ fn player_set_persistent_zero_preserves_all_consumers() {
     let prc_after = persistent_ref_count(&mut g, &ConsoleCtx::default(), &[]).unwrap();
     assert_eq!(prc_after, prc_before, "PersistentRefCount stays valid");
 
-    // Snapshot + restore resets session-only SetPersistent override back to default 1 [hypothesis].
+    // Snapshot + restore resets session-only SetPersistent override back to default 1 (see docs/spec-notes/nvse-stubs-persistent-fall-spread-unique.md).
     let snap = g.snapshot();
     let mut restored = Game::restore(
         &f.data,

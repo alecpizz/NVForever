@@ -44,6 +44,10 @@ pub struct WindParams {
     pub previous_wind: Vec4,
     /// x: rendered frame of the change (FrameCount increments in Last).
     pub change_frame: UVec4,
+    /// Leaf cards: the crown sphere in the mesh's own units (centre xyz, radius w), where
+    /// the sun's shadow on the cards is taken (tree.wesl `NVF_CROWN_SHADOW`); zero on
+    /// bark and billboards.
+    pub crown: Vec4,
 }
 
 /// Leaf cards: camera-facing, rocking and rustling (vertex shaders of the main pass and
@@ -89,6 +93,7 @@ impl MaterialExtension for TreeBillboards {
         descriptor.vertex.shader_defs.push("TREE_BILLBOARD".into());
         // Billboards crossfade with the cells whose trees they stand in for (treelod.rs).
         nvf_assets::fade_prepass(descriptor, key.mesh_key);
+        nvf_assets::enable_foliage_canopy(descriptor);
         nvf_assets::soft_edges(descriptor, key.mesh_key);
         Ok(())
     }
@@ -119,9 +124,16 @@ impl MaterialExtension for LeafCards {
         descriptor.vertex.shader_defs.push("TREE_LEAVES".into());
         // Trees fade in and out with their cells (fade.rs).
         nvf_assets::fade_prepass(descriptor, key.mesh_key);
+        nvf_assets::enable_foliage_canopy(descriptor);
         nvf_assets::soft_edges(descriptor, key.mesh_key);
         if !LEAVES_READ_AMBIENT_OCCLUSION {
             nvf_assets::ambient_occlusion_opt_out(descriptor);
+        }
+        // The sun's shadow from outside the crown: the cards receive none (`spawn`).
+        if !descriptor.vertex.shader_defs.contains(&"PREPASS_PIPELINE".into()) {
+            if let Some(fragment) = descriptor.fragment.as_mut() {
+                fragment.shader_defs.push("NVF_CROWN_SHADOW".into());
+            }
         }
         Ok(())
     }
@@ -374,7 +386,12 @@ fn build(
     // A broken file (an error or a panic) draws the billboard instead.
     let (spt, g) = match nvf_assets::guard::guarded(|| {
         let spt = fnv_spt::Tree::parse(&bytes).map_err(|e| e.to_string())?;
-        let g = fnv_spt::generate(&spt);
+        let mut g = fnv_spt::generate(&spt);
+        // Physical lighting: the canopy's dome normals in place of the original-look rule
+        // (fnv_spt `canopy_normals`; speedtree.md §6).
+        if nvf_assets::authored::physical_pbr() {
+            fnv_spt::canopy_normals(&mut g.leaves);
+        }
         Ok((spt, g))
     }) {
         Ok(v) => v,
@@ -430,6 +447,23 @@ fn build(
         let (mut pos, mut nor, mut uv, mut corner) = (Vec::with_capacity(4 * n), Vec::with_capacity(4 * n), Vec::with_capacity(4 * n), Vec::with_capacity(4 * n));
         let mut colour = Vec::with_capacity(4 * n);
         let mut reach = 0.0f32;
+        // Canopy shading (Physical lighting): cards near the crown's core darker, out to
+        // their full colour at its rim, the core a third of the way up the crown [design,
+        // tuned by eye on #3828's branch].
+        let canopy_depth = nvf_assets::authored::physical_pbr();
+        let (crown_core, crown_max_dist) = if canopy_depth {
+            let (mut c_min, mut c_max) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+            for l in &g.leaves {
+                let p = Vec3::from_array(l.position);
+                c_min = c_min.min(p);
+                c_max = c_max.max(p);
+            }
+            let core = Vec3::new((c_min.x + c_max.x) * 0.5, (c_min.y + c_max.y) * 0.5, c_min.z + 0.35 * (c_max.z - c_min.z));
+            let max_d = g.leaves.iter().map(|l| Vec3::from_array(l.position).distance(core)).fold(0.0f32, f32::max).max(1e-4);
+            (core, max_d)
+        } else {
+            (Vec3::ZERO, 1.0)
+        };
         // Each card's first vertex and its place, for the draw orders (`LeafOrder`).
         let mut cards: Vec<(u32, Vec3)> = Vec::with_capacity(n);
         for l in &g.leaves {
@@ -461,7 +495,14 @@ fn build(
             let (x0, x1, y0, y1) = (x0 + s0 * (x1 - x0), x0 + s1 * (x1 - x0), y0 + t0 * (y1 - y0), y0 + t1 * (y1 - y0));
             let first = pos.len() as u32;
             cards.push((first, Vec3::from_array(l.position)));
-            let tint = dim_colour(rec.leaf_dimming.map_or(1.0, |d| g.brightness(d, l.position[2])));
+            let mut tint = dim_colour(rec.leaf_dimming.map_or(1.0, |d| g.brightness(d, l.position[2])));
+            if canopy_depth {
+                let r_norm = (Vec3::from_array(l.position).distance(crown_core) / crown_max_dist).clamp(0.0, 1.0);
+                let depth = 0.60 + 0.40 * r_norm.powf(0.75);
+                tint[0] *= depth;
+                tint[1] *= depth;
+                tint[2] *= depth;
+            }
             // Bottom left, bottom right, top right, top left: counter-clockwise on screen.
             for (cx, cy, s, t) in [(x0, y0, s0, t0), (x1, y0, s1, t0), (x1, y1, s1, t1), (x0, y1, s0, t1)] {
                 pos.push(l.position);
@@ -474,12 +515,13 @@ fn build(
         debug!("{}: leaf cards cut to {:.0} % of their area", rec.model, 100.0 * kept_area / whole_area.max(1e-6));
         LEAF_AREA.lock().unwrap_or_else(|e| e.into_inner()).add(whole_area, kept_area);
         let aabb = bounds(pos.iter().copied(), reach + sway);
+        let crown = crown_sphere(cards.iter().map(|c| c.1), reach);
         let mut mesh = Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::RENDER_WORLD);
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
         mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, nor);
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, corner);
-        if rec.leaf_dimming.is_some() {
+        if rec.leaf_dimming.is_some() || canopy_depth {
             mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colour);
         }
         let orders: [Handle<Mesh>; LEAF_ORDERS] = std::array::from_fn(|k| {
@@ -497,11 +539,24 @@ fn build(
                 reflectance: 0.1,
                 ..default()
             },
-            extension: LeafCards { wind },
+            extension: LeafCards { wind: WindParams { crown, ..wind } },
         });
         parts.push(TreePart { mesh: orders[0].clone(), material: PartMaterial::Leaves(mat), aabb, leaf_orders: Some(Arc::new(orders)) });
     }
     (!parts.is_empty()).then_some(TreeVisual { parts, scale })
+}
+
+/// The sphere (centre, radius; the mesh's own units) holding every leaf card as the shadow
+/// pass draws it: about the centre of the cards' places, out to the farthest place plus
+/// a card's reach. A tree without cards gets radius 0 (no crown shadow).
+fn crown_sphere(places: impl Iterator<Item = Vec3> + Clone, reach: f32) -> Vec4 {
+    let (lo, hi) = places.clone().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), p| (lo.min(p), hi.max(p)));
+    if lo.x > hi.x {
+        return Vec4::ZERO;
+    }
+    let centre = (lo + hi) * 0.5;
+    let far = places.map(|p| p.distance(centre)).fold(0.0f32, f32::max);
+    centre.extend(far + reach)
 }
 
 /// Leaf cards keep the part of their cell above this alpha (of 255), [`LEAF_PAD`] texels
@@ -578,7 +633,9 @@ pub fn spawn(commands: &mut Commands, parent: Entity, v: &TreeVisual, rt: Mat4, 
             // Leaf cards cast shadows (onto the ground and other objects) but receive
             // none: in the shadow pass they face the light, in the main pass the camera,
             // so a tree's own cards blacken its lower half in hard, mismatched blocks
-            // [observed]. The crown darkens by the CNAM dimming instead (vertex colours).
+            // [observed]. The crown darkens by the CNAM dimming instead (vertex colours),
+            // and the sun's shadow from other objects is taken outside the crown
+            // (`NVF_CROWN_SHADOW`, tree.wesl).
             PartMaterial::Leaves(m) => {
                 let mut leaves = commands.entity(parent);
                 match &p.leaf_orders {
@@ -605,6 +662,18 @@ mod tests {
         assert!((period(rock) - 4.0).abs() < 0.3, "{}", period(rock));
         assert!((period(rustle) - 1.0).abs() < 0.1, "{}", period(rustle));
         assert_eq!(super::angular_speeds(-1.0, -1.0), super::angular_speeds(0.0, 0.0));
+    }
+
+    #[test]
+    fn crown_sphere_holds_every_card() {
+        use bevy::prelude::*;
+        let places = [Vec3::new(-2.0, 0.0, 10.0), Vec3::new(2.0, 0.0, 10.0), Vec3::new(0.0, 0.0, 14.0)];
+        let s = super::crown_sphere(places.iter().copied(), 1.5);
+        assert_eq!(s.truncate(), Vec3::new(0.0, 0.0, 12.0));
+        for p in places {
+            assert!(p.distance(s.truncate()) + 1.5 <= s.w + 1e-5);
+        }
+        assert_eq!(super::crown_sphere(std::iter::empty(), 1.0), Vec4::ZERO, "no cards: off");
     }
 
     #[test]

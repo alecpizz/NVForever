@@ -49,7 +49,8 @@ pub struct GrassParams {
     /// sway weight 1 moves (game units).
     pub wind: Vec4,
     /// x: wave angular speed (rad/s); y: distance at which the grass starts to go; z:
-    /// distance over which it goes (game units); w: unused.
+    /// distance over which it goes (game units); w: the shape's tuft height before the plant's
+    /// scale (game units), for the canopy's root shading (grass.wesl `NVF_CANOPY`).
     pub motion: Vec4,
     /// x: factor on the ambient light; y: factor on every other light (the sun).
     pub light: Vec4,
@@ -111,6 +112,7 @@ impl MaterialExtension for GrassSway {
     ) -> Result<(), SpecializedMeshPipelineError> {
         // Grass fades in and out with its cell (fade.rs).
         nvf_assets::fade_prepass(descriptor, key.mesh_key);
+        nvf_assets::enable_foliage_canopy(descriptor);
         if !GRASS_READS_AMBIENT_OCCLUSION {
             nvf_assets::ambient_occlusion_opt_out(descriptor);
         }
@@ -155,6 +157,8 @@ pub struct GrassConfig {
 /// One shape of a grass model, kept on the CPU: every plant gets a transformed copy.
 struct GrassShape {
     positions: Vec<Vec3>,
+    /// The tallest vertex above the shape's foot (game units, at least 6).
+    max_height: f32,
     uvs: Vec<[f32; 2]>,
     /// Vertex colours (linear); the alpha is the sway weight.
     colors: Vec<[f32; 4]>,
@@ -576,7 +580,25 @@ fn shade_colour(shade: f32) -> f32 {
 /// the way from the vertex to its plant's foot ([`pack_foot`]): the whole plant reads the
 /// grass fires' burn map at its foot, so it chars and sinks as one (grass.wesl,
 /// "Burning").
+/// Under Physical lighting (canopy shading, part 3b of #3828's split): a tuft's normal, from
+/// the ground's at its dense root out to radial at the blade tips, so tufts catch the low
+/// sun's rim across their cards in place of one flat ground normal [design, tuned by eye on
+/// #3828's branch].
+fn grass_canopy_normal(w: Vec3, foot: Vec3, ground: Vec3, max_h: f32, max_r: f32) -> Vec3 {
+    let ground = ground.normalize_or(Vec3::Z);
+    let offset = w - foot;
+    let height = offset.dot(ground).max(0.0);
+    let horiz = offset - ground * offset.dot(ground);
+    let tip = (height / max_h.max(1.0)).clamp(0.0, 1.0);
+    let rad = (horiz.length() / max_r.max(1.0)).clamp(0.0, 1.0);
+    let horiz_scale = 0.55 + 0.65 * tip.max(rad * 0.7);
+    let up_scale = (0.85 - 0.30 * tip).max(0.40) * max_r.max(6.0);
+    (horiz * horiz_scale + ground * up_scale).normalize_or(ground)
+}
+
 fn merged_mesh(shape: &GrassShape, plants: &[&Plant], fit_to_slope: bool) -> (Mesh, Vec3, Vec3) {
+    let tuft_normals = nvf_assets::authored::physical_pbr();
+    let shape_max_r = shape.positions.iter().fold(0.0f32, |m, p| m.max(Vec2::new(p.x, p.y).length())).max(4.0);
     let n = shape.positions.len() * plants.len();
     let (mut pos, mut nor, mut uv, mut uv_b, mut col) = (Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n));
     let mut idx = Vec::with_capacity(shape.indices.len() * plants.len());
@@ -585,12 +607,20 @@ fn merged_mesh(shape: &GrassShape, plants: &[&Plant], fit_to_slope: bool) -> (Me
         let first = pos.len() as u32;
         let t = plant_transform(p, fit_to_slope);
         let shade = shade_colour(p.shade);
+        let ground = Vec3::from_array(p.normal);
+        let foot = Vec3::from_array(p.position);
+        let max_h = (shape.max_height * p.scale[1]).max(6.0);
+        let max_r = (shape_max_r * p.scale[0]).max(4.0);
         for (i, v) in shape.positions.iter().enumerate() {
             let w = t.transform_point3(*v);
             lo = lo.min(w);
             hi = hi.max(w);
             pos.push(w.to_array());
-            nor.push(p.normal);
+            if tuft_normals {
+                nor.push(grass_canopy_normal(w, foot, ground, max_h, max_r).to_array());
+            } else {
+                nor.push(p.normal);
+            }
             uv.push(shape.uvs[i]);
             let c = shape.colors[i];
             uv_b.push([c[3], (w.z - p.position[2]).max(0.0)]);
@@ -708,6 +738,10 @@ fn load_model(path: &str, models: &mut ModelCtx, materials: &mut Assets<GrassMat
         };
 
         let uvs = md.uv_sets.first().filter(|u| u.len() == n).cloned().unwrap_or_else(|| vec![[0.0, 0.0]; n]);
+        let positions: Vec<Vec3> = md.positions.iter().map(|p| to_model.transform_point3(Vec3::from_array(*p))).collect();
+        let max_height = positions.iter().fold(0.0f32, |m, p| m.max(p.z)).max(6.0);
+        let mut shape_params = params;
+        shape_params.motion.w = max_height;
         let material = materials.add(GrassMaterial {
             base: StandardMaterial {
                 base_color: if image.is_some() { Color::WHITE } else { Color::srgb(0.55, 0.5, 0.3) },
@@ -720,10 +754,11 @@ fn load_model(path: &str, models: &mut ModelCtx, materials: &mut Assets<GrassMat
                 reflectance: 0.0,
                 ..default()
             },
-            extension: GrassSway { params, burn: burn.clone() },
+            extension: GrassSway { params: shape_params, burn: burn.clone() },
         });
         shapes.push(GrassShape {
-            positions: md.positions.iter().map(|p| to_model.transform_point3(Vec3::from_array(*p))).collect(),
+            positions,
+            max_height,
             uvs,
             colors,
             indices: md.triangles.iter().filter(|t| t.iter().all(|&i| (i as usize) < n)).flatten().copied().collect(),
@@ -785,6 +820,7 @@ mod tests {
     fn merged_mesh_copies_the_shape_per_plant() {
         let shape = GrassShape {
             positions: vec![Vec3::ZERO, Vec3::X, Vec3::new(0.0, 0.0, 10.0)],
+            max_height: 10.0,
             uvs: vec![[0.0, 1.0], [1.0, 1.0], [0.5, 0.0]],
             colors: vec![[0.5, 0.5, 0.5, 0.0], [0.5, 0.5, 0.5, 0.0], [1.0, 1.0, 1.0, 0.15]],
             indices: vec![0, 1, 2],
@@ -803,5 +839,18 @@ mod tests {
         // Every vertex has the ground's normal.
         let Some(bevy::mesh::VertexAttributeValues::Float32x3(normals)) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL) else { panic!("no normals") };
         assert!(normals.iter().all(|n| *n == [0.0, 0.0, 1.0]));
+    }
+
+    #[test]
+    fn grass_canopy_normals_stand_at_the_root_and_tilt_out_at_the_tips() {
+        let foot = Vec3::ZERO;
+        let ground = Vec3::Z;
+        let base_n = grass_canopy_normal(Vec3::new(2.0, 0.0, 0.0), foot, ground, 20.0, 10.0);
+        let tip_n = grass_canopy_normal(Vec3::new(10.0, 0.0, 20.0), foot, ground, 20.0, 10.0);
+        assert!(base_n.z > 0.9, "base stays nearly upright: {base_n:?}");
+        assert!(tip_n.x > base_n.x && tip_n.x > 0.7, "outer tips tilt strongly outward: {tip_n:?}");
+        let slope = Vec3::new(0.4, 0.0, 1.0).normalize();
+        let slope_foot_n = grass_canopy_normal(foot, foot, slope, 20.0, 10.0);
+        assert!((slope_foot_n - slope).length() < 1e-5, "foot normal follows slope: {slope_foot_n:?} vs {slope:?}");
     }
 }

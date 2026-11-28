@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Original NVForever geometry; Precise line family. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="currentColor" color="#ffffff" fill-rule="evenodd" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+  <title>Sneak</title>
+  <circle cx="20" cy="12" r="2.5"/><path d="M 6 5 L 27 5 M 17 17 L 13 21 L 20 21 L 21 27 L 27 27 M 13 21 L 10 25 L 15 27 L 18 27 M 17 17 L 23 19 L 25 16"/>
+</svg>

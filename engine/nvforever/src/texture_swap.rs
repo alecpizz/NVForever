@@ -11,16 +11,13 @@
 //! `SetSecuritronExpression`) carry their name (`nvf_assets::actor::ShapeName`) and are
 //! found by it.
 //!
-//! A mesh drawn see-through wears a copy of its material: SetActorAlpha's
-//! (`crate::effect_shaders`, `Faded`) or a fade's (`nvf_play::fade::Fading`). The swap
-//! goes to the mesh's own material, the one kept aside, so the end of the alpha or the
-//! fade does not bring the old texture back (the psych test's card fades in as Doc
-//! Mitchell's line swaps its texture, smoke test `rorschach-cards`): `Faded` takes the
-//! swapped material as its own and SetActorAlpha copies it again; a fade's copy is
-//! dropped and the fade's next step copies the swapped material. With both on, the one
-//! that started second may keep the other's see-through copy as its original; the swap
-//! matches and copies the mesh's own material beneath both
-//! (`crate::effect_shaders::persistent_material`, #2981).
+//! A mesh drawn see-through wears a single copy owned by `nvf_play::fade::Fading`
+//! (shared by presence fades and `SetActorAlpha`, #3105). The swap goes to the mesh's own
+//! persistent material (`nvf_play::fade::persistent_material`), so the end of the alpha or
+//! the fade does not bring the old texture back (the psych test's card fades in as Doc
+//! Mitchell's line swaps its texture, smoke test `rorschach-cards`): `queue_retarget`
+//! updates `Fading::original` and rebuilds its single see-through copy in place at the
+//! current combined opacity.
 
 use bevy::prelude::*;
 use nvf_assets::actor::ShapeName;
@@ -103,7 +100,7 @@ pub(crate) struct Swapping<'w, 's> {
     models: ModelCtx<'w>,
     swapped: ResMut<'w, Swapped>,
     #[allow(clippy::type_complexity)]
-    drawn: Query<'w, 's, (Entity, &'static RefVisual, Option<&'static MeshMaterial3d<NifMaterial>>, Option<&'static crate::mesh_terrain_blend::BlendShape>, Option<&'static ShapeName>, Option<&'static mut crate::effect_shaders::Faded>, Option<&'static Fading>, Option<&'static nvf_assets::nif_material::MaterialOverride>)>,
+    drawn: Query<'w, 's, (Entity, &'static RefVisual, Option<&'static MeshMaterial3d<NifMaterial>>, Option<&'static crate::mesh_terrain_blend::BlendShape>, Option<&'static ShapeName>, Option<&'static Fading>, Option<&'static nvf_assets::nif_material::MaterialOverride>)>,
     added: Query<'w, 's, (), NewSwapTargets>,
 }
 
@@ -134,15 +131,15 @@ impl Swapping<'_, '_> {
                     .filter(|s| s.name.as_deref().is_some_and(|n| same_shape(n, shape)))
                     .map(|s| s.material.id())
                     .collect();
-                for (e, rv, mat, blend, name, mut faded, fading, drawing) in &mut *drawn {
+                for (e, rv, mat, blend, name, fading, drawing) in &*drawn {
                     let Some(mat) = nvf_assets::nif_surface_blend::source_material(mat, blend) else { continue };
                     if rv.0 != r.0 {
                         continue;
                     }
-                    // A mesh drawn see-through wears a copy: the swap goes to its own material
-                    // (module notes), never to a copy one fade made of the other's (#2981).
-                    // [design, #2557] Texture copies must not inherit the cloak either.
-                    let own = crate::effect_shaders::persistent_material(mat, drawing, faded.as_deref(), fading, |id| models.materials.contains(id)).id();
+                    // A mesh drawn see-through wears `Fading`'s single copy: the swap goes
+                    // to its own persistent material beneath both `Fading` and any cloak
+                    // override (#2981, #3105).
+                    let own = nvf_play::fade::persistent_material(mat, drawing, fading).id();
                     let original = swapped.original.get(&own).copied().unwrap_or(own);
                     if !targets.contains(&original) && name.is_none_or(|n| !same_shape(&n.0, shape)) {
                         continue;
@@ -168,30 +165,15 @@ impl Swapping<'_, '_> {
                             h
                         }
                     };
-                    match (faded.as_mut(), fading) {
-                        (also_faded, Some(f)) if f.original().id() != copy.id() => {
-                            // With the actor's alpha fade on too, its stored original takes the
-                            // swap as well, or releasing it would bring back the material worn
-                            // before (#2981: an old authored set, mark or gloss).
-                            if let Some(fd) = also_faded {
-                                fd.retarget(&copy);
-                            }
-                            models.materials.remove(f.copy());
-                            // The entity may go with its cell before this is applied (#2757).
-                            commands.entity(e).try_insert(MeshMaterial3d(copy)).try_remove::<Fading>();
+                    match fading {
+                        Some(f) if f.original().id() != copy.id() => {
+                            nvf_play::fade::queue_retarget(commands, e, copy);
                         }
-                        (also_faded, Some(_)) => {
-                            if let Some(fd) = also_faded {
-                                fd.retarget(&copy);
-                            }
-                        }
-                        (Some(f), None) => {
-                            f.retarget(&copy);
-                        }
-                        (None, None) if copy.id() != mat.id() => {
+                        Some(_) => {}
+                        None if copy.id() != mat.id() => {
                             commands.entity(e).insert(MeshMaterial3d(copy));
                         }
-                        (None, None) => {}
+                        None => {}
                     }
                 }
             }
@@ -274,25 +256,17 @@ mod tests {
         (app, _files, e, own)
     }
 
-    /// #2981, review of stage 3: a mesh under SetActorAlpha and a fade at once, the swap made
-    /// while both run, through the production systems (`Swapping::sync`, nvf_play's fade
-    /// `step` and `AlphaDrawing::sync`), the fade stepped before the actor's alpha in this
-    /// fixture (`overlap_app`). In both start orders the swap copies the model's
-    /// material, the handle an unnamed shape is matched by (`targets` in `Swapping::sync`),
-    /// never a see-through copy, and the swapped material has no fade's alpha baked in.
-    ///
-    /// How the two see-through copies hand the mesh back is not this change's subject and
-    /// does not hold in every order, with or without a swap: `HELD` lists the orders that end
-    /// on the mesh's own (or swapped) material, opaque, with both markers gone, as the test
-    /// finds them, so a change to either system shows here.
+    /// #2981 / #3105: a mesh under `SetActorAlpha` and a presence fade at once shares one
+    /// `Fading` owner, with or without a texture swap, across all eight combinations of
+    /// `(swap, alpha_first, alpha_released_first)`. Both effects compose multiplicatively
+    /// (`base * actor_alpha * fade`), `Fading::original()` always stays the mesh's own (or
+    /// swapped) material, changing actor alpha mid-fade updates the product and survives
+    /// the fade's end, and every order restores the persistent material opaque with `Fading`
+    /// gone.
     #[test]
     fn a_swap_under_both_fades_copies_the_mesh_own_material_in_either_start_order() {
-        // Not held, without a swap: the alpha started first and released first (the fade's
-        // end puts the alpha's copy back), a known bug older than #2981 and not this change's
-        // subject: the intended result is the mesh given back whole in all eight orders. When
-        // it starts to hold, add it here. The fade started first and ended first holds since
-        // #3017: the alpha's copy takes the material the fade gives back as its original.
         const HELD: &[&str] = &[
+            "swap false, alpha first true, alpha released first true",
             "swap false, alpha first true, alpha released first false",
             "swap false, alpha first false, alpha released first true",
             "swap false, alpha first false, alpha released first false",
@@ -327,13 +301,24 @@ mod tests {
                         start_fade(&mut app);
                         start_alpha(&mut app);
                     }
-                    assert!(app.world().get::<crate::effect_shaders::Faded>(e).is_some(), "{case}: alpha on");
-                    let fading = app.world().get::<nvf_play::fade::Fading>(e).unwrap_or_else(|| panic!("{case}: fade on")).original().clone();
-                    if alpha_first {
-                        assert_ne!(fading, own, "{case}: the fade copied the alpha's see-through copy (the case the swap must look beneath)");
-                    } else {
-                        assert_eq!(fading, own, "{case}");
-                    }
+                    let fading = app.world().get::<nvf_play::fade::Fading>(e).unwrap_or_else(|| panic!("{case}: single owner active"));
+                    assert_eq!(fading.original(), &own, "{case}: original is always the mesh's own material");
+                    assert_eq!(fading.actor_alpha(), Some(0.5), "{case}");
+                    assert!(fading.presence().is_some(), "{case}");
+
+                    // Partway through fade in (0.5 s / 2.0 s = 0.25): drawn alpha = 1.0 * 0.5 * 0.25.
+                    app.world_mut().resource_mut::<Time<Virtual>>().advance_by(std::time::Duration::from_secs_f32(0.5));
+                    app.update();
+                    let worn_mid = app.world().get::<MeshMaterial3d<NifMaterial>>(e).unwrap().0.clone();
+                    let mid_alpha = app.world().resource::<Assets<NifMaterial>>().get(&worn_mid).unwrap().base.base_color.alpha();
+                    assert!((mid_alpha - 0.125).abs() < 1e-5, "{case}: mid fade-in alpha {mid_alpha}");
+
+                    // Change actor alpha while the fade runs (0.5 -> 0.8): drawn alpha = 0.8 * 0.25 = 0.2.
+                    app.world_mut().resource_mut::<Alphas>().0.insert(FormId(reference), 0.8);
+                    app.update();
+                    let changed_alpha = app.world().resource::<Assets<NifMaterial>>().get(&worn_mid).unwrap().base.base_color.alpha();
+                    assert!((changed_alpha - 0.2).abs() < 1e-5, "{case}: updated actor alpha * fade {changed_alpha}");
+
                     let expected = if swap {
                         {
                             let mut swaps = app.world_mut().resource_mut::<Swaps>();
@@ -350,6 +335,10 @@ mod tests {
                         assert!(m.base.base_color_texture.is_some(), "{case}: the new diffuse");
                         assert!(materials.get(&own).unwrap().base.base_color_texture.is_none(), "{case}");
                         assert_eq!((m.base.base_color.alpha(), m.base.alpha_mode, m.extension.depth_write), (1.0, own_mode, own_depth), "{case}: no fade's alpha baked into the swapped material");
+                        // The live see-through copy keeps the combined opacity (0.2) with the swapped texture.
+                        let drawn_mat = materials.get(&worn_mid).unwrap();
+                        assert!(drawn_mat.base.base_color_texture.is_some(), "{case}: live copy rebuilt with swapped diffuse");
+                        assert!((drawn_mat.base.base_color.alpha() - 0.2).abs() < 1e-5, "{case}: live copy keeps combined opacity");
                         copy
                     } else {
                         own.clone()
@@ -364,28 +353,173 @@ mod tests {
                     };
                     if alpha_released_first {
                         release_alpha(&mut app);
+                        let after_first = app.world().resource::<Assets<NifMaterial>>().get(&worn_mid).unwrap().base.base_color.alpha();
+                        assert!((after_first - 0.25).abs() < 1e-5, "{case}: fade remains at 0.25 after alpha ends, got {after_first}");
                         end_fade(&mut app);
                     } else {
                         end_fade(&mut app);
+                        let after_first = app.world().resource::<Assets<NifMaterial>>().get(&worn_mid).unwrap().base.base_color.alpha();
+                        assert!((after_first - 0.8).abs() < 1e-5, "{case}: updated actor alpha 0.8 remains after fade ends, got {after_first}");
                         release_alpha(&mut app);
                     }
                     app.update();
                     app.update();
                     let worn = app.world().get::<MeshMaterial3d<NifMaterial>>(e).unwrap().0.clone();
                     let opaque = app.world().resource::<Assets<NifMaterial>>().get(&worn).is_some_and(|m| (m.base.base_color.alpha(), m.base.alpha_mode, m.extension.depth_write) == (1.0, own_mode, own_depth));
-                    let unmarked = app.world().get::<crate::effect_shaders::Faded>(e).is_none() && app.world().get::<nvf_play::fade::Fading>(e).is_none();
+                    let unmarked = app.world().get::<nvf_play::fade::Fading>(e).is_none();
                     if worn == expected && opaque && unmarked {
                         held.push(case);
                     }
                 }
             }
         }
-        assert_eq!(held, HELD, "the orders that give the mesh back whole");
+        assert_eq!(held, HELD, "all eight orders give the mesh back whole");
     }
 
-    /// #2981, second review: the actor's alpha spans two fades. The first fade ends and
-    /// removes its copy, which the alpha still names as its original; a swap during the
-    /// second fade must copy the mesh's own material, not that removed copy.
+    /// #3105: fade-out composes multiplicatively with `SetActorAlpha` and base opacity, and
+    /// both ending in the same update always restores the mesh's own material regardless of
+    /// deferred-command flush boundaries (`AfterFade` and `AfterFadeUnapplied`).
+    #[test]
+    fn fade_out_composes_and_two_ends_in_one_update_restore_own_material() {
+        for order in [AlphaOrder::AfterFade, AlphaOrder::AfterFadeUnapplied] {
+            let (mut app, _files, e, own) = overlap_app_ordered(order);
+            // Set base opacity 0.8 and mark the reference disabled so a fade-out runs.
+            app.world_mut().resource_mut::<Assets<NifMaterial>>().get_mut(&own).unwrap().base.base_color.set_alpha(0.8);
+            let mut placed = crate::outfits::tests::placed_ref(REFERENCE, *b"REFR");
+            placed.flags |= fnv_sim::refs::FLAG_INITIALLY_DISABLED;
+            let mut refs = fnv_sim::RefTable::default();
+            refs.refs.insert(FormId(REFERENCE), placed);
+            let forms: &'static fnv_sim::FormStore = Box::leak(Box::default());
+            let refs: &'static fnv_sim::RefTable = Box::leak(Box::new(refs));
+            app.insert_resource(nvf_play::sim::SimState { forms, refs, world: fnv_sim::World::new(forms, refs, Default::default()) });
+            app.world_mut().resource_mut::<Alphas>().0.insert(FormId(REFERENCE), 0.5);
+            app.world_mut().write_message(nvf_play::fade::RefFade { form_id: REFERENCE, fade_in: false });
+            app.update();
+            // Partway through fade out (0.5 s / 2.0 s -> presence 0.75): 0.8 * 0.5 * 0.75 = 0.3.
+            app.world_mut().resource_mut::<Time<Virtual>>().advance_by(std::time::Duration::from_secs_f32(0.5));
+            app.update();
+            let copy = app.world().get::<nvf_play::fade::Fading>(e).expect("active").copy().clone();
+            let alpha = app.world().resource::<Assets<NifMaterial>>().get(&copy).unwrap().base.base_color.alpha();
+            assert!((alpha - 0.3).abs() < 1e-5, "{order:?}: fade-out * actor_alpha * base = {alpha}");
+            // End BOTH in the same update.
+            app.world_mut().resource_mut::<Time<Virtual>>().advance_by(std::time::Duration::from_secs_f32(3.0));
+            app.world_mut().resource_mut::<Alphas>().0.clear();
+            app.update();
+            assert!(app.world().get::<nvf_play::fade::Fading>(e).is_none(), "{order:?}: Fading removed");
+            assert!(!app.world().resource::<Assets<NifMaterial>>().contains(copy.id()), "{order:?}: copy removed");
+            assert_eq!(app.world().get::<MeshMaterial3d<NifMaterial>>(e).unwrap().0, own, "{order:?}: own restored");
+            assert_eq!(app.world().resource::<Assets<NifMaterial>>().get(&own).unwrap().base.base_color.alpha(), 0.8);
+        }
+    }
+
+    /// #3105: a model-backed unnamed shape (matched via its model's material handle, with
+    /// no `ShapeName` component) swaps cleanly under overlapping fades and restores the
+    /// swapped material in all four start/end orders.
+    #[test]
+    fn model_backed_unnamed_shape_swaps_and_restores_across_overlapping_fades() {
+        use crate::authored_test_records::*;
+        const BASE: u32 = 0x901;
+        const REF_ID: u32 = 0x902;
+        const CELL: u32 = 0x903;
+        let raw = [
+            tes4(),
+            top(b"STAT", &record(b"STAT", 0, BASE, &[sub(b"EDID", z("SwapStat")), sub(b"MODL", z("bare.nif"))])),
+            top(b"CELL", &group([0; 4], 2, &group([0; 4], 3, &[
+                record(b"CELL", 0, CELL, &[]),
+                group(CELL.to_le_bytes(), 6, &group(CELL.to_le_bytes(), 9, &record(b"REFR", 0, REF_ID, &[
+                    sub(b"NAME", u32s(&[BASE])),
+                    sub(b"DATA", vec![0; 24]),
+                ]))),
+            ].concat()))),
+        ].concat();
+        let plugins: &'static Vec<fnv_esm::Plugin> = Box::leak(Box::new(vec![fnv_esm::Plugin::parse(&raw, "SwapTest.esm".into()).unwrap()]));
+        let lo: &'static fnv_esm::LoadOrder = Box::leak(Box::new(fnv_esm::LoadOrder::new(plugins).unwrap()));
+        let esm_schema: &'static fnv_esm::Schema = Box::leak(Box::new(fnv_esm::Schema::load_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../../schemas/fnv")).unwrap()));
+        let forms: &'static fnv_sim::FormStore = Box::leak(Box::new(fnv_sim::FormStore::build(lo, esm_schema)));
+        let refs: &'static fnv_sim::RefTable = Box::leak(Box::new(fnv_sim::RefTable::build(lo, esm_schema)));
+
+        for alpha_first in [true, false] {
+            for alpha_released_first in [true, false] {
+                let (mut app, _files) = crate::outfits::tests::asset_fixture();
+                app.insert_resource(nvf_play::sim::SimState { forms, refs, world: fnv_sim::World::new(forms, refs, Default::default()) })
+                    .insert_resource(crate::world::WorldData { lo, schema: esm_schema, ..crate::outfits::tests::empty_world_data() })
+                    .init_resource::<Time<Virtual>>()
+                    .init_resource::<super::Swapped>()
+                    .init_resource::<Swaps>()
+                    .init_resource::<crate::effect_shaders::Shaders>()
+                    .init_resource::<Alphas>()
+                    .add_plugins(nvf_play::fade::FadePlugin)
+                    .add_systems(Update, (
+                        (|swaps: Res<Swaps>, sim: Res<nvf_play::sim::SimState>, world: Res<crate::world::WorldData>, mut drawing: super::Swapping| drawing.sync(&swaps.0, &sim, &world)).before(nvf_play::PlaySet::Sync),
+                        alpha_sync.after(nvf_play::PlaySet::Sync),
+                    ));
+                let mut dds = vec![0u8; 136];
+                dds[..4].copy_from_slice(b"DDS ");
+                for (at, value) in [(4, 124u32), (8, 0x1007), (12, 4), (16, 4), (28, 1), (76, 32), (80, 4), (108, 0x1000)] {
+                    dds[at..at + 4].copy_from_slice(&value.to_le_bytes());
+                }
+                dds[84..88].copy_from_slice(b"DXT1");
+                app.world_mut().resource_mut::<nvf_assets::TextureCache>().offer(TEXTURE.into(), dds, 0.0);
+                // Load the real model ("meshes\\bare.nif") and spawn an unnamed mesh wearing its shape's material.
+                let own = {
+                    use bevy::ecs::system::RunSystemOnce;
+                    app.world_mut().run_system_once(|mut models: nvf_assets::model::ModelCtx| {
+                        models.model("meshes\\bare.nif").expect("fixture model").shapes[0].material.clone()
+                    }).unwrap()
+                };
+                // Intentionally NO `ShapeName` component: matched only via `model.shapes` handle!
+                let e = app.world_mut().spawn((MeshMaterial3d(own.clone()), nvf_play::RefVisual(REF_ID), Visibility::Inherited)).id();
+                app.update();
+
+                if alpha_first {
+                    app.world_mut().resource_mut::<Alphas>().0.insert(FormId(REF_ID), 0.5);
+                    app.update();
+                    app.world_mut().write_message(nvf_play::fade::RefFade { form_id: REF_ID, fade_in: true });
+                    app.update();
+                } else {
+                    app.world_mut().write_message(nvf_play::fade::RefFade { form_id: REF_ID, fade_in: true });
+                    app.update();
+                    app.world_mut().resource_mut::<Alphas>().0.insert(FormId(REF_ID), 0.5);
+                    app.update();
+                }
+                app.world_mut().resource_mut::<Time<Virtual>>().advance_by(std::time::Duration::from_secs_f32(1.0));
+                app.update();
+                // Swap shape "bare" while both effects overlap.
+                {
+                    let mut swaps = app.world_mut().resource_mut::<Swaps>();
+                    swaps.0.by_ref.insert(FormId(REF_ID), vec![("bare".into(), TEXTURE.into())]);
+                    swaps.0.generation += 1;
+                }
+                app.update();
+                let swapped_copy = app.world().resource::<super::Swapped>().made.values().next().expect("unnamed shape matched model material").clone();
+                assert_eq!(app.world().get::<nvf_play::fade::Fading>(e).unwrap().original(), &swapped_copy);
+                // Mid fade-in (1.0 / 2.0 = 0.5) * actor alpha 0.5 = 0.25.
+                let copy = app.world().get::<nvf_play::fade::Fading>(e).unwrap().copy().clone();
+                let mid = app.world().resource::<Assets<NifMaterial>>().get(&copy).unwrap().base.base_color.alpha();
+                assert!((mid - 0.25).abs() < 1e-5, "unnamed shape combined alpha {mid}");
+
+                if alpha_released_first {
+                    app.world_mut().resource_mut::<Alphas>().0.clear();
+                    app.update();
+                    app.world_mut().resource_mut::<Time<Virtual>>().advance_by(std::time::Duration::from_secs_f32(3.0));
+                    app.update();
+                } else {
+                    app.world_mut().resource_mut::<Time<Virtual>>().advance_by(std::time::Duration::from_secs_f32(3.0));
+                    app.update();
+                    app.world_mut().resource_mut::<Alphas>().0.clear();
+                    app.update();
+                }
+                app.update();
+                assert!(app.world().get::<nvf_play::fade::Fading>(e).is_none());
+                assert_eq!(app.world().get::<MeshMaterial3d<NifMaterial>>(e).unwrap().0, swapped_copy);
+                assert_eq!(app.world().resource::<Assets<NifMaterial>>().get(&swapped_copy).unwrap().base.base_color.alpha(), 1.0);
+            }
+        }
+    }
+
+    /// #2981 / #3105: the actor's alpha spans two presence fades. Both share one `Fading`
+    /// whose original stays `own` across the first fade's end and the second fade, so a
+    /// swap during the second fade copies `own` with no fade alpha baked in.
     #[test]
     fn a_swap_during_a_second_fade_under_one_actor_alpha_copies_the_mesh_own_material() {
         let (mut app, _files, e, own) = overlap_app();
@@ -399,11 +533,12 @@ mod tests {
         app.world_mut().resource_mut::<Time<Virtual>>().advance_by(std::time::Duration::from_secs_f32(3.0));
         app.update();
         app.update();
-        assert!(app.world().get::<nvf_play::fade::Fading>(e).is_none(), "the first fade is over");
-        let stored = app.world().get::<crate::effect_shaders::Faded>(e).expect("alpha still on").original.clone();
-        assert_eq!(stored, own, "#3017: the alpha's original is the mesh's own material, which the first fade gave back (no longer its removed copy)");
+        let f = app.world().get::<nvf_play::fade::Fading>(e).expect("alpha still on");
+        assert!(f.presence().is_none(), "the first fade is over");
+        assert_eq!(f.actor_alpha(), Some(0.5));
+        assert_eq!(f.original(), &own, "the single owner kept the mesh's own material");
         fade(&mut app);
-        assert!(app.world().get::<nvf_play::fade::Fading>(e).is_some(), "the second fade runs");
+        assert!(app.world().get::<nvf_play::fade::Fading>(e).unwrap().presence().is_some(), "the second fade runs");
         {
             let mut swaps = app.world_mut().resource_mut::<Swaps>();
             swaps.0.by_ref.insert(FormId(REFERENCE), vec![("testshape".into(), TEXTURE.into())]);
@@ -419,11 +554,10 @@ mod tests {
         assert_eq!(m.base.base_color.alpha(), 1.0, "no fade's alpha baked in");
     }
 
-    /// #3017: an actor alpha started while a fade in draws the mesh copies the fade's copy;
-    /// at the fade's end the fade removes that copy at once and gives the mesh its own
-    /// material back by a command. In the production order (the alpha after the fade, the
-    /// commands applied between) and with the commands not yet applied, the alpha's copy is
-    /// made again from the mesh's own material, and the release gives that back, opaque.
+    /// #3017 / #3105: an actor alpha started while a presence fade draws the mesh shares
+    /// the single `Fading` copy (`original == own`). Both in `AfterFade` and in
+    /// `AfterFadeUnapplied`, ending the fade leaves the mesh at actor alpha 0.7 and
+    /// releasing actor alpha restores `own`, opaque.
     #[test]
     fn an_alpha_copy_made_during_a_fade_takes_the_material_the_fade_gives_back() {
         for order in [AlphaOrder::AfterFade, AlphaOrder::AfterFadeUnapplied] {
@@ -432,13 +566,13 @@ mod tests {
             app.update();
             app.world_mut().resource_mut::<Alphas>().0.insert(FormId(REFERENCE), 0.7);
             app.update();
-            let fade_copy = app.world().get::<crate::effect_shaders::Faded>(e).unwrap().original.clone();
-            assert_ne!(fade_copy, own, "{order:?}: copied from the fade's copy");
+            assert_eq!(app.world().get::<nvf_play::fade::Fading>(e).unwrap().original(), &own, "{order:?}: single owner holds own");
             app.world_mut().resource_mut::<Time<Virtual>>().advance_by(std::time::Duration::from_secs_f32(3.0));
             app.update();
             app.update();
-            assert!(app.world().get::<nvf_play::fade::Fading>(e).is_none(), "{order:?}: the fade is over");
-            assert_eq!(app.world().get::<crate::effect_shaders::Faded>(e).unwrap().original, own, "{order:?}: the own material is the original");
+            let f = app.world().get::<nvf_play::fade::Fading>(e).expect("alpha still on");
+            assert!(f.presence().is_none(), "{order:?}: the fade is over");
+            assert_eq!(f.original(), &own, "{order:?}: the own material is the original");
             let worn = app.world().get::<MeshMaterial3d<NifMaterial>>(e).unwrap().0.clone();
             let materials = app.world().resource::<Assets<NifMaterial>>();
             let m = materials.get(&worn).unwrap_or_else(|| panic!("{order:?}: the worn material exists"));
@@ -446,6 +580,7 @@ mod tests {
             app.world_mut().resource_mut::<Alphas>().0.clear();
             app.update();
             app.update();
+            assert!(app.world().get::<nvf_play::fade::Fading>(e).is_none());
             assert_eq!(app.world().get::<MeshMaterial3d<NifMaterial>>(e).unwrap().0, own, "{order:?}: the release gives back the own material");
             assert_eq!(app.world().resource::<Assets<NifMaterial>>().get(&own).unwrap().base.base_color.alpha(), 1.0);
         }

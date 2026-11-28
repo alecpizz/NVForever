@@ -737,4 +737,31 @@ mod tests {
         }
         assert!(m.can_finish());
     }
+
+    #[test]
+    fn high_menu_scale_keeps_chargen_list_reset_and_done_buttons_inside_safe_viewport() {
+        use crate::touch_safe_area::SafeInsets;
+        let safe = SafeInsets { left: 48.0, top: 16.0, right: 48.0, bottom: 32.0 };
+        for view in [Vec2::new(1280.0, 720.0), Vec2::new(2400.0, 1080.0), Vec2::new(960.0, 540.0)] {
+            for scale in [1.25f32, 1.5, 2.0] {
+                let (s, _) = crate::interface::fit_centered_box(scale, view, safe, 1088.0, 840.0).expect("clamped");
+                let px_per_u = (view.y / 960.0) * s;
+                let safe_w = view.x - safe.left - safe.right;
+                let safe_h = view.y - safe.top - safe.bottom;
+                let box_w = MAIN.x * px_per_u;
+                let box_h = MAIN.y * px_per_u;
+                let origin_x = safe.left + (safe_w - box_w) * 0.5;
+                let origin_y = safe.top + (safe_h - box_h) * 0.5;
+                // Reset (y=60) and Done (y=112, right-aligned at x=1014 with +40 hint hit width) stay inside safe bounds.
+                let done_right = origin_x + (BUTTONS.x + 40.0) * px_per_u;
+                let reset_top = origin_y + BUTTONS.y * px_per_u;
+                let done_bottom = origin_y + (BUTTONS.y + 52.0 + BODY_H + 2.0 * BUTTON_PAD) * px_per_u;
+                assert!(origin_x - 15.0 * px_per_u >= safe.left - 1.0, "list left @ {view:?} {scale}");
+                assert!(done_right <= view.x - safe.right + 1.0, "Done right @ {view:?} {scale}");
+                assert!(reset_top >= safe.top - 1.0, "Reset top @ {view:?} {scale}");
+                assert!(done_bottom <= view.y - safe.bottom + 1.0, "Done bottom @ {view:?} {scale}");
+                assert!(origin_y + box_h <= view.y - safe.bottom + 1.0, "box bottom @ {view:?} {scale}");
+            }
+        }
+    }
 }

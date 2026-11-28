@@ -135,6 +135,21 @@ fn same_sex_follows_sex_change() {
     assert_eq!(n(&mut g, "MemberARef.SameSex MemberBRef"), 1.0);
 }
 
+/// #3787: SameSexAsPC is SameSex with the player as the other actor.
+#[test]
+fn same_sex_as_pc_compares_with_the_player() {
+    assert!(crate::functions::registry().iter().any(|(o, nm, _)| *o == 0x1087 && *nm == "SameSexAsPC"));
+    let f = fixture();
+    let mut g = game(&f);
+    run(&mut g, "MemberARef.SexChange 1");
+    run(&mut g, "PlayerRef.SexChange 1");
+    assert_eq!(n(&mut g, "MemberARef.SameSexAsPC"), 1.0);
+    run(&mut g, "PlayerRef.SexChange 0");
+    assert_eq!(n(&mut g, "MemberARef.SameSexAsPC"), 0.0);
+    assert_eq!(n(&mut g, "MemberARef.SameSexAsPC"), n(&mut g, "MemberARef.SameSex PlayerRef"));
+    assert_eq!(n(&mut g, "PlayerRef.SameSexAsPC"), 1.0);
+}
+
 #[test]
 fn friend_disposition_is_towards_the_player_at_the_friend_level() {
     let f = fixture();

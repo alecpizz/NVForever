@@ -664,6 +664,44 @@ class RequiresTests(unittest.TestCase):
         self.assertEqual([v.status for v in verdicts], ["FAIL"])
         run.assert_called_once()
 
+    def test_a_negated_variable_skips_when_it_is_set_and_runs_when_it_is_not(self):
+        import argparse
+        from unittest import mock
+        from smoke.runner import Env
+        suite = load_text(game("barred", extra=f'requires = ["!{self.VAR}"]\nexpect = ["music summary: 1 started"]'))
+        launches = plan(suite, suite.scenarios)
+
+        def run(fake):
+            with tempfile.TemporaryDirectory() as d:
+                env = Env(repo=Path(d), out=Path(d), exe=Path(d) / "nvforever.exe", data="D", fnvtool=None)
+                with mock.patch.object(cli, "run_launch", side_effect=lambda x, e, locks: fake(x, e)):
+                    return cli.run_launches(launches, env, None, 1, argparse.Namespace(context=3), lambda _: None)
+
+        def passing(x, e):
+            (e.out / f"{x.name}.log").write_text("\n".join(LOG), encoding="utf-8")
+            return 0, "", 1.0
+
+        self.assertEqual([v.status for v in run(passing)], ["PASS"])
+        os.environ[self.VAR] = ""
+        self.assertEqual([v.status for v in run(passing)], ["PASS"])
+        os.environ[self.VAR] = "1"
+        verdicts = run(self.never)
+        self.assertEqual([(v.status, v.reason) for v in verdicts], [("SKIP", f"unset {self.VAR}")])
+
+    def test_repo_developer_aid_scenarios(self):
+        """A scenario of the volumetric clouds or the light in the air that sets a developer aid (a debug variable a release
+        build does not read: engine/nvforever/src/dev_aids.rs) says which build it is for."""
+        suite = load(HERE / "scenarios.toml")
+        aids = ("NVF_PLAY_DEBUG_VOLUMETRIC_CLOUDS", "NVF_PLAY_DEBUG_MEDIUM", "NVF_PLAY_DEBUG_FAIR_SUN", "NVF_PLAY_DEBUG_CLOUD_SHADOWS_SOURCE",
+                "NVF_PLAY_DEBUG_SOLID_CORES", "NVF_PLAY_TEST_SHOT_DIFF")
+        using = [s for s in suite.scenarios if any(k.startswith(aids) for k in s.env)]
+        self.assertTrue(using)
+        for s in using:
+            if s.name in ("volumetric-clouds-no-aids", "volumetric-light-no-aids"):
+                self.assertEqual(s.requires, ["!NVF_SMOKE_DEV_AIDS"])
+            else:
+                self.assertEqual(s.requires, ["NVF_SMOKE_DEV_AIDS"], s.name)
+
     def test_the_variable_reaches_the_game_unless_the_scenario_sets_its_own(self):
         os.environ[self.VAR] = "C:/bundle"
         self.assertEqual(aid_free_environ({})[self.VAR], "C:/bundle")

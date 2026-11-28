@@ -836,8 +836,14 @@ impl Game {
         }
     }
 
-    /// Preview all six caravan values and track winners after applying `m` for `by`,
-    /// without mutating `self` [design: BetterCaravan `bPreviewMoveResult`].
+    /// Preview all six caravan values and track winners after applying `m` for `by`
+    /// under `bPreviewMoveResult = 1` [documented: Better Caravan v1.9
+    /// (`https://www.nexusmods.com/newvegas/mods/81002`), shipped
+    /// `Data\NVSE\Plugins\BetterCaravan.ini` comment:
+    /// `"; show the resulting caravan values when hovering over a move"`; plugin DLL and
+    /// source code were never consulted], implemented via NVForever's own non-mutating
+    /// clone-preview helper (`preview_move`) without mutating `self` [design: NVForever's
+    /// non-mutating clone-preview helper, not Better Caravan's implementation].
     pub fn preview_move(&self, by: usize, m: Move) -> Option<MovePreview> {
         let mut after = self.clone();
         after.apply(by, m).ok()?;
@@ -919,7 +925,13 @@ pub fn evaluate(g: &Game, side: usize) -> f32 {
 }
 
 /// Resulting caravan values and track winners from hovering/previewing a legal move
-/// [design: BetterCaravan `bPreviewMoveResult`].
+/// under `bPreviewMoveResult = 1` [documented: Better Caravan v1.9
+/// (`https://www.nexusmods.com/newvegas/mods/81002`), shipped
+/// `Data\NVSE\Plugins\BetterCaravan.ini` comment:
+/// `"; show the resulting caravan values when hovering over a move"`; plugin DLL and
+/// source code were never consulted]; this `MovePreview` Rust struct representation is
+/// NVForever's own helper data structure [design: NVForever's `MovePreview` Rust struct
+/// representation].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MovePreview {
     /// Resulting caravan values `[side][track]`.

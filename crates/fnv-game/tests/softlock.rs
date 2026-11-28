@@ -81,6 +81,28 @@ fn a_story_event_starts_the_wait_again() {
     assert!(found.text.contains("last stage set: HoldQuest 10"), "{}", found.text);
 }
 
+/// Issue #3676: a DLC's load message box shown and answered while the controls stay off
+/// starts the wait again, but one hold is one finding until the player is free.
+#[test]
+fn a_message_box_within_a_reported_hold_is_no_second_finding() {
+    let f = fixture();
+    let mut g = game(&f);
+    let mut dog = Watchdog::new(Limits { controls: 5.0, ..Limits::default() });
+    run(&mut g, "DisablePlayerControls");
+    assert_eq!(frames(&mut dog, &g, 5.5), [Kind::ControlsHeld]);
+    g.menu = Some(1001);
+    g.emit(EventKind::MenuOpened { menu: 1001 });
+    assert_eq!(frames(&mut dog, &g, 3.0), [], "the box is the player's turn");
+    g.menu = None;
+    g.emit(EventKind::MenuClosed { menu: 1001 });
+    assert_eq!(frames(&mut dog, &g, 60.0), [], "the same hold, reported once");
+    // Free for a frame, then held again: a new hold.
+    run(&mut g, "EnablePlayerControls");
+    assert_eq!(frames(&mut dog, &g, 0.1), []);
+    run(&mut g, "DisablePlayerControls");
+    assert_eq!(frames(&mut dog, &g, 6.0), [Kind::ControlsHeld], "a new hold is found again");
+}
+
 #[test]
 fn a_restrained_player_is_held_and_a_dead_one_is_not() {
     let f = fixture();

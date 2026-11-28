@@ -357,6 +357,7 @@ impl Game<'_> {
             return false;
         }
         let _ = self.world.outfit(actor);
+        self.maybe_apply_npc_weapon_mods(actor);
         self.world.equip_at(actor, weapon, Pick::at(Some(condition))).or_else(|_| self.world.equip(actor, weapon)).is_ok()
     }
 

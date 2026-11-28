@@ -198,6 +198,9 @@ pub struct TileFonts {
     /// What each notice text copy's width was last measured from
     /// ([`super::notices::write_widths`]).
     notice_widths: super::notices::WidthsWritten,
+    /// What each mod-added HUD text's width was last measured from: its string and wrap
+    /// ([`FontKit::write_mod_widths`]).
+    mod_widths: HashMap<TileId, (String, f64)>,
 }
 
 #[derive(SystemParam)]
@@ -327,6 +330,36 @@ impl FontKit<'_> {
         if let Some(measure) = self.widths(ui) {
             fnv_game::ui_hud::write_text_widths(ui, &*measure);
         }
+        self.write_mod_widths(ui);
+    }
+
+    /// The widths of the text tiles mods add to the HUD (`fnv_game::ui_hud::unmeasured_texts`),
+    /// each measured in its own font when that font is read, and only when its string or
+    /// wrap changed. The original sets every text tile's `width` to its measured size; a mod
+    /// that centres a text by its own width read 0 here, so MAPMO's HUD clock (x = (dial
+    /// width − text width) / 2 from its place) ran off the right edge of the view
+    /// [observed 2026-11-21 in FadedLight's Nuclear Sunset fork, #4493].
+    fn write_mod_widths(&mut self, ui: &mut Ui) {
+        // The notices' copies have their own measure (`write_notice_widths`).
+        let notices: std::collections::HashSet<TileId> = super::notices::texts(ui).into_iter().collect();
+        let tiles: Vec<TileId> = fnv_game::ui_hud::unmeasured_texts(ui).into_iter().filter(|t| !notices.contains(t)).collect();
+        let present: std::collections::HashSet<TileId> = tiles.iter().copied().collect();
+        self.fonts.mod_widths.retain(|id, _| present.contains(id));
+        for tile in tiles {
+            let t = ui.tile(tile);
+            let Some(string) = t.get("string").map(Value::text) else { continue };
+            let font = t.get("font").map_or(0.0, Value::num);
+            let wrap = t.get("wrapwidth").map_or(0.0, Value::num);
+            if self.fonts.mod_widths.get(&tile).is_some_and(|(s, w)| *s == string && *w == wrap) {
+                continue;
+            }
+            self.load(font);
+            let Some(face) = self.face(font).filter(|f| f.image.is_some()) else { continue };
+            let (width, _) = measure(&face.font, self.font_number(font), &string, Some(wrap).filter(|w| *w > 0.0));
+            ui.set_trait(tile, "width", Value::Num(width));
+            ui.set_trait(tile, fnv_game::ui_hud::MEASURED_MARK, Value::Num(1.0));
+            self.fonts.mod_widths.insert(tile, (string, wrap));
+        }
     }
 
     /// Write the tile HUD's notice texts' widths (`super::notices::write_widths`), after
@@ -406,6 +439,12 @@ pub enum Fit {
     /// trait's name; the bars' 8-texel tick picture in boxes the code sizes in steps of 8,
     /// hud.md §14.3; zoom as the multiplier of the picture's size, GECK wiki Zoom].
     Tiled(f64),
+    /// `tile` `&scale;` (the map's dotted line, `PathLineTemplate`, the one vanilla use): the
+    /// picture scaled to this height (the box's), its shape kept, and repeated along the box
+    /// [observed: #4685, the original's World Map line is a row of whole dots about the line's
+    /// height apart; `&scale;` is the number 0, so it is not a true `tile`, and read as one
+    /// the 64 x 16 picture stood once at its texels' size, its dot cut to a sliver].
+    TiledToHeight(f64),
     /// The compass strip: twice side by side, moved across its window by the heading
     /// (nothing in the tree moves it, hud.md §14.4) at 1024 units a turn with its N at
     /// x 154 of the window at heading 0, and fading out at the window's right end
@@ -480,6 +519,11 @@ pub fn placed(fit: Fit, piece: bool, texels: (f64, f64)) -> Placed {
             let (width, height) = at(z);
             Placed::Repeat { width, height }
         }
+        Fit::TiledToHeight(h) if texels.1 > 0.0 => {
+            let (width, height) = at(h / texels.1 * 100.0);
+            Placed::Repeat { width, height }
+        }
+        Fit::TiledToHeight(_) => Placed::Fill,
         Fit::Strip => Placed::Strip,
     }
 }
@@ -664,17 +708,22 @@ fn system_colour(v: &Value) -> Option<[f32; 3]> {
 }
 
 /// A tile's base colour [hypothesis: the order is NVForever's, menu-xml.md §3.1.2]: its own
-/// `systemcolor`; else its own `red`/`green`/`blue` when it sets any; else the nearest
-/// tile above's `systemcolor`; else system colour 1, the HUD's [documented: GECK wiki
-/// Color UI directives, "Systemcolor is by default 1 and always assign"; observed: the
-/// ammo type's label, a menu child with no `systemcolor` above it, drew white before
-/// T12c where the hand-built HUD and the original draw the HUD's texts amber].
+/// `systemcolor`; else its own non-black `red`/`green`/`blue` when it sets any; else the
+/// nearest tile above's `systemcolor` (so child prefabs that copy `red`/`green`/`blue` from
+/// a parent without RGB traits — evaluating to 0/0/0 — still inherit an enclosing menu's
+/// `systemcolor`, while `&nosystemcolor;` / `&uselocalcolor;` / `0` on the tile or ancestor
+/// yields local RGB); else its own `red`/`green`/`blue` when no ancestor sets `systemcolor`;
+/// else system colour 1, the HUD's [documented: GECK wiki Color UI directives, "Systemcolor
+/// is by default 1 and always assign"; observed: the ammo type's label, a menu child with no
+/// `systemcolor` above it, drew white before T12c where the hand-built HUD and the original
+/// draw the HUD's texts amber].
 pub(super) fn base_colour(ui: &Ui, id: TileId, own: [f32; 3]) -> [f32; 3] {
     let tile = ui.tile(id);
     if let Some(v) = tile.get("systemcolor") {
         return system_colour(v).unwrap_or(own);
     }
-    if ["red", "green", "blue"].iter().any(|n| tile.get(n).is_some()) {
+    let has_rgb = ["red", "green", "blue"].iter().any(|n| tile.get(n).is_some());
+    if has_rgb && own != [0.0, 0.0, 0.0] {
         return own;
     }
     let mut at = tile.parent;
@@ -684,12 +733,24 @@ pub(super) fn base_colour(ui: &Ui, id: TileId, own: [f32; 3]) -> [f32; 3] {
         }
         at = ui.tile(p).parent;
     }
+    if has_rgb {
+        return own;
+    }
     system_colour(&Value::Num(1.0)).unwrap_or(own)
 }
+
+#[cfg(test)]
+mod systemcolor_inheritance_tests;
 
 /// How an image fills its box, by its `tile` and `zoom` ([`Fit`]).
 pub fn fit(tile: &fnv_ui::Tile) -> Fit {
     let zoom = tile.get("zoom");
+    if tile.get("tile").is_some_and(|t| *t == Value::Sym("scale".into())) {
+        let h = tile.get("height").map_or(0.0, Value::num);
+        if h > 0.0 {
+            return Fit::TiledToHeight(h);
+        }
+    }
     if tile.get("tile").is_some_and(Value::truthy) {
         let z = zoom.filter(|v| !matches!(v, Value::Sym(_))).map(Value::num).filter(|z| *z > 0.0).unwrap_or(100.0);
         return Fit::Tiled(z);
@@ -905,6 +966,8 @@ pub struct Target {
     /// The camera's image's pixels to a logical pixel: 1 in the window. Layout does not
     /// read it (the units are logical: the camera's target already scales them).
     pub image_scale: f32,
+    /// Typography only, measured and painted inside the unchanged menu viewport.
+    pub text_scale: f32,
     /// The stacking level of the root.
     pub z: i32,
     /// Where a menu in the window keeps its place at the UI scale (its root a
@@ -917,20 +980,25 @@ pub struct Target {
 impl Target {
     /// In the window, at `scale` logical pixels to an interface unit.
     pub fn window(scale: f32, z: i32) -> Target {
-        Target { camera: None, canvas: None, scale, image_scale: 1.0, z, frame: None }
+        Target { camera: None, canvas: None, scale, image_scale: 1.0, text_scale: 1.0, z, frame: None }
     }
 
     /// An image a camera renders: `canvas` is the part of it the pieces lie on. The image
     /// is as many logical pixels as interface units (`crate::pipboy::TARGET`), so one unit
     /// is one logical pixel whatever `image_scale` is [design: pipboy.rs, its module notes].
     pub fn image(camera: Entity, canvas: Vec2, image_scale: f32, z: i32) -> Target {
-        Target { camera: Some(camera), canvas: Some(canvas), scale: 1.0, image_scale, z, frame: None }
+        Target { camera: Some(camera), canvas: Some(canvas), scale: 1.0, image_scale, text_scale: 1.0, z, frame: None }
     }
 
     /// A menu in the window drawn at the UI scale in a frame kept at `anchor`
     /// ([`Target::frame`]).
     pub fn in_frame(self, anchor: Vec2) -> Target {
         Target { frame: Some(anchor), ..self }
+    }
+
+    /// The same fixed canvas, with glyphs measured and painted at this size.
+    pub(crate) fn text_sized(self, scale: f32) -> Self {
+        Self { text_scale: scale, ..self }
     }
 
     /// Whether a root made for `self` serves `other`: the same camera, area, level and frame.
@@ -960,6 +1028,7 @@ struct Slot {
     order: usize,
     wrapper: Option<Entity>,
     outer: Option<Entity>,
+    hud_size: Option<crate::hud_readability::Part>,
 }
 
 /// A piece by its tile and its count among that tile's pieces, as slots are kept.
@@ -1109,6 +1178,7 @@ struct Ctx<'a> {
     /// Logical pixels to an interface unit.
     scale: f32,
     heading: f32,
+    text_scale: f32,
 }
 
 /// How a turned piece's clip wrapper and outer node (and what they hold) are laid out:
@@ -1216,18 +1286,22 @@ fn spawn_unturned(p: &mut ChildSpawnerCommands, piece: &Piece, ctx: &Ctx<'_>, pi
             let id = p
                 .spawn((node, Pickable::IGNORE))
                 .with_children(|t| {
+                    let factor=ctx.text_scale;
+                    let _units=interface::units_at(interface::unit_scale()*factor);
+                    let wrap=wrap.map(|w|w/f64::from(factor));
+                    let width=piece.rect.width/f64::from(factor);
                     // A hint on one line names a button: draw its glyph in the name's place
                     // (`set_hint_marked`, so the glyph recolours with its piece).
                     if crate::pad::has_glyph(string) && face.font.lines(string, wrap.map(|w| w as f32)).len() == 1 {
                         let w = crate::pad::hint_width(face, string, ctx.glyphs);
                         let x = match alignment {
                             Alignment::Left => 0.0,
-                            Alignment::Center => (piece.rect.width as f32 - w) / 2.0,
-                            Alignment::Right => piece.rect.width as f32 - w,
+                            Alignment::Center => (width as f32 - w) / 2.0,
+                            Alignment::Right => width as f32 - w,
                         };
                         crate::pad::set_hint_marked(t, face, string, x, text_base_for(*font, &face.font), colour, ctx.glyphs, Ink::Drawn);
                     } else {
-                        for (line, x, base) in piece_lines(piece, &face.font) {
+                        for (line, x, base) in text_lines(&face.font, *font, string, wrap, *alignment, width) {
                             set_marked(t, face, &line, x, base, colour, Ink::Drawn);
                         }
                     }
@@ -1260,6 +1334,7 @@ fn origins(ui: &Ui, menu: TileId) -> (usize, usize) {
 #[derive(SystemParam)]
 pub(crate) struct View<'w, 's> {
     menus: Option<Res<'w, TileMenus>>,
+    readability: Option<Res<'w, crate::menu_readability::MenuReadability>>,
     hud: Option<Res<'w, HudView>>,
     windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
     /// The container, barter or inventory menu, for whether its prompt is open (T15a).
@@ -1417,6 +1492,14 @@ pub(crate) fn draw(mut commands: Commands, script: Res<ScriptState>, mut view: V
         blur_now.repair_services |= name == super::repair_services_menu::REPAIR_SERVICES_MENU && menu.is_some();
         blur_now.traits |= name == super::trait_menu::TRAIT_MENU && menu.is_some();
         blur_now.tags |= name == super::tag_menu::TAG_MENU && menu.is_some();
+        let kind=match name {
+            super::barter_menu::BARTER_MENU=>Some(crate::menu_readability::MenuKind::Barter),
+            super::repair_services_menu::REPAIR_SERVICES_MENU=>Some(crate::menu_readability::MenuKind::Repair),
+            super::recipe_menu::RECIPE_MENU=>Some(crate::menu_readability::MenuKind::Workbench),
+            super::menus::QUANTITY_MENU if view.active.as_ref().and_then(|a|a.0.as_ref()).is_some_and(|m|matches!(m.mode,crate::menu::model::Mode::Barter(_)))=>Some(crate::menu_readability::MenuKind::Barter),
+            _=>None,
+        };
+        let text_scale=kind.map_or(1.0,|kind|crate::menu::readability::size(view.readability.as_deref(),kind));
         let pieces = match menu {
             Some((ui, menu)) => {
                 if drawn.told_menu != Some(menu) {
@@ -1425,7 +1508,7 @@ pub(crate) fn draw(mut commands: Commands, script: Res<ScriptState>, mut view: V
                     drawn.told_menu = Some(menu);
                 }
                 // The VATS screen writes `screen()` in interface units itself while it is up.
-                let mut pieces = whole_pieces(ui, menu, &mut kit, super::interface_screen(switch) || name == super::vats_menu::VATS_MENU);
+                let mut pieces = whole_pieces_sized(ui, menu, &mut kit, super::interface_screen(switch) || name == super::vats_menu::VATS_MENU, text_scale);
                 // Marked as `paint` marks them, so a modified picture is not told as a change
                 // every frame (#1833).
                 super::texmod::mark(&mut pieces, game.map(|g| &g.other.itr));
@@ -1456,7 +1539,7 @@ pub(crate) fn draw(mut commands: Commands, script: Res<ScriptState>, mut view: V
             paint(&mut commands, drawn, pieces, Target::window(scale * interface::menu_scale(), z), Brightness::File, heading, ui, &mut kit, &mut nodes, &glyphs);
             continue;
         }
-        paint(&mut commands, drawn, pieces, Target::window(scale * interface::menu_scale(), z).in_frame(anchor), Brightness::File, heading, ui, &mut kit, &mut nodes, &glyphs);
+        paint(&mut commands, drawn, pieces, Target::window(scale * interface::menu_scale(), z).in_frame(anchor).text_sized(text_scale), Brightness::File, heading, ui, &mut kit, &mut nodes, &glyphs);
     }
     *blur = blur_now;
     pipboy_pages(&mut commands, game, &mut view, &mut kit, (&mut others.stats, &mut others.inventory, &mut others.map), &mut nodes, heading, &glyphs);
@@ -1683,13 +1766,19 @@ impl MenuFonts for FontKit<'_> {
 /// brought it in meanwhile) has it loaded here and the pieces worked out again, so no text
 /// is set out unmeasured or spawned without its face ([`unloaded_fonts`]).
 pub fn whole_pieces(ui: &Ui, menu: TileId, fonts: &mut impl MenuFonts, t15: bool) -> Vec<Piece> {
+    whole_pieces_sized(ui, menu, fonts, t15, 1.0)
+}
+
+pub(crate) fn whole_pieces_sized(ui: &Ui, menu: TileId, fonts: &mut impl MenuFonts, t15: bool, scale: f32) -> Vec<Piece> {
     fonts.prepare_fonts();
     let select = Select::Whole { kept: &[], strip: None };
     let set_out = |fonts: &dyn MenuFonts| {
         pieces_with_fonts(
             ui,
             menu,
-            &|font: f64, text: &str, wrap: Option<f64>| fonts.size(font, text, wrap),
+            &|font: f64, text: &str, wrap: Option<f64>| {
+                crate::menu::readability::measured(&|font, text, wrap| fonts.size(font, text, wrap), scale, font, text, wrap)
+            },
             &|font: f64| fonts.resolve_font(font),
             select,
             t15,
@@ -1774,6 +1863,20 @@ fn hud(commands: &mut Commands, script: &ScriptState, view: &View, kit: &mut Fon
     }
     // The HUD keeps the view's own frame: its places are written for the scaled view.
     paint(commands, drawn, pieces, Target::window(scale, TILES_Z), Brightness::File, heading, ui, kit, nodes, glyphs);
+    if let Some(ui) = ui {
+        for ((tile, _), slot) in &mut drawn.slots {
+            let wanted = crate::hud_readability::tile_part(&ui.path_of(*tile));
+            if wanted != slot.hud_size {
+                if let Some(part) = wanted {
+                    commands.entity(slot.node).insert(crate::hud_readability::HudSize(part));
+                } else {
+                    commands.entity(slot.node).remove::<crate::hud_readability::HudSize>()
+                        .insert(UiTransform::IDENTITY);
+                }
+                slot.hud_size = wanted;
+            }
+        }
+    }
 }
 
 /// How bright a menu's pieces are painted ([`paint`]), chosen by the caller.
@@ -2069,7 +2172,7 @@ pub(crate) fn paint(commands: &mut Commands, drawn: &mut Drawn, mut pieces: Vec<
             };
             made.push((i, picture, baked, strip, model));
         }
-        let ctx = Ctx { fonts: &kit.fonts, glyphs, scale, heading };
+        let ctx = Ctx { fonts: &kit.fonts, glyphs, scale, heading, text_scale:target.text_scale };
         for (i, picture, baked, strip, model) in made {
             let piece = &pieces[i];
             let key = keys[i];
@@ -2085,7 +2188,7 @@ pub(crate) fn paint(commands: &mut Commands, drawn: &mut Drawn, mut pieces: Vec<
                     commands.entity(root).with_children(|r| {
                         let mut nodes = (None, None);
                         let node = r.spawn((full, ZIndex(i as i32), Pickable::IGNORE)).with_children(|s| nodes = fill(s, piece, &ctx, picture, baked, strip, model)).id();
-                        slot = Some(Slot { node, order: i, wrapper: nodes.0, outer: nodes.1 });
+                        slot = Some(Slot { node, order: i, wrapper: nodes.0, outer: nodes.1, hud_size: None });
                     });
                     drawn.slots.extend(slot.map(|s| (key, s)));
                 }
@@ -2129,6 +2232,13 @@ pub(crate) fn scroll(hud: Option<Res<HudView>>, mut images: ResMut<Assets<Image>
 #[cfg(test)]
 #[path = "draw_layout_tests.rs"]
 mod layout_tests;
+
+// Install only the production native painter in the authored CPU typography scene.
+#[cfg(test)]
+pub(crate) fn install_typography_fixture_painter(app: &mut App) {
+    app.init_resource::<TileFonts>().init_resource::<super::menus::TileMenuBlur>()
+        .add_systems(Update, draw.after(super::barter_menu::write_system).after(crate::menu::MenuSystems));
+}
 
 #[cfg(test)]
 #[derive(Resource)]
@@ -2642,15 +2752,16 @@ mod tests {
             r#"<menu name="Z"><image name="none"/><image name="free"><zoom>-1</zoom></image><image name="scale"><zoom>&scale;</zoom></image>
               <image name="hundred"><zoom>100</zoom></image><image name="more"><zoom> 125 </zoom></image><image name="tiled"><tile>&true;</tile><zoom>50</zoom></image>
               <image name="untiled"><tile>&false;</tile></image><image name="tiled_scale"><tile>&true;</tile><zoom>&scale;</zoom></image>
-              <image name="tiled_free"><tile>&true;</tile><zoom>-1</zoom></image></menu>"#,
+              <image name="tiled_free"><tile>&true;</tile><zoom>-1</zoom></image>
+              <image name="path"><tile>&scale;</tile><height>5.8</height></image><image name="path_flat"><tile>&scale;</tile></image></menu>"#,
         );
         let mut ui = Ui::new();
         ui.load_menu(&src, "z.xml").unwrap();
         ui.update();
         let fit_of = |name: &str| fit(ui.tile(ui.find_tile(&format!("Z/{name}")).unwrap()));
         assert_eq!(
-            ["none", "free", "scale", "hundred", "more", "tiled", "untiled", "tiled_scale", "tiled_free"].map(fit_of),
-            [Fit::Natural, Fit::Stretch, Fit::Stretch, Fit::Zoom(100.0), Fit::Zoom(125.0), Fit::Tiled(50.0), Fit::Natural, Fit::Tiled(100.0), Fit::Tiled(100.0)]
+            ["none", "free", "scale", "hundred", "more", "tiled", "untiled", "tiled_scale", "tiled_free", "path", "path_flat"].map(fit_of),
+            [Fit::Natural, Fit::Stretch, Fit::Stretch, Fit::Zoom(100.0), Fit::Zoom(125.0), Fit::Tiled(50.0), Fit::Natural, Fit::Tiled(100.0), Fit::Tiled(100.0), Fit::TiledToHeight(5.8), Fit::Natural]
         );
     }
 
@@ -2689,6 +2800,9 @@ mod tests {
         assert_eq!(placed(Fit::Stretch, false, (512.0, 128.0)), Placed::Fill);
         assert_eq!(placed(Fit::Zoom(75.0), false, (128.0, 64.0)), Placed::At { width: 96.0, height: 48.0 });
         assert_eq!(placed(Fit::Tiled(100.0), false, (8.0, 32.0)), Placed::Repeat { width: 8.0, height: 32.0 });
+        // #4685: the dotted line's 64 x 16 picture at its 5.8-high box's height, repeated.
+        let Placed::Repeat { width, height } = placed(Fit::TiledToHeight(5.8), false, (64.0, 16.0)) else { panic!("repeated") };
+        assert!((width - 23.2).abs() < 1e-9 && (height - 5.8).abs() < 1e-9);
         assert_eq!(placed(Fit::Strip, true, (1023.0, 63.0)), Placed::Strip);
         // The condition fill's zoom stands its picture's 11 drawn rows over its 20-unit
         // box: one repeat covers it.
@@ -3515,3 +3629,4 @@ mod tests {
     }
 
 }
+

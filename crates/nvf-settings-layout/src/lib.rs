@@ -69,6 +69,64 @@ pub const fn group_section(subgroup: &'static str, heading: &'static str, keys: 
     Section { placement: Placement { tab: TWEAKS_TAB, subgroup: Some(subgroup), heading: Some(heading) }, keys }
 }
 
+pub const MOBILE_TAB: &str = "Mobile";
+pub const MOBILE_TAB_ORDER: [&str; 9] = ["Gameplay", "Display", "Audio", "Controls", MOBILE_TAB, "Graphics", NVF_FEATURES_TAB, TWEAKS_TAB, "Debug"];
+
+/// Additional controller rows registered by the port.
+pub const ANDROID_CONTROLLER_KEYS: [&str; 4] = [
+    "controller-ads-v1", "controller-dead-zone-v1",
+    "controller-toggle-aim-v1", "controller-hold-sneak-v1",
+];
+
+// Android adds only its own rows; the shared Main table stays authoritative.
+// A matching category appends these keys after its shared rows.
+pub const ANDROID_SECTIONS: &[Section] = &[
+    section("Gameplay", Some("Camera"), &["touch-pipboy-size-v1", "touch-pipboy-tab-swipes"]),
+    section("Gameplay", Some("Dialogue"), &["touch-dialogue", "dialogue-choice-text-size", "dialogue-subtitle-text-size", "dialogue-touch-choice", "dialogue-speaker-side", "dialogue-device-side-v1", "dialogue-theme-v1", "dialogue-background-opacity-v1", "dialogue-background-tint-v1", "dialogue-frame-opacity-v1", "dialogue-hints-v1"]),
+    section("Display", Some("Interface"), &["hud-scale-v2", "hud-health-size-v1", "hud-action-points-size-v1", "hud-compass-size-v1", "settings-menu-scale-v1", "barter-menu-size-v1", "repair-menu-size-v1", "workbench-menu-size-v1"]),
+    section("Gameplay", Some("Inventory menus"), &["touch-barter-v1", "touch-maintenance-v1", "touch-terminal-v1", "touch-companion-v1"]),
+    section("Controls", Some("Touch"), &["touch-layout-editor-v1", "touch-practice-v1", "touch-hotbar", "touch-hotbar-slots", "touch-hotbar-size", "touch-hotbar-tray", "touch-tray-editor-v1", "touch-bottom-swipe-target-v1", "touch-pipboy-swipe-v1", "touch-pipboy-distance-v1", "touch-pipboy-dismiss-left", "touch-pipboy-dismiss-right", "touch-pipboy-dismiss-side-v2", "touch-pipboy-dismiss-travel-v1", "touch-pipboy-close-button", "touch-pipboy-button-graphics", "touch-pipboy-model-wheel", "touch-direct-pipboy-v1", "touch-world-activation-v1", "touch-icon-family", "adaptive-touch-actions", "lockpick-touch", "lockpick-touch-size", "lockpick-touch-hints", "touch-gyro-v1", "touch-gyro-sensitivity-v1", "touch-gyro-ads-v1", "touch-gyro-toggle-v1", "touch-gyro-ads-only-v1", "touch-gyro-recenter-v1", "touch-gyro-invert-x-v1", "touch-gyro-invert-y-v1", "touch-analog-movement-v1", "touch-fire-drag-look-v1", "touch-auto-move-lock-v1", "touch-vats-double-tap-v1", "touch-vats-targeting-v1"]),
+    section(CONTROLS_TAB, Some("Controller"), &ANDROID_CONTROLLER_KEYS),
+    section("Display", Some("Mobile performance"), &["mobile-performance", "mobile-fps", "mobile-resolution", "mobile-thermal-auto", "mobile-thermal-status"]),
+];
+
+/// Android claims only its named presentation overrides. Main's original controller
+/// rows keep their Input/Aim Assist categories, while all hardware routes stay Controls.
+pub const MOBILE_SECTIONS: &[Section] = &[
+    section(MOBILE_TAB, Some("Touch layout and guide"), &[
+        "touch-layout-editor-v1", "touch-practice-v1", "touch-icon-family", "adaptive-touch-actions",
+    ]),
+    section(MOBILE_TAB, Some("Movement and gestures"), &[
+        "touch-analog-movement-v1", "touch-fire-drag-look-v1",
+        "touch-auto-move-lock-v1", "touch-vats-double-tap-v1", "touch-vats-targeting-v1", "touch-world-activation-v1",
+    ]),
+    section(MOBILE_TAB, Some("Gyroscope"), &[
+        "touch-gyro-v1", "touch-gyro-recenter-v1", "touch-gyro-toggle-v1",
+        "touch-gyro-ads-only-v1", "touch-gyro-invert-x-v1", "touch-gyro-invert-y-v1",
+        "touch-gyro-sensitivity-v1", "touch-gyro-ads-v1",
+    ]),
+    section(MOBILE_TAB, Some("Inventory and quick access"), &[
+        "touch-hotbar", "touch-hotbar-slots", "touch-hotbar-tray", "touch-tray-editor-v1", "touch-hotbar-size",
+        "touch-pipboy-swipe-v1", "touch-bottom-swipe-target-v1", "touch-pipboy-distance-v1", "touch-pipboy-size-v1", "touch-pipboy-tab-swipes", "touch-direct-pipboy-v1",
+        "touch-pipboy-dismiss-left", "touch-pipboy-dismiss-right", "touch-pipboy-dismiss-side-v2", "touch-pipboy-dismiss-travel-v1", "touch-pipboy-close-button",
+        "touch-pipboy-button-graphics", "touch-pipboy-model-wheel",
+        "touch-barter-v1", "touch-maintenance-v1", "touch-terminal-v1", "touch-companion-v1",
+    ]),
+    section(MOBILE_TAB, Some("Dialogue"), &[
+        "touch-dialogue", "dialogue-theme-v1", "dialogue-touch-choice", "dialogue-speaker-side",
+        "dialogue-device-side-v1", "dialogue-background-tint-v1", "dialogue-hints-v1", "dialogue-choice-text-size",
+        "dialogue-subtitle-text-size", "dialogue-background-opacity-v1", "dialogue-frame-opacity-v1",
+    ]),
+    section(MOBILE_TAB, Some("Lockpicking"), &["lockpick-touch", "lockpick-touch-hints", "lockpick-touch-size"]),
+    section(MOBILE_TAB, Some("Interface size"), &[
+        "menu-scale", "settings-menu-scale-v1", "ui-scale", "hud-scale-v2", "hud-health-size-v1", "hud-action-points-size-v1", "hud-compass-size-v1",
+        "barter-menu-size-v1", "repair-menu-size-v1", "workbench-menu-size-v1",
+    ]),
+    section(MOBILE_TAB, Some("Mobile performance"), &[
+        "mobile-performance", "mobile-fps", "mobile-resolution", "mobile-thermal-auto", "mobile-thermal-status",
+    ]),
+];
+
 /// The rows the NVF Features tab may hold: only what the owner named there [design: owner
 /// 2026-11-15]. Adding a key needs the owner's word; a bigger gameplay change is offered to
 /// the owner for this tab, never moved here unasked (docs/design/settings-page.md).
@@ -101,18 +159,22 @@ pub const NVF_FEATURES_KEYS: [&str; 16] = [
 pub const SECTIONS: &[Section] = &[
     // #2688's sound cover with the game's own rules (a bigger gameplay change: NVF Features is the
     // owner's call, recommended to them, not moved there).
-    section("Gameplay", Some("Game"), &["difficulty", "difficulty-player-damage", "difficulty-npc-damage", "difficulty-kill-xp", "hardcore", "reload-slows", "UsePipBoy", "sound-cover"]),
+    section("Gameplay", Some("Game"), &["difficulty", "difficulty-player-damage", "difficulty-npc-damage", "difficulty-kill-xp", "hardcore", "reload-slows", "UsePipBoy", "sound-cover", "npc-weapon-mods", "sneak-bounding-box"]),
     // "V.A.T.S." as the data spells it (MESG `HelpVATS`).
     section("Gameplay", Some("V.A.T.S."), &["vats-style", "vats-slowdown", "kill-camera"]),
     section("Gameplay", Some("Camera"), &["detached-camera", "true-iron-sights", "first-person-body", "weapon-lower", "gore-shake", "field-of-view", "viewmodel-field-of-view"]),
     section("Gameplay", Some("Dialogue"), &["dialogue-zoom", "dialogue-look", "dialogue-recentre", "menu-pause", "dialogue-goodbye-hint", "lip-sync"]),
     section("Gameplay", Some("Saving"), &["autosave-travel", "autosave-fast-travel", "autosave-wait", "autosave-sleep", "autosave-scripts"]),
+    section("Gameplay", Some("Combat"), &["localized-dt-dr"]),
+    section("Gameplay", Some("Menus"), &["quantity-select-short-keys"]),
     section("Gameplay", Some("Bug Reports"), &["send-reports", "reports-delete"]),
+    // Co-op, and its networking (docs/design/coop-networking.md §10).
+    section("Gameplay", Some("Co-op"), &["coop", "coop-connection", "coop-router-port", "coop-relay", "coop-ask"]),
     section("Display", Some("Screen"), &["monitor", "resolution", "hdr-output", "borderless"]),
     section("Display", Some("Frame Rate"), &["display-sync", "frame-cap", "physics-rate"]),
     section("Display", Some("Upscaling and Anti-Aliasing"), &["upscaler", "upscaler-quality", "dlss-model", "fsr-library", "anti-aliasing", "sharpen"]),
     section("Display", Some("Frame Generation and Latency"), &["frame-generation", "frame-generation-frames", "latency-reduction"]),
-    section("Display", Some("Interface"), &["language", "menu-font", "sneak-gauges", "dynamic-crosshair", "crosshair-style", "ui-scale", "menu-scale"]),
+    section("Display", Some("Interface"), &["language", "menu-font", "sneak-gauges", "caravan-tips", "dynamic-crosshair", "crosshair-style", "location-load-screens", "ui-scale", "menu-scale"]),
     section("Display", Some("Colours"), &["hud-colour", "hud-red", "hud-green", "hud-blue", "pipboy-colour", "pipboy-red", "pipboy-green", "pipboy-blue"]),
     section(
         "Display",
@@ -157,7 +219,7 @@ pub const SECTIONS: &[Section] = &[
     section(
         "Controls",
         Some("Actions"),
-        &["controls:bind:Activate", "controls:bind:Grab", "controls:bind:Menu Mode", "controls:bind:Rest", "controls:bind:Toggle POV", "controls:bind:QuickSave", "controls:bind:QuickLoad"],
+        &["controls:bind:Activate", "controls:bind:Grab", "controls:bind:Menu Mode", "controls:bind:Rest", "controls:bind:Toggle POV", "controls:bind:QuickSave", "controls:bind:QuickLoad", "controls:bind:Photo Mode"],
     ),
     section(
         "Controls",
@@ -206,9 +268,9 @@ pub const SECTIONS: &[Section] = &[
     // Shadow resolution sizes the flashlight's maps too, so it needs no Sun shadows (no NEEDS
     // line) (#2843).
     section("Graphics", Some("Shadows"), &["sun-shadows", "shadow-filter", "shadow-resolution", "shadow-distance", "fine-shadows", "cloud-shadows", "terrain-shadows", "light-shadows"]),
-    section("Graphics", Some("Lighting and Effects"), &["ambient-occlusion", "light-shafts", "heat-haze", "desert-haze", "aerial-perspective", "night-sky-detail", "bloom", "grade", "glow", "eye-adaptation", "neon-glow"]),
+    section("Graphics", Some("Lighting and Effects"), &["ambient-occlusion", "volumetric-clouds", "light-shafts", "heat-haze", "desert-haze", "volumetric-light", "volumetric-light-strength", "aerial-perspective", "night-sky-detail", "physical-pbr", "tonemap-preset", "bloom", "grade", "glow", "eye-adaptation", "neon-glow"]),
     section("Graphics", Some("Water"), &["water-reflections", "water-mirror", "water-effects"]),
-    section("Graphics", Some("Detail and Distance"), &["distant-lod", "full-detail", "distant-objects", "grass", "anisotropic", "authored-materials", "authored-reflections", "terrain-height-blend", "terrain-anti-tiling", "terrain-parallax", "mesh-terrain-blend", "smooth-terrain", "object-distance", "actor-distance", "item-distance", "grass-distance", "tree-distance", "distant-lights"]),
+    section("Graphics", Some("Detail and Distance"), &["distant-lod", "full-detail", "distant-objects", "grass", "anisotropic", "authored-materials", "authored-reflections", "terrain-height-blend", "terrain-anti-tiling", "terrain-parallax", "mesh-terrain-blend", "occlusion-culling", "smooth-terrain", "object-distance", "actor-distance", "item-distance", "grass-distance", "tree-distance", "distant-lights"]),
     section("Graphics", Some("World and Animation"), &["head-tracking", "foot-ik", "sky-clock"]),
     // The owner's own layout of the movement work (tech/movement-inertia, 2026-11-15).
     section(NVF_FEATURES_TAB, Some("Advanced Movement"), &["advanced-movement", "movement-weight"]),
@@ -225,6 +287,7 @@ pub const SECTIONS: &[Section] = &[
         "Gameplay",
         "Character and Experience",
         &[
+            "tweak-perks-per-level",
             "tweak-free-wild-wasteland",
             "tweak-frenzy-kill-xp",
             "tweak-no-skill-tags",
@@ -242,7 +305,6 @@ pub const SECTIONS: &[Section] = &[
             "tweak-password-xp-share",
             "tweak-kill-xp-per-level",
             "tweak-max-level",
-            "tweak-perks-per-level",
             "tweak-special-points",
         ],
     ),
@@ -443,6 +505,7 @@ pub const SECTIONS: &[Section] = &[
             "tweak-repair-at-workbench",
             "tweak-modding-needs-skill",
             "tweak-barter-repair-discount",
+            "tweak-crafted-item-health-pct",
             "tweak-repair-xp",
             "tweak-free-item-price",
         ],
@@ -474,6 +537,7 @@ pub const SECTIONS: &[Section] = &[
             "tweak-hold-containers",
             "tweak-hold-furniture",
             "tweak-hold-water",
+            "tweak-no-lock-encounter-zone-levels",
             "tweak-disable-fast-travel",
             "tweak-no-travel-crippled-leg",
             "tweak-quick-use",
@@ -582,7 +646,7 @@ pub const SECTIONS: &[Section] = &[
         "Minigames and Machines",
         &["tweak-faster-hacking", "tweak-no-tutorials", "tweak-pick-locks-with-key", "tweak-vigor-review-first", "tweak-show-current-skill", "tweak-slots-hold-to-spin"],
     ),
-    group_section("Quality of Life", "Travel and Loading", &["tweak-unsafe-fast-travel", "tweak-midair-fast-travel", "tweak-pause-on-load", "tweak-plain-going-out"]),
+    group_section("Quality of Life", "Travel and Loading", &["tweak-unsafe-fast-travel", "tweak-midair-fast-travel", "tweak-faster-sleep-wait", "tweak-pause-on-load", "tweak-plain-going-out"]),
     group_section(
         "Quality of Life",
         "Messages and Sounds",
@@ -643,6 +707,7 @@ pub const SECTIONS: &[Section] = &[
         "HUD",
         "Compass and Place Names",
         &[
+            "tweak-companion-pip",
             "tweak-compass-fade-left",
             "tweak-compass-pips-danger",
             "tweak-hide-unmapped-places",
@@ -655,13 +720,12 @@ pub const SECTIONS: &[Section] = &[
             "tweak-neutral-foes-compass",
             "tweak-nearest-unfound",
             "tweak-hud-marker-name",
-            "tweak-marker-name-hide-unfound",
             "tweak-marker-name-units",
+            "tweak-marker-name-hide-unfound",
             "tweak-marker-name-angle",
             "tweak-compass-quest-height",
             "tweak-hud-region-names",
             "tweak-compass-marker-height",
-            "tweak-companion-pip",
             "tweak-quest-marker-reach",
             "tweak-recent-dead-secs",
         ],
@@ -702,7 +766,7 @@ pub const SECTIONS: &[Section] = &[
         "Prompts and Subtitles",
         &["tweak-hide-unknown-names", "tweak-mark-unvisited-doors", "tweak-terminal-password-prompt", "tweak-subtitle-names", "tweak-water-shows-h2o", "tweak-subtitle-distance"],
     ),
-    group_section("HUD", "Other", &["tweak-female-facial-hair", "tweak-no-hotkey-wheel", "tweak-date-style"]),
+    group_section("HUD", "Other", &["tweak-date-style", "tweak-female-facial-hair", "tweak-no-hotkey-wheel"]),
     // Tweaks > Menus.
     group_section(
         "Menus",
@@ -829,7 +893,7 @@ pub const SECTIONS: &[Section] = &[
     group_section(
         "Menus",
         "Keys and Mouse",
-        &["tweak-key-repeat-accel", "tweak-key-repeat-delay", "tweak-key-repeat-mult", "tweak-key-repeat-delay-alt", "tweak-key-repeat-mult-alt", "tweak-horizontal-look"],
+        &["tweak-key-repeat-accel", "tweak-key-repeat-delay", "tweak-key-repeat-mult", "tweak-key-repeat-delay-alt", "tweak-key-repeat-mult-alt", "tweak-wasd-as-arrow-keys", "tweak-horizontal-look"],
     ),
     // Tweaks > Hotkeys.
     group_section("Hotkeys", "Hide HUD Key", &["tweak-hide-hud-ammo", "tweak-hide-hud-needs", "tweak-hide-hud-compass", "tweak-hide-hud-on-load", "tweak-hide-hud-sneak"]),
@@ -971,6 +1035,7 @@ pub const NEEDS: &[(&str, &str, &str)] = &[
     ("fine-shadows", "sun-shadows", "Needs Sun Shadows."),
     ("eye-adaptation", "glow", "Needs Light Glow (HDR)."),
     ("neon-glow", "glow", "Needs Light Glow (HDR)."),
+    ("volumetric-light-strength", "volumetric-light", "Needs Volumetric Light."),
     ("grass-distance", "grass", "Needs Grass."),
     // #3322: the terrain parallax draws the authored height maps.
     ("terrain-parallax", "authored-materials", "Needs Authored Materials."),
@@ -996,11 +1061,38 @@ pub const NEEDS: &[(&str, &str, &str)] = &[
     ("tweak-revive-on-cell-change", "tweak-revive-companions", "Needs Revive Unconscious Companions."),
     ("tweak-no-self-explosion-non-hostiles", "tweak-no-self-explosion-damage", "Needs Own Blasts Spare the Player."),
     ("tweak-grabbing-is-theft-min-value", "tweak-grabbing-is-theft", "Needs Grabbing Is Stealing."),
+    ("tweak-marker-name-units", "tweak-hud-marker-name", "Needs Place Name on the HUD."),
+    ("dialogue-choice-text-size", "touch-dialogue", "Needs Touch dialogue."),
+    ("dialogue-subtitle-text-size", "touch-dialogue", "Needs Touch dialogue."),
+    ("dialogue-touch-choice", "touch-dialogue", "Needs Touch dialogue."),
+    ("dialogue-theme-v1", "touch-dialogue", "Needs Touch dialogue."),
+    ("dialogue-speaker-side", "touch-dialogue", "Needs Touch dialogue."),
+    ("dialogue-device-side-v1", "touch-dialogue", "Needs Touch dialogue."),
+    ("dialogue-background-opacity-v1", "touch-dialogue", "Needs Touch dialogue."),
+    ("dialogue-background-tint-v1", "touch-dialogue", "Needs Touch dialogue."),
+    ("dialogue-frame-opacity-v1", "touch-dialogue", "Needs Touch dialogue."),
+    ("dialogue-hints-v1", "touch-dialogue", "Needs Touch dialogue."),
+    ("touch-gyro-toggle-v1", "touch-gyro-v1", "Needs Gyroscope."),
+    ("touch-gyro-ads-only-v1", "touch-gyro-v1", "Needs Gyroscope."),
+    ("touch-gyro-recenter-v1", "touch-gyro-v1", "Needs Gyroscope."),
+    ("touch-gyro-invert-x-v1", "touch-gyro-v1", "Needs Gyroscope."),
+    ("touch-gyro-invert-y-v1", "touch-gyro-v1", "Needs Gyroscope."),
+    ("touch-gyro-sensitivity-v1", "touch-gyro-v1", "Needs Gyroscope."),
+    ("touch-gyro-ads-v1", "touch-gyro-v1", "Needs Gyroscope."),
+    ("touch-hotbar-slots", "touch-hotbar", "Needs Touch hotbar."),
+    ("touch-hotbar-size", "touch-hotbar", "Needs Touch hotbar."),
+    ("touch-hotbar-tray", "touch-hotbar", "Needs Touch hotbar."),
+    ("touch-pipboy-distance-v1", "touch-pipboy-swipe-v1", "Needs Bottom swipe handle."),
+    ("touch-direct-pipboy-v1", "touch-pipboy-swipe-v1", "Needs Bottom swipe handle."),
+    ("touch-pipboy-dismiss-travel-v1", "touch-pipboy-dismiss-side-v2", "Needs Pip-Boy downward dismissal."),
+    ("lockpick-touch-hints", "lockpick-touch", "Needs Touch lockpicking."),
+    ("lockpick-touch-size", "lockpick-touch", "Needs Touch lockpicking."),
 ];
 
 /// The Controls tab's rows that are shown only while the input device is a controller
 /// (`crate::bindings::InputDevice`) [design: #1953].
-pub const CONTROLLER_KEYS: [&str; 4] = ["button-style", "aim-assist", "aim-slowdown", "aim-lock"];
+pub const CONTROLLER_KEYS: [&str; 8] = ["button-style", "aim-assist", "aim-slowdown", "aim-lock",
+    ANDROID_CONTROLLER_KEYS[0], ANDROID_CONTROLLER_KEYS[1], ANDROID_CONTROLLER_KEYS[2], ANDROID_CONTROLLER_KEYS[3]];
 
 /// Whether row `key` is shown only with a controller ([`CONTROLLER_KEYS`]).
 pub fn controller_only(key: &str) -> bool {
@@ -1039,10 +1131,19 @@ pub const NEEDS_CHOICE: &[(&str, &str, &[&str], &str)] = &[
     ("difficulty-player-damage", "difficulty", &["Custom"], "Custom difficulty only."),
     ("difficulty-npc-damage", "difficulty", &["Custom"], "Custom difficulty only."),
     ("difficulty-kill-xp", "difficulty", &["Custom"], "Custom difficulty only."),
+    ("dialogue-speaker-side", "dialogue-theme-v1", &["Field Notes", "Retro Console", "Wrist Terminal"], "Available with Field Notes, Retro Console and Wrist Terminal."),
+    ("dialogue-device-side-v1", "dialogue-theme-v1", &["Retro Console", "Wrist Terminal"], "Available with Retro Console and Wrist Terminal."),
+    ("dialogue-background-opacity-v1", "dialogue-theme-v1", &["Field Notes"], "Available with the Field Notes theme."),
+    ("dialogue-background-tint-v1", "dialogue-theme-v1", &["Field Notes"], "Available with the Field Notes theme."),
+    ("dialogue-frame-opacity-v1", "dialogue-theme-v1", &["Field Notes"], "Available with the Field Notes theme."),
+    ("dialogue-hints-v1", "dialogue-theme-v1", &["Field Notes"], "Available with the Field Notes theme."),
+    ("coop-router-port", "coop-connection", &["Automatic", "Direct only"], "Not with LAN only."),
+    ("coop-relay", "coop-connection", &["Automatic", "Direct only"], "Not with LAN only."),
 ];
 
 /// What a row needs of another row to apply: `parent` on (a switch on, a list past its first
-/// choice) when `choices` is empty, else `parent` on one of `choices` (by name). `why` is
+/// choice) when `choices` is empty, else `parent` on one of `choices` (by name; a switch's
+/// choices are "On" and "Off"). `why` is
 /// what the page says while it does not hold (English; the game shows it translated).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rule {
@@ -1078,8 +1179,17 @@ pub fn layout_stamp() -> String {
     stamp_of(SECTIONS)
 }
 
+/// The Android layout has its own identity, including its Mobile placements.
+pub fn mobile_layout_stamp() -> String {
+    stamp(&MOBILE_TAB_ORDER, MOBILE_SECTIONS.iter().chain(SECTIONS).chain(ANDROID_SECTIONS))
+}
+
 /// [`layout_stamp`] with `sections` for [`SECTIONS`].
 pub(crate) fn stamp_of(sections: &[Section]) -> String {
+    stamp(&TAB_ORDER, sections.iter())
+}
+
+fn stamp<'a>(tabs: &[&str], sections: impl Iterator<Item = &'a Section>) -> String {
     // FNV-1a, 64 bits: fixed by its definition, unlike std's hasher, so every build and
     // platform agrees; the separators keep `["ab"]` and `["a", "b"]` apart.
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -1089,7 +1199,7 @@ pub(crate) fn stamp_of(sections: &[Section]) -> String {
             h = h.wrapping_mul(0x0000_0100_0000_01b3);
         }
     };
-    for t in TAB_ORDER {
+    for t in tabs {
         put(t, 0x1f);
     }
     for s in sections {

@@ -496,10 +496,14 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         // 528 + JIP LN 57.30 with the 10 official base masters, clean-room script probe
         // `w4c_b3_06_toggle_pipboy_tab` (`tools/capture/nvse/catalogs/wave4c_extenders.json`,
         // #3678 / PR #3679): `init(pb=0)|open1003(mm=1003,pb=2)|close(mm=1003,pb=3)|reopenNoArg(mm=0,pb=0)`;
-        // no DLL or source consulted]. NVForever reports 3 whenever any Pip-Boy page is
-        // open (`Game::menu_open(menus::PIPBOY)`, including underneath a tutorial overlay)
-        // and 0 otherwise [not built: opening/closing animation transition modes 1/2/4/5].
-        "getpipboymode" => XVal::Num(if g.menu_open(crate::game::menus::PIPBOY) { 3.0 } else { 0.0 }),
+        // no DLL or source consulted]. When the engine drives a Pip-Boy transition
+        // (`Game::ui.pipboy_mode`), reports 2 while raising, 4 while lowering, or 0 while
+        // covered during startup warming; resting phases and headless runs leave it `None`
+        // so `GetPipBoyMode` evaluates live `Game::menu_open(menus::PIPBOY)` (3 when open,
+        // including under a tutorial overlay, else 0) [design].
+        "getpipboymode" => XVal::Num(f64::from(
+            g.ui.pipboy_mode.unwrap_or(if g.menu_open(crate::game::menus::PIPBOY) { 3 } else { 0 }),
+        )),
         // [observed: an unknown stat is -1, and ModExtraMiscStat did not create one]
         "getextramiscstat" => XVal::Num(g.jip2.misc_stats.get(&text(args, 0).to_ascii_lowercase()).copied().unwrap_or(-1.0)),
         // ModExtraMiscStat and InitExtraMiscStat: `crate::nvse_ttw`.

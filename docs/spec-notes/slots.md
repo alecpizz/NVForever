@@ -98,9 +98,26 @@ observed: the five casinos]:
   25 from there (blackjack.md §5), between the minimum and the smaller of the maximum
   and the chips carried [design, as roulette's]. Bet Max sets the bet to that largest
   bet [hypothesis: it does not spin as well].
-- **Spin** takes the bet from the inventory and turns the reels; the left reel stops
-  after 1.4 s, the middle after 2.0 s, the right after 2.6 s [design]; then the line is
-  paid (§3) and the result shows for 2 s [design].
+- **Spin** takes the bet from the inventory and turns the reels as the reel models'
+  `Forward` clip does (`nv_slotmachine-reel01..03.nif`, 30 frames a second, 4.37 s, all
+  three alike but for the stop): still for 0.5 s, then all three at one even speed
+  (about 386 degrees a second), the left reel stopping after 2 whole turns at 2.367 s
+  (frame 71), the middle after 3 at 3.300 s (frame 99), the right after 4 at 4.233 s
+  (frame 127); each runs on 5 degrees past its stop in 2 frames and is back on it 2
+  frames later [observed: fnvtool nif decode, the `Cylinder0n` rotation keys; hypothesis:
+  the turn is even, the quadratic keys' tangents being the turn's own size]. Then the
+  line is paid (§3) and the result shows for 2 s [design].
+- **The pull sound holds the stops**: `sfx_slots_pulllever.wav` (GAMESlotsPullLever,
+  4.78 s, 44.1 kHz stereo) has the lever at about 0.17 to 0.45 s and three loud clunks at
+  about 2.375, 3.315 and 4.255 s, each led by a softer click 0.05 to 0.1 s before
+  [observed: the sound's loudness in 5 ms steps]: the reel models' stops, within a frame.
+  There is no SOUN for a single reel's stop [observed: the GAMESlots* and EMTSlots*
+  records]. NVForever starts the pull sound and the spin on the same frame, so the reels
+  stop on the clunks, and pays the line and plays the result sound (§5) at the reel
+  clip's end, 4.367 s (frame 131), the right reel back on its stop: the result sounds are
+  loud from their first frame and would cover the right reel's clunk (loudest 4.255 to
+  4.39 s) if they started on the stop [design]. The result sounds run 1.32 s (lose), 2.47 s (small), 2.74 s (medium) and
+  5.57 s (jackpot) [observed].
 - **Earnings and bans**: the net of each spin goes to the player's earnings at the
   casino and the winnings level (blackjack.md §4, `fnv_game::casino`); at the max
   winnings the player is banned and the menu closes after the result [hypothesis, as
@@ -114,8 +131,8 @@ observed: the five casinos]:
 - The information box: 400 × 175, 10 in from the main rectangle's left and bottom, the
   bracket of lines, three rows in font 7 at 20 in, at 35, 80 and 125 down: the current
   bet, the chips, the casino's earnings [documented: `SMM_InfoRect`, its three
-  displays]. The titles are set in code: "Current Bet:", "Chips:", "<casino> Earnings:"
-  [hypothesis: as roulette's, seen on the owner's screenshots of roulette].
+  displays]. The titles are set in code: NVForever's own words, "Your bet:", "Your
+  chips:", "Won at <casino>:", as roulette's [design, #4495].
 - Six buttons right-aligned 50 in from the right, under each other: Spin (W), Increase
   Bet (E), Decrease Bet (Q), Payout List (F), Bet Max (S), Exit (R) [documented: the
   order, `_PCButton_*`; the names from the hotrects; hypothesis: the words, set in code].
@@ -142,14 +159,83 @@ observed: the five casinos]:
 
 ## 6. On the screen
 
-- NVForever draws the menu flat, as Caravan's (caravan.md): three reels side by side,
-  each a window three symbols high on a pale ground with the payline across the middle,
-  the symbols the record's pictures (§2); while a reel turns its symbols run down
-  through the window, slowing to the stop [design].
-- Not built: the machine's 3D model (`MOD2`: the cabinet, the arm and its
-  `Forward`/`Backward` pull, the coins' `Payout_*` fall, the lights), the reels as the
-  drum models, the challenge `ChallengeSlotsSCRIPT`, the Atomic Wrangler's jackpot
-  message `AtomicWranglerSlotsMsg` (its trigger is not read).
+- **The reels on the machine itself** (nvforever `slots_view.rs`): the
+  machine the player activated (the reference whose script asked; the test aid's request
+  takes the nearest slot machine) turns its reels where it stands in the world, and the
+  menu shows its text and buttons over the world, without the flat reels.
+  - The placed models `clutter\casino\Slot_Machine01.nif`, `…01TOPS.NIF` and
+    `…01Gomorrah.NIF` have three reel nodes `Reel01`–`Reel03`, all at (-0.33, 2.12, 33.69)
+    in the body node and turned about X only, each holding one drum shape (`Reel0n:5`, 8
+    sides, radius 8.19, 3.79 wide, centred at x -5.6, 0, +5.6 of the reel node), mapped onto
+    a small strip of the cabinet's 512 × 512 `Slot_Machine01_D.dds` [observed: fnvtool nif
+    decode]. The window frame in front of them faces (0, -0.97, 0.25), 15° above the
+    machine's front (-Y) [observed: the frame's vertices and normals]; the handle is the
+    node `Handle` at x 17, turning about X [observed].
+  - The original's reel model `terminals\nv_slotmachine\nv_slotmachine-reel01.nif` (02, 03
+    alike) is a drum about the axis of its node `Cylinder06`, radius about 7.25, 3.79 wide:
+    its 14 shapes `Cylinder06:0`…`:13` each hold two opposite faces of one picture, so
+    28 faces of equal height (360°/28) lie round it, symbol and separator in turn, each
+    face the whole picture (u 0 to 1 across, v one whole turn of the picture per face).
+    The shapes' material is a lighting shader with the picture and the normal map
+    `textures\shared\shadefade01LOD_n.dds` [observed: fnvtool nif decode].
+  - NVForever hides the drum shapes while the machine is in use and turns a drum of its own
+    in each one's place, of the shape's own size (the machine's window), laid out as the
+    reel model: the casino's 14 stops are the 14 symbol faces, each the symbol's picture
+    (CSNO ICON, 256 × 128), a separator face between each two; each face wears a copy of
+    the reel model's material, the symbol faces with the stop's picture [design: the
+    model's own pictures are the vanilla stops in order, 1…7 twice; the record decides
+    them]. Without the reel model, NVForever's own proportions and a copy of the drum
+    shape's material without its maps. The payline is the stop facing the window (15° above
+    -Y), marked by a thin red line and red arrows [design].
+  - `Slot_Machine02.nif` (vWranglerSlot02) is one static shape of the same cabinet, its
+    window frame where 01's is [observed]: the drums stand at 01's reel places. A machine
+    model of another size gets no drums and the menu draws its flat reels (below).
+  - The arm turns as the minigame model's `Forward`: 0.774 rad by 0.33 s, 0.861 by 0.5 s,
+    held to 0.83 s [observed: NV_SlotMachine-Minigame.NIF], then back over 0.5 s
+    [design]. The placed models have no `Forward`, coin or `Payout_*` sequences, only
+    `Idle` and a still `Backward`/`Off` pose [observed], so the coins and the payout screen
+    of the minigame model are not shown; the Payout List stays the menu's own.
+  - The camera [design, revised 2026-11-11]: a 1.6 s pan from the
+    player's view in close on the reels, where it stays for the pull, the turn and the
+    stop; only a win zooms out (1.2 s) to third person for the celebration (0.8 s at 2x
+    the bet up to 3 s from about 90 x, `fnv_game::slots::celebration`), then back in (1.4 s). A
+    loss leaves it on the reels. Every move eases in and out (smootherstep). While the
+    camera is nearer the reels than halfway to third person the player's body is out of
+    its view (it came between the camera and the reels) [design].
+- **The flat reels** (the fallback): three reels side by side, each a window three symbols
+  high on a pale ground with the payline across the middle, the symbols the record's
+  pictures (§2); while a reel turns its symbols run down through the window, slowing to
+  the stop [design].
+- Not built: the minigame model's coins and payout screen (nothing to play them on, above),
+  the challenge `ChallengeSlotsSCRIPT`, the Atomic Wrangler's jackpot message
+  `AtomicWranglerSlotsMsg` (its trigger is not read).
+
+## 6a. At the machine in the world
+
+- **Every machine, seated or standing** [observed: `fnvtool world refs` over every cell
+  and worldspace of a 51-plugin load order]:
+  207 activators whose script calls `ShowSlotMachineMenuParams`, all in interiors, in 9
+  cells, 94 of them in the base game's FalloutNV.esm. The machines carry
+  no furniture marker; 105 have a FURN (a stool) 43 to 110 units straight out from the
+  machine's front (local -y), about 0 to the side; the other 102 have none.
+  [hypothesis: the original seats the player on that stool; nothing in the data says the
+  player sits to play.] NVForever seats the player on it, else stands them 44 units out
+  in front facing the machine [design].
+- **The idles** [observed: IDLE records]: `NVSlotMachine` is a group with no
+  file under the no-lean stool tree; `NVSlotMachineInsertCoin` (`SpecialIdle_NVinsertCoin.kf`,
+  5.33 s) and `NVSlotMachineLoose` (`SpecialIdle_NVLoose.kf`, 3.33 s) are under it. Their
+  conditions (functions 72, 163, 77) are not decoded; NVForever plays InsertCoin as a spin
+  starts and Loose on a losing spin [design], on the upper body only, over the stool's
+  own loop or the standing idle.
+- **A win** plays a cheer (`LooseCheeringBothArmsUp`) on the upper body for 0.8 s (2 x) to 3 s (160 x), on a
+  log scale [design: up to 3 s, small wins short].
+- **Leaving**: after Exit the player's view comes back at once, with no fade through
+  black [observed: the four FalloutNV.esm machine scripts call only
+  `ShowSlotMachineMenuParams`, no fade or image-space modifier; hypothesis: closing the
+  original's menu draws no black], and a seated player gets up by the stool's getting-off
+  clip 0.5 s later [design].
+- The engine side: nvf-play `slots/seat.rs` (where; the spin goes out as `SlotsSpin`:
+  started, result with the celebration's length, closed) and nvforever `slots_seat.rs`.
 
 ## 7. Tests
 
@@ -160,6 +246,9 @@ observed: the five casinos]:
   the help the first time, a spin of 5 made to stop on three oranges pays 800, a spin
   made to stop on a cherry in the left place pays 10, a losing spin; screenshots of the
   help, the reels turning, a result and the payout list.
+- Smoke `slots-seated`, `slots-standing`, and the holster variants: The Tops' machine on its stool, Gomorrah's standing.
+- Smoke `slots-3d` and `slots-3d-static`: the reels turning on The Tops' machine
+  (its own reel nodes) and on the Atomic Wrangler's static machine, the camera's shots.
 - Test aid `NVF_PLAY_TEST_SLOTS` (nvf-play `slots.rs`).
 
 ## 8. Open questions for the owner

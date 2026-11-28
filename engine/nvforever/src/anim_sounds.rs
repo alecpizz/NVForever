@@ -83,6 +83,17 @@ pub const ACTOR_RANGE: f32 = 3000.0;
 const JUST_STARTED: f32 = 0.1;
 /// The share of its layer a clip needs to be heard.
 const HEARD_WEIGHT: f32 = 0.5;
+/// Whether a layer of the player's rig is heard: one with at least [`HEARD_WEIGHT`] of its
+/// layer, or one coming in to that share (asked for, not fading out). A clip coming in is
+/// heard from its start [design, #4827: with animation smoothing the walk clip fades in,
+/// and its first footfall, near its start, passed while its weight was under half; the
+/// clip was then first seen part-way through and that step dropped, so the first footstep
+/// came half a stride late]. A clip going out and the one coming in are kept from stepping
+/// twice by [`MIN_STEP_GAP`].
+fn player_layer_heard(l: &nvf_assets::anim_blend::Layer) -> bool {
+    l.weight * l.ease >= HEARD_WEIGHT || (!l.is_leaving() && l.target >= HEARD_WEIGHT)
+}
+
 /// The shortest time between two footfalls (or two rustles) of one actor, seconds: two
 /// movement clips crossfading can pass their keys a frame or two apart [design].
 const MIN_STEP_GAP: f32 = 0.2;
@@ -445,7 +456,7 @@ fn player_keys(
     let who = Who::Player(first);
     seen.clear();
     let mut heard: Vec<(&Clip, KeySound)> = Vec::new();
-    for l in a.layers.iter().filter(|l| l.weight * l.ease >= HEARD_WEIGHT) {
+    for l in a.layers.iter().filter(|l| player_layer_heard(l)) {
         let playing = (who, Arc::as_ptr(&l.clip) as usize, l.tag);
         for k in keys_of(&s.last, &mut seen, playing, &l.clip, l.sample_time(a.phase), l.mode == Mode::Once).into_iter().filter_map(parse) {
             heard.push((&l.clip, k));

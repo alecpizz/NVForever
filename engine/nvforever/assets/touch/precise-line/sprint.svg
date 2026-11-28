@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Original NVForever geometry; Precise line family. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="currentColor" color="#ffffff" fill-rule="evenodd" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+  <title>Sprint</title>
+  <circle cx="21" cy="6.5" r="2.6"/><path d="M 18 12 L 14 18 L 21 21 L 22 27 M 14 18 L 10 24 L 4 25 M 18 12 L 24 15 L 27 12 M 13 14 L 10 11 L 7 14 M 4 7 L 12 7 M 3 11 L 6 11"/>
+</svg>

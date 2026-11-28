@@ -5,9 +5,11 @@
 //! file lays out its information box the same way.
 //!
 //! - The information box: 400 × 175, 10 in from the main rectangle's left and bottom, the
-//!   bracket of lines, three rows in font 7 at 20 in and 35, 80 and 125 down: "Current
-//!   Bet:", "Chips:" and "<casino> Earnings:" [observed: the owner's screenshot], each
-//!   value right-aligned 80 short of the box's width.
+//!   bracket of lines, three rows in font 7 at 20 in and 35, 80 and 125 down: "Your
+//!   bet:", "Your chips:" and "Won at <casino>:" (NVForever's own words [design, #4495:
+//!   in place of the titles read from the original's screen]), each
+//!   value right-aligned 80 short of the box's width; a long casino name or a big number
+//!   moves the values right and widens the box (`casino_hud::info_fit`).
 //! - Six buttons right-aligned 50 from the main rectangle's right, one under the other,
 //!   each its label and its key (blackjack.md §5); a button that does not apply now is not
 //!   drawn, the others keep their places [hypothesis].
@@ -31,6 +33,8 @@ const INFO_IN: f32 = 10.0;
 const ROW_X: f32 = 20.0;
 const ROWS_Y: [f32; 3] = [35.0, 80.0, 125.0];
 const VALUE_X: f32 = INFO.x - 80.0 + ROW_X;
+/// The least room between a row's title and its value [design].
+const VALUE_GAP: f32 = 16.0;
 const THICK: f32 = 2.0;
 const FADE: f32 = 30.0;
 const BUTTONS_RIGHT: f32 = 50.0;
@@ -138,12 +142,16 @@ fn spawn(commands: &mut Commands, c: &mut Ctx, s: &Session, view: Option<&Blackj
     let bright = amber(255.0);
     let full = Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() };
     let mut root = commands.spawn((BlackjackRoot, full.clone(), GlobalZIndex(106)));
-    match view {
-        Some(v) => {
+    match view.map(|v| v.image.clone()) {
+        // The table in the world: the room shows through, dimmed under the help box.
+        Some(None) => {
+            root.insert(BackgroundColor(if s.help.is_some() { Color::srgba(0.0, 0.0, 0.0, 1.0 - UNDER_HELP) } else { Color::NONE }));
+        }
+        Some(Some(image)) => {
             root.insert(BackgroundColor(Color::srgba(0.0, 0.0, 0.0, SHADE)));
             let light = if s.help.is_some() { UNDER_HELP } else { 1.0 };
             root.with_children(|r| {
-                r.spawn((full.clone(), ImageNode { color: Color::srgb(light, light, light), ..ImageNode::new(v.image.clone()) }));
+                r.spawn((full.clone(), ImageNode { color: Color::srgb(light, light, light), ..ImageNode::new(image) }));
             });
         }
         None => {
@@ -155,25 +163,36 @@ fn spawn(commands: &mut Commands, c: &mut Ctx, s: &Session, view: Option<&Blackj
         let main = Node { position_type: PositionType::Absolute, left: u(EDGE), right: u(EDGE), top: u(EDGE), bottom: u(EDGE), ..default() };
         r.spawn(main).with_children(|m| {
             // The information box.
-            let info = Node { position_type: PositionType::Absolute, left: u(INFO_IN), bottom: u(INFO_IN), width: u(INFO.x), height: u(INFO.y), ..default() };
+            let rows = [(tr("Your bet:").to_string(), shown_bet(s).to_string()), (tr("Your chips:").into(), s.chips.to_string()), (s.earnings_title(), s.earnings.to_string())];
+            let widths: Vec<(f32, f32)> = rows.iter().map(|(t, v)| (c.text_width(FontKind::Menu, t), c.text_width(FontKind::Menu, v))).collect();
+            let (column, info_w) = crate::casino_hud::info_fit(INFO.x, ROW_X, VALUE_X, VALUE_GAP, &widths);
+            let info = Node { position_type: PositionType::Absolute, left: u(INFO_IN), bottom: u(INFO_IN), width: u(info_w), height: u(INFO.y), ..default() };
             m.spawn(info).with_children(|b| {
+                crate::casino_hud::glass(b, ROW_X, ROWS_Y[0], info_w - ROW_X * 2.0, ROWS_Y[2] - ROWS_Y[0] + 30.0);
                 c.image(b, "interface\\shared\\line\\fade_to_top.dds", at(0.0, 0.0, THICK, FADE), bright);
                 c.image(b, "interface\\shared\\line\\solid.dds", at(0.0, FADE - THICK, THICK, INFO.y - FADE), bright);
-                c.image(b, "interface\\shared\\line\\solid.dds", at(0.0, INFO.y - THICK, INFO.x - FADE, THICK), bright);
-                c.image(b, "interface\\shared\\line\\fade_to_right.dds", at(INFO.x - FADE - THICK, INFO.y - THICK, FADE, THICK), bright);
-                let rows = [(tr("Current Bet:").to_string(), shown_bet(s).to_string()), (tr("Chips:").into(), s.chips.to_string()), (s.earnings_title(), s.earnings.to_string())];
+                c.image(b, "interface\\shared\\line\\solid.dds", at(0.0, INFO.y - THICK, info_w - FADE, THICK), bright);
+                c.image(b, "interface\\shared\\line\\fade_to_right.dds", at(info_w - FADE - THICK, INFO.y - THICK, FADE, THICK), bright);
                 for ((title, value), y) in rows.iter().zip(ROWS_Y) {
                     c.text_in(b, FontKind::Menu, title, ROW_X, y, false, bright);
-                    c.text_in(b, FontKind::Menu, value, VALUE_X, y, true, bright);
+                    c.text_in(b, FontKind::Menu, value, column, y, true, bright);
                 }
             });
             // The buttons, while the cards are down.
             if !s.busy(now) {
                 let column = Node { position_type: PositionType::Absolute, right: u(BUTTONS_RIGHT), top: u(BUTTONS_TOP), width: u(0.0), height: u(6.0 * BUTTON_H), ..default() };
                 m.spawn(column).with_children(|b| {
-                    for (i, button) in s.buttons().into_iter().enumerate() {
-                        let Some((label, hint, cmd)) = button else { continue };
-                        let y = i as f32 * BUTTON_H;
+                    // Only the options offered, packed against the bottom of the column with
+                    // no gaps, so the list closes up and grows as they come and go
+                    // [design].
+                    let all: Vec<_> = s.buttons().into_iter().flatten().collect();
+                    let (lw, hw) = all.iter().fold((0.0f32, 0.0f32), |(l, h), (label, hint, _)| (l.max(c.text_width(FontKind::Menu, label)), h.max(c.text_width(FontKind::Menu, hint))));
+                    let first = 6usize.saturating_sub(all.len()) as f32;
+                    if !all.is_empty() {
+                        crate::casino_hud::glass(b, -lw, first * BUTTON_H + 4.0, lw + HINT_GAP + hw, all.len() as f32 * BUTTON_H - 8.0);
+                    }
+                    for (i, (label, hint, cmd)) in all.into_iter().enumerate() {
+                        let y = (first + i as f32) * BUTTON_H;
                         let w = c.text_in(b, FontKind::Menu, label, 0.0, y + 9.0, true, bright);
                         c.text_in(b, FontKind::Menu, &hint, HINT_GAP, y + 9.0, false, bright);
                         b.spawn((Button, BlackjackButton(cmd), at(-w - 10.0, y, w + 20.0 + HINT_GAP + 30.0, BUTTON_H)));
@@ -190,6 +209,8 @@ fn spawn(commands: &mut Commands, c: &mut Ctx, s: &Session, view: Option<&Blackj
             if let Some(status) = &s.status {
                 let line = Node { position_type: PositionType::Absolute, right: u(BUTTONS_RIGHT), top: u(STATUS_Y), width: u(0.0), height: u(36.0), ..default() };
                 m.spawn(line).with_children(|b| {
+                    let w = c.text_width(FontKind::Menu, status);
+                    crate::casino_hud::glass(b, -w, 4.0, w, 30.0);
                     c.text_in(b, FontKind::Menu, status, 0.0, 0.0, true, bright);
                 });
             }
@@ -232,5 +253,18 @@ pub fn fade(mut commands: Commands, screen: Res<BlackjackScreen>, time: AidTime,
                 t.0.set_alpha(a);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_long_title_pushes_its_value_clear() {
+        let (x, _) = crate::casino_hud::info_fit(INFO.x, ROW_X, VALUE_X, VALUE_GAP, &[(100.0, 20.0)]);
+        assert_eq!(x, VALUE_X, "short titles keep the file's column");
+        let (x, _) = crate::casino_hud::info_fit(INFO.x, ROW_X, VALUE_X, VALUE_GAP, &[(330.0, 30.0)]);
+        assert!(x - 30.0 >= ROW_X + 330.0 + VALUE_GAP, "the value starts after the title");
     }
 }

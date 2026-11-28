@@ -445,7 +445,7 @@ fn setters_keep_their_fields_in_range() {
 fn projectile_flag_overrides_reach_launch_traits_and_clones() {
     let f = fixture();
     let mut g = game(&f);
-    assert_eq!(n(&mut g, "GetPluginVersion \"lStewieAl's Tweaks\""), 945.0);
+    assert_eq!(n(&mut g, "GetPluginVersion \"lStewieAl's Tweaks\""), 960.0);
 
     let proj = FormId(PROJ);
     assert_eq!(g.projectile_flags_override(proj), None);

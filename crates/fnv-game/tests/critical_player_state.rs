@@ -69,7 +69,7 @@ fn canonical_critical_damage_preserves_readback_and_reaches_the_combat_view() {
     );
     // TempCloneForm snapshots live modified critical damage at clone time and stays
     // bi-directionally isolated from later source/clone edits (including clone chains)
-    // [hypothesis; design: `ext-last-core.md` §7].
+    // (see docs/spec-notes/ext-last-core.md §7).
     query(&mut g, "SetWeaponCritDamage 77 OwnedCriticalWeapon");
     let XVal::Ref(clone_id) = query(&mut g, "SetFunctionValue (TempCloneForm OwnedCriticalWeapon 0)") else {
         panic!("expected clone ref");

@@ -145,6 +145,16 @@ pub fn reacting(game: &Game, actor: FormId) -> bool {
 /// Seconds an actor looks about where it searched before it searches on
 /// [engineering choice].
 pub const LOOK_SECONDS: f64 = 4.0;
+/// After no way was found to a target, seconds before [`Ai::close_in`] looks for one
+/// again, doubled at each failure in a row up to [`NO_WAY_RETRY_MAX`]; meanwhile the actor
+/// holds its ground [design, #3785: an actor in combat with a target it could not reach
+/// searched the navmesh for a way every frame, each search ending at its limit (50 to
+/// 100 ms): two Powder Gangers by the NCR Correctional Facility, fighting ED-E, held the
+/// game at 9 frames a second; a target that comes within reach is fought from where the
+/// actor stands, and a way that opens is found within the wait].
+pub const NO_WAY_RETRY_SECONDS: f64 = 2.0;
+/// See [`NO_WAY_RETRY_SECONDS`].
+pub const NO_WAY_RETRY_MAX: f64 = 16.0;
 /// A walk to a search point that has not arrived after this long ends where it is
 /// [engineering choice].
 pub const SEARCH_WALK_SECONDS: f64 = 30.0;
@@ -687,9 +697,19 @@ impl Ai {
         let len = back[0].hypot(back[1]).max(1e-3);
         let short = (stop * STOP_SHORT).min(len);
         let goal = [ahead[0] + back[0] / len * short, ahead[1] + back[1] / len * short, at[2]];
-        let point = nav.nearest(space, goal, 512.0).map(|(_, p)| p);
+        // No way found to this target a moment ago: hold, without searching again.
+        let retry_later = a.no_way_to.is_some_and(|(t, until, _)| t == target && now < until);
+        let point = if retry_later { None } else { nav.nearest(space, goal, 512.0).map(|(_, p)| p) };
         (a.walker.speed, a.walk_pace) = (speed, None);
         let path = point.and_then(|p| a.walker.go_to(nav, Place { space, pos: p }, &params).ok()).map(|path| path.length);
+        if !retry_later {
+            a.no_way_to = match (path, a.no_way_to) {
+                (Some(_), _) => None,
+                // Failed again for the same target: wait twice as long.
+                (None, Some((t, _, wait))) if t == target => Some((target, now + (wait * 2.0).min(NO_WAY_RETRY_MAX), (wait * 2.0).min(NO_WAY_RETRY_MAX))),
+                (None, _) => Some((target, now + NO_WAY_RETRY_SECONDS, NO_WAY_RETRY_SECONDS)),
+            };
+        }
         let first = !matches!(a.search, Some(Search::Closing { target: t, .. }) if t == target);
         match (point, path) {
             (Some(p), Some(length)) => {

@@ -735,4 +735,42 @@ mod tests {
         assert!(tree_casts(between, true) && !tree_casts(between, false));
         assert!(tree_casts(TREE_SHADOW_BACK, false));
     }
+
+    /// #3779: switching between third person (4), first person with ArmsShade (5) and
+    /// flashlight (6) grows the directional shadow texture's layer count once per peak and
+    /// reuses it on every later transition instead of reallocating on shrink/grow.
+    #[test]
+    fn directional_shadow_layer_high_water_reuses_texture_across_view_and_flashlight_toggles() {
+        let mut hw = bevy::pbr::NvfDirectionalShadowLayerHighWater::default();
+        // Staying in third person keeps exactly 4 layers (no extra memory for 3rd-person-only players).
+        assert_eq!(hw.layers(4096, 4, 256), 4);
+        assert_eq!(hw.layers(4096, 4, 256), 4);
+        // Entering first person (4 sun + 1 ArmsShade) grows once to 5; leaving stays at 5.
+        assert_eq!(hw.layers(4096, 5, 256), 5);
+        assert_eq!(hw.layers(4096, 4, 256), 5);
+        // Toggling flashlight on (5 + 1 spot) grows once to 6.
+        assert_eq!(hw.layers(4096, 6, 256), 6);
+        // Repeatedly toggling 1st/3rd person and flashlight never changes the allocated layer count.
+        let mut changes = 0usize;
+        let mut last = 6usize;
+        for needed in [5, 4, 5, 6, 4, 5, 4, 6, 5, 4] {
+            let allocated = hw.layers(4096, needed, 256);
+            if allocated != last {
+                changes += 1;
+                last = allocated;
+            }
+            assert_eq!(allocated, 6);
+        }
+        assert_eq!(changes, 0, "no texture reallocation across 4 <-> 5 <-> 6 transitions");
+        // Changing shadow resolution resets the high-water mark to the newly needed layer count.
+        assert_eq!(hw.layers(2048, 4, 256), 4);
+        assert_eq!(hw.layers(2048, 5, 256), 5);
+        assert_eq!(hw.layers(2048, 4, 256), 5);
+        assert_eq!(hw.layers(4096, 4, 256), 4);
+        // Respects max_layers cap and >= 1 floor, and reset() clears remembered state.
+        assert_eq!(hw.layers(4096, 0, 256), 4);
+        assert_eq!(hw.layers(4096, 300, 8), 8);
+        hw.reset();
+        assert_eq!(hw.layers(4096, 0, 256), 1);
+    }
 }

@@ -393,7 +393,7 @@ fn runtime(
     )
 }
 
-fn test_streamer(interior: Option<u32>) -> Streamer {
+pub(crate) fn test_streamer(interior: Option<u32>) -> Streamer {
     Streamer {
         radius: 2,
         loaded: default(),
@@ -415,6 +415,7 @@ fn test_streamer(interior: Option<u32>) -> Streamer {
         centre: None,
         waiting: default(),
         model_overrides: default(),
+        coop_areas: Vec::new(),
         travels: 0,
     }
 }

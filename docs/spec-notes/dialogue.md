@@ -594,8 +594,12 @@ All of it is in `GameSnapshot`.
   no `dialogue_started`. What a conversation of that one line did is kept: the Add
   Topics list is applied when the line ends and the actor counts as having talked to
   the player (GetTalkedToPC); no SayToDone block runs [hypothesis for the three].
-  Talking to the actor again while it speaks cuts the line (no end result) and starts
-  the greeting afresh [hypothesis, as for a second SayTo]. A Goodbye line of a topic
+  The player talking to the actor again while it speaks does nothing: the line plays
+  to its end and no second line starts [player report #4683, 2026-11-26: "New phrase
+  should trigger only after previous phrase has ended"; the runtime's activation,
+  `Runtime::talk_after`, checks `Game::greets_player`]. Before #4683 it cut the line
+  and started the greeting afresh [hypothesis then, as for a second SayTo];
+  `Game::start_dialogue` called directly still does that. A Goodbye line of a topic
   named by StartConversation still opens a conversation that ends with it [hypothesis:
   the statement is about GREETING]. Through a talking activator the greeting opens a
   conversation that the line ends, as below [owner statement 2026-10-22, of the REPCONN
@@ -654,7 +658,10 @@ All of it is in `GameSnapshot`.
   topics [documented: xEdit "Add Topics"; hypothesis on the moment and that they stay
   known afterwards]; a Goodbye line ends the conversation [documented]; else the first
   follow-up the actor can say is said (§3.4) [owner statement]; else choices are offered;
-  with nothing to offer the conversation ends [hypothesis]. A `StartConversation player`
+  with nothing to offer the conversation ends [observed: observer check 72, 2026-11-26,
+  Sergeant Kilborn's vNiptonVulpes Topic003 (INFO 0x00138E1A), whose end script stops
+  the quest: the menu showed no topics and closed by itself within about 4 s of the line's
+  end, with no input; #1113]. A `StartConversation player`
   in the end result of the line that ends the conversation (Goodbye, or nothing to offer)
   is held and starts right after the conversation closes; when the conversation goes on
   it is refused, as any StartConversation while one runs (`Game::hold_force_greet`)
@@ -692,10 +699,13 @@ All of it is in `GameSnapshot`.
   heard and subtitled where the actor stands, like a SayTo line, and it does not hold
   the actor in place: the actor goes about its package while it speaks [design, from the
   statement: the player walks away]. It is never cut: another line of the actor, the
-  actor disabled, dead or deleted, or a fight ends it as if said to the end, as a
+  actor disabled, dead or deleted, or a fight (`State::Combat`, #883) ends it as if said to the end, as a
   Goodbye greeting at the player [hypothesis: a Goodbye line's end result sets quest
   stages and must not be lost; the owner's catch-all statement of 2026-10-27 was about
-  the greeting]. Game time and GameMode scripts run while it is said, as for any line
+  the greeting]. Searching states (`State::Alert` and `State::Lost`, #3663) do not end a
+  Goodbye greeting or farewell prematurely, so a Goodbye greeting started while its
+  speaker is searching plays out instead of being discarded on the same frame
+  [hypothesis: an NPC that only searches can be talked to]. Game time and GameMode scripts run while it is said, as for any line
   said in the world. Not moved, as they are not chosen: a Goodbye greeting that opens
   a conversation (a force greet, above), a Goodbye line of a topic named by
   StartConversation, and a Goodbye follow-up; each ends its conversation when it is

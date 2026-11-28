@@ -416,9 +416,13 @@ pub(crate) fn call(g: &mut Game, name: &str, args: &[XVal]) -> Option<Result<XVa
     let v = match name {
         "getsoundtraitnumeric" => XVal::Num(if (0..=12).contains(&t) { g.sound_trait_override(x, t).unwrap_or_else(|| sound_trait(g, x, t)) } else { 0.0 }),
         // Static attenuation is kept negated and whole [observed: 7 reads -7, -26.43
-        // reads -26]; the distances keep their stored steps.
+        // reads -26]; the distances keep their stored steps. Trait 12 is ignored/unwritable
+        // [observed: Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 + JIP LN 57.30, 2026-11-24,
+        // `GSDocMitchellHouse` (`0x00103DF9`), 10 official base masters,
+        // `w4c_b1_21_sound_and_diff_bounds`: `SetSoundTraitNumeric rSnd 12 77` left
+        // `GetSoundTraitNumeric rSnd 12` at `0`].
         "setsoundtraitnumeric" => {
-            if (0..=12).contains(&t) {
+            if (0..=11).contains(&t) {
                 let v = num(args, 2, 0.0);
                 let kept = match t {
                     0 => (v / 5.0).trunc() * 5.0,

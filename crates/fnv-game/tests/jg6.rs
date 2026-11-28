@@ -249,7 +249,7 @@ fn cells_and_templates() {
     assert_eq!(n(&mut g, "GetLightingTemplateCell TestTemplate"), f64::from(ROOM2));
     q(&mut g, "SetLightingTemplateCell TestTemplate TestThing");
     assert_eq!(n(&mut g, "GetLightingTemplateCell TestTemplate"), f64::from(ROOM2));
-    // No climate: phase 0 [hypothesis]; the frame step.
+    // No climate: phase 0 (see docs/spec-notes/ext-jg6.md); the frame step.
     assert_eq!(n(&mut g, "GetMoonPhase"), 0.0);
     assert!((n(&mut g, "GameGetSecondsPassed") - 1.0 / 60.0).abs() < 1e-9);
 }

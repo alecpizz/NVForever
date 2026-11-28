@@ -1897,6 +1897,34 @@ fn explosions_push_dynamic_bodies_away() {
     assert!((w.ref_bodies(2)[0].translation[0] - far[0]).abs() < 0.01);
 }
 
+/// #4917: a picked White Horse Nettle's body (one 45 kg box on its end, on the Non
+/// Collidable layer) stays where it was placed: a character walks through it, a blast
+/// beside it and a crate dropped on it leave it be, and the crate falls through to the
+/// ground. Queries still see it.
+#[test]
+fn a_loose_body_on_the_non_collidable_layer_stays_rooted() {
+    let mut w = ground();
+    let nettle = CollisionObject { layer: fnv_phys::layers::NON_COLLIDABLE, mass: 45.0, ..object(boxed([2.5, 2.6, 27.0]), Motion::Dynamic) };
+    w.insert_ref(fnv_phys::PreparedRef::new(&PhysParams::default(), &at(1, [60.0, 0.0, 27.0]), &[nettle]).asleep());
+    w.add_ref(&at(2, [60.0, 0.0, 80.0]), &[object(boxed([6.0, 6.0, 6.0]), Motion::Dynamic)]);
+    let placed = w.ref_bodies(1)[0];
+    let mut c = w.add_character(1, CharacterParams::default(), [0.0, 0.0, 1.0]);
+    settle(&mut w, &mut c, 30);
+    walk(&mut w, &mut c, [120.0, 0.0], 120);
+    assert!(c.feet[0] > 100.0, "walked through it: {:?}", c.feet);
+    assert_eq!(w.push_dynamic([50.0, 0.0, 6.0], 300.0, 400.0), 1, "the blast pushes the crate only");
+    for _ in 0..120 {
+        w.step();
+    }
+    let b = w.ref_bodies(1)[0];
+    assert_eq!((b.translation, b.rotation), (placed.translation, placed.rotation), "{placed:?} -> {b:?}");
+    let crate_ = w.ref_bodies(2)[0];
+    assert!(crate_.translation[2] < 20.0, "the crate fell through it to the ground: {crate_:?}");
+    assert_eq!(w.stats().bodies_dynamic, 1);
+    let hit = w.queries().ray([0.0, 0.0, 30.0], [1.0, 0.0, 0.0], 200.0, &Filter::default()).unwrap();
+    assert_eq!(hit.owner.key(), Key::Ref(1));
+}
+
 // --- per-part hit volumes (combat C8) ---
 
 #[test]
@@ -3371,6 +3399,29 @@ fn a_ceiling_lower_than_the_body_leaves_no_room() {
     let c = spot_character(&mut w);
     w.add_ref(&at(62, [SPOT[0], SPOT[1], 150.0]), &[object(boxed([100.0, 100.0, 10.0]), Motion::Static)]);
     assert!(w.character_spot(&c, SPOT).is_ok());
+}
+
+#[test]
+fn a_skin_laid_on_the_landscape_takes_the_body_a_slab_over_it_does_not() {
+    // A road: one sheet of triangles 20 over the ground (#4826). Asked at the ground's
+    // height, as a coarse navmesh under the road has it: the body overlaps the sheet
+    // there, so it is put on the sheet.
+    let mut w = ground();
+    let c = spot_character(&mut w);
+    let road = Shape::TriMesh {
+        vertices: vec![[-150.0, -150.0, 0.0], [150.0, -150.0, 0.0], [150.0, 150.0, 0.0], [-150.0, 150.0, 0.0]],
+        triangles: vec![[0, 1, 2], [0, 2, 3]],
+        materials: vec![0; 2],
+    };
+    w.add_ref(&at(80, [SPOT[0], SPOT[1], 20.0]), &[object(road, Motion::Static)]);
+    let on = w.character_spot(&c, SPOT);
+    // On the sheet, at most a step over it (the place is tried a share of a step up).
+    assert!(matches!(on, Ok(f) if f[2] > 20.0 && f[2] < 20.0 + CharacterParams::default().step_height + 2.0), "{on:?}");
+    // A slab with room under its top (its underside 20 up, its top 30): still none.
+    let mut w = ground();
+    let c = spot_character(&mut w);
+    w.add_ref(&at(81, [SPOT[0], SPOT[1], 25.0]), &[object(boxed([100.0, 100.0, 5.0]), Motion::Static)]);
+    assert_eq!(w.character_spot(&c, SPOT), Err(SpotRefused::NoRoom));
 }
 
 #[test]

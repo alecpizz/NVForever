@@ -741,15 +741,16 @@ playtest list 5 item 59]. The tumbleweeds roll with the weather's wind: [wind](w
   `engine/nvf-play/src/phys/tests.rs`] (docs/design/layer4-play.md §6).
 - **Snapshots**: `PhysWorld::snapshot` copies the whole world (bodies, colliders, contact
   graph, islands, broad phase); stepping the copy and the original with the same inputs
-  stays bit-identical, a character included [observed: test
+  stays bit-identical, a character included [implementation evidence: test
   `snapshot_continues_identically`].
-- **rapier quirk**: bringing queries up to date between steps runs rapier's collision-only
+- **Query refresh backends**: [implementation history: registry collision-only route]
+  Bringing queries up to date between steps ran rapier's collision-only
   pipeline, which consumes the change flags of newly inserted bodies without registering
   them for simulation; a dynamic body added and then queried (or added while a character
-  moves, since `move_character` updates queries first) never moved [observed: test
-  `bodies_added_then_queried_still_simulate`, rapier 0.36.0]. `update_queries` flags such
+  moves, since `move_character` updates queries first) never moved [implementation evidence: test
+  `bodies_added_then_queried_still_simulate`, rapier 0.36.0]. That route flags such
   bodies changed again so the next step registers them. Re-check when upgrading rapier.
-  This rearm must also keep a kinematic body's queued next pose. `set_position`
+  For that registry route (#2638), the rearm must also keep a kinematic body's queued next pose. `set_position`
   replaces both its current and next pose; `character::apply_move` has already queued
   the next translation before the fixed step [documented: rapier3d 0.36.0,
   `dynamics/rigid_body.rs`, `set_position` and `set_next_kinematic_position`;
@@ -761,10 +762,10 @@ playtest list 5 item 59]. The tumbleweeds roll with the weather's wind: [wind](w
   followed by an unrelated insertion and query. The query must not advance time or
   erase the movement that the next step consumes. These are authored implementation
   controls, not measurements of the original game.
-  The same query loses the wake-up of a sleeping kinematic body that is teleported
+  The collision-only query also loses the wake-up of a sleeping kinematic body that is teleported
   (`place_character` on a character that was not moved for a few seconds): the body
   stayed where it was put while the character walked on, so rays and other characters
-  met it there [observed: test `a_placed_character_takes_its_body_along`]. Placed
+  met it there [implementation evidence: test `a_placed_character_takes_its_body_along`]. Placed
   bodies are woken again after the query, like struck ones (`PhysWorld::body_placed`).
   The same pipeline loses the wake-up of a sleeping body that was struck
   (`push_ref`, `push_dynamic`) since the last step: the body counts as awake, keeps its
@@ -783,6 +784,17 @@ playtest list 5 item 59]. The tumbleweeds roll with the weather's wind: [wind](w
   outside the awake set, or one in a sleeping set whose island has a body in the awake set,
   is woken with its island; a fixed body still listed in an island has its type told again
   for the next step. The exit log's "island repairs after query refreshes" line counts them.
+  [documented: current selected backend] This branch instead uses the vendored
+  Rapier 0.36.1 zero-dt physics-registration path, including its deferred-BVH join
+  and sleeping-bootstrap corrections. It does not rearm inserted bodies with
+  `set_position`. Each quarantine report is consumed before another pipeline call
+  clears it; at most one additional zero-time pass publishes remedy changes, while
+  unexpected pending marks remain dirty. See
+  [the query-refresh lifecycle note](query-refresh-island-lifecycle.md).
+  The three observable motion contracts remain unchanged. The registry rearm
+  correction remains valid for consumers of that route; it is not concatenated
+  with this distinct registration backend. Neither source description establishes
+  new runtime or original-game evidence.
 - **Drawing is not stepping**: frames come at their own rate, between the fixed steps;
   what physics moves is drawn between its last two steps (§5.2), which reads the world
   and never writes it. Everything the simulation sees (the poses written back to the

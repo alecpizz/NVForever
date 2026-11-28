@@ -219,8 +219,8 @@ impl Bar {
     /// with the weapon out, 2 hidden without it; 27: 1 hidden in third person, 2 in first
     /// person.
     ///
-    /// [hypothesis] Trait 0's page gives the value 1 to both "Show only in Gamemode" and
-    /// "Show only in menumode"; 1 is read as the first and 2 as the second, the way traits
+    /// Trait 0's page gives the value 1 to both "Show only in Gamemode" and "Show only in
+    /// menumode" (see docs/spec-notes/hud-bars.md §2); 1 is read as the first and 2 as the second, the way traits
     /// 22-24 and 26 number their two alternatives. A value a page does not list hides
     /// nothing [design].
     ///
@@ -315,8 +315,8 @@ impl Bar {
     }
 
     /// A way's whole shift: [documented: HudBarSetBarTrait] 42 (62) 1 horizontally, 2
-    /// vertically, by 43's (63's) pixels, positive to the right (down, [hypothesis: the
-    /// interface's y grows downwards]).
+    /// vertically, by 43's (63's) pixels, positive to the right (down; see
+    /// docs/spec-notes/hud-bars.md §3).
     fn shift(&self, mode: i64, by: i64) -> (f64, f64) {
         let d = self.bar_trait(by);
         match self.code(mode) {
@@ -433,8 +433,8 @@ pub fn set_value(g: &mut Game, i: usize, v: f64, of_max: bool) {
 /// Trait 25's test: the bar's item (HudBarSetItem) or any member of its form list
 /// (HudBarSetFormList) is equipped [documented: the two pages, "only show up when this
 /// item is equipped", "when any item from formlist is equipped"]. [design] With both
-/// set, either one is enough (neither page puts one before the other). [hypothesis]
-/// With neither set, or only an empty list, nothing named can be equipped, so trait 25
+/// set, either one is enough (neither page puts one before the other). With neither
+/// set, or only an empty list, nothing named can be equipped (see docs/spec-notes/hud-bars.md §2), so trait 25
 /// keeps the bar hidden, as its words say ("hide bar when player doesn't have item
 /// equipped").
 pub fn item_equipped(g: &Game, b: &Bar, s: &Situation) -> bool {
@@ -762,7 +762,7 @@ pub(crate) fn call(g: &mut Game, lname: &str, args: &[XVal]) -> Option<Result<XV
         },
         // `name element [modIndex]`; 10: 1 shown, 0 hidden by HudBarShowBar, -1 hidden by
         // its conditions [documented: HudBarGetVisible, "if it's set to be hidden in First
-        // person"]. [hypothesis] Hidden both ways is 0 (HudBarShowBar's); every condition
+        // person"]. Hidden both ways is 0 (HudBarShowBar's; see docs/spec-notes/hud-bars.md §4); every condition
         // (traits 0, 21-27) gives -1, read now, so -1 from the moment a condition hides the
         // bar, while it still vanishes, and 1 from the moment none does, while it still
         // appears. The elements 0, 1 and 3 answer their own HudBarSetVisible. 0 without the

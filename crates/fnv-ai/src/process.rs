@@ -383,6 +383,12 @@ impl Ai {
         if !self.agents.contains_key(&actor) {
             return;
         }
+        // Re-check the actor's package before walking a whole low-process interval so a
+        // quest flag or schedule change that happened since the last periodic choice takes
+        // effect before path planning (issue #3041) [design].
+        if game.runs_packages() && game.present(actor) && !game.extra.get(&actor).is_some_and(|e| e.dead) && !game.ai_off(actor) {
+            game.update_package(actor);
+        }
         let mut left = seconds;
         let package = self.agents.get(&actor).and_then(|a| a.package);
         let far = self.far.contains(&actor);

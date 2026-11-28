@@ -65,12 +65,17 @@
 use bevy::ecs::system::NonSendMarker;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use bevy::winit::{UpdateMode, WinitSettings, WINIT_WINDOWS};
+use bevy::winit::WINIT_WINDOWS;
+#[cfg(not(target_os = "android"))]
+use bevy::winit::{UpdateMode, WinitSettings};
 use nvf_play::loading::{CoverRequest, Loading, Uncover};
 use nvf_play::save::{LoadRequest, Restoring, SaveWrites};
 use std::path::{Path, PathBuf};
+#[cfg(not(target_os = "android"))]
 use std::process::Child;
-use std::time::{Duration, Instant};
+use std::time::Instant;
+#[cfg(any(not(target_os = "android"), test))]
+use std::time::Duration;
 
 /// Real seconds (and at least [`SETTLE_FRAMES`] frames) the new run stays hidden after
 /// its loading screen (or the main menu) is up, so the first frame shown is the screen
@@ -100,6 +105,7 @@ pub const JOIN_WAIT_SECS: f64 = 30.0;
 /// Seconds past [`SHOW_AFTER_SECS`] the old run still waits for a new run that has
 /// started but not said it is up, before ending itself all the same (#1903)
 /// [engineering choice].
+#[cfg(any(not(target_os = "android"), test))]
 pub const GIVE_UP_MARGIN_SECS: f64 = 15.0;
 
 /// The one test aid the new run keeps (module notes).
@@ -107,6 +113,7 @@ const EXIT_AID: &str = "NVF_PLAY_TEST_HANDOFF_EXIT";
 
 /// How often the old run updates while it waits [engineering choice: often enough to see
 /// the new run's file soon, rarely enough to leave the computer to the new run].
+#[cfg(not(target_os = "android"))]
 const WAIT_TICK: Duration = Duration::from_millis(50);
 
 /// Where the old window is, for the new run's arguments.
@@ -142,6 +149,7 @@ pub fn parse_at(s: &str) -> Option<IVec2> {
 
 /// The new run, while this one waits for it. Dropped while still waiting (this run ending
 /// some other way, as by its window being closed), it ends the new run too.
+#[cfg(not(target_os = "android"))]
 struct Successor {
     child: Child,
     file: PathBuf,
@@ -152,6 +160,7 @@ struct Successor {
     handed_over: bool,
 }
 
+#[cfg(not(target_os = "android"))]
 impl Drop for Successor {
     fn drop(&mut self) {
         if !self.handed_over && matches!(self.child.try_wait(), Ok(None)) {
@@ -179,6 +188,7 @@ pub fn mark_started(ready: &Path) -> std::io::Result<()> {
 /// Whether the old run, still waiting for a new run that is running, stops waiting and
 /// ends (#1903): `Some(why)` when the new run never said it started as a handoff run, or
 /// has not said it is up well past the time it shows itself anyway.
+#[cfg(any(not(target_os = "android"), test))]
 fn give_up(waited_secs: f64, joined: bool) -> Option<&'static str> {
     if !joined && waited_secs >= JOIN_WAIT_SECS {
         Some("it did not start as a handoff run (no start marker)")
@@ -198,6 +208,7 @@ enum Leaving {
     Asked(Option<LoadRequest>),
     /// The screen is up since this many frames.
     Covered(Option<LoadRequest>, u32),
+    #[cfg(not(target_os = "android"))]
     Waiting(Successor),
     /// The new run is up: this one ends after this frame's `Last` ([`EndNow`]).
     HandedOver,
@@ -207,6 +218,25 @@ enum Leaving {
 /// (`nvf_play::save::LoadRefused`), for the new run.
 #[derive(Resource, Default)]
 pub struct Handoff(Leaving, Option<String>);
+
+impl Handoff {
+    /// The screen is covered for a load or the main menu, and a new run takes over, or is
+    /// about to start: what this run holds for others (the co-op host's port, `crate::coop`)
+    /// goes now. False again when the new run failed and this one stays.
+    pub fn leaving(&self) -> bool {
+        match &self.0 {
+            Leaving::Covered(..) | Leaving::HandedOver => true,
+            #[cfg(not(target_os = "android"))]
+            Leaving::Waiting(_) => true,
+            _ => false,
+        }
+    }
+
+    /// Whether what it is leaving for is a load (not the main menu).
+    pub fn loading(&self) -> bool {
+        matches!(&self.0, Leaving::Covered(Some(_), _) | Leaving::Asked(Some(_)))
+    }
+}
 
 /// The new run's arguments: this run's without those the save or the window decide
 /// (`keep`), and what to open.
@@ -224,6 +254,7 @@ pub fn new_run_args(keep: &[String], what: Option<&LoadRequest>, placement: Opti
 
 /// A successor keeps its profile and measuring aids, but does not repeat the
 /// script clock or driving aids from the run that requested the handoff.
+#[cfg(any(not(target_os = "android"), test))]
 fn remove_driving_aids(command: &mut std::process::Command, keys: impl IntoIterator<Item = std::ffi::OsString>) {
     for key in keys {
         if key.to_str().is_some_and(|key| key == "NVF_PLAY_AIDS_FROM_SCRIPTS" || (nvf_play::drives_run(key) && key != EXIT_AID)) {
@@ -285,11 +316,14 @@ fn ready_file() -> PathBuf {
 #[allow(clippy::too_many_arguments)]
 pub fn leave(
     (mut asked, mut to_menu, mut refused): (MessageReader<LoadRequest>, MessageReader<nvf_play::pause::MainMenuRequest>, MessageReader<nvf_play::save::LoadRefused>),
-    writes: Res<SaveWrites>,
+    (writes, hold): (Res<SaveWrites>, Option<Res<crate::coop::HoldLeave>>),
     mut handoff: ResMut<Handoff>,
-    (mut cover, mut uncover, mut exit): (MessageWriter<CoverRequest>, MessageWriter<Uncover>, MessageWriter<AppExit>),
+    (mut cover, mut uncover): (MessageWriter<CoverRequest>, MessageWriter<Uncover>),
+    #[cfg(not(target_os = "android"))]
+    mut exit: MessageWriter<AppExit>,
     location: Res<nvf_play::Location>,
     window: Query<(Entity, &Window), With<PrimaryWindow>>,
+    #[cfg(not(target_os = "android"))]
     mut winit: ResMut<WinitSettings>,
     _main_thread: NonSendMarker,
 ) {
@@ -308,6 +342,9 @@ pub fn leave(
         Leaving::No => {}
         Leaving::HandedOver => *h = Leaving::HandedOver,
         Leaving::Asked(r) if writes.busy() => *h = Leaving::Asked(r),
+        // A co-op guest going to the main menu saves its own game first (`crate::coop`;
+        // only a guest in a host's world holds).
+        Leaving::Asked(None) if hold.as_deref().is_some_and(|h| h.holds()) => *h = Leaving::Asked(None),
         Leaving::Asked(r) => {
             cover.write(CoverRequest { to: r.as_ref().and_then(|r| destination_of(r, *location)) });
             *h = Leaving::Covered(r, 0);
@@ -318,18 +355,35 @@ pub fn leave(
             let _ = std::fs::remove_file(&file);
             let _ = std::fs::remove_file(started_marker(&file));
             let keep = crate::restart_args(&crate::command_line());
-            let mut args = new_run_args(&keep, r.as_ref(), window.single().ok().map(|(e, w)| placement(w, e)), &file);
-            args.extend(handoff.1.iter().map(|why| format!("--load-refused={why}")));
-            let started = std::env::current_exe()
-                .map_err(|e| format!("cannot find this program to start it again: {e}"))
-                .and_then(|exe| {
-                    let mut cmd = std::process::Command::new(&exe);
-                    cmd.args(&args);
-                    // The whole line, so a report shows what the new run was given (#1903).
-                    info!("load: the new run's command line: {} {}", exe.display(), args.join(" "));
-                    remove_driving_aids(&mut cmd, std::env::vars_os().map(|(key, _)| key));
-                    cmd.spawn().map_err(|e| format!("could not start {}: {e}", exe.display()))
-                });
+            #[cfg(target_os = "android")]
+            {
+                // Android has no executable to spawn. The private launcher kills only
+                // this app's :game process before starting a fresh NativeActivity.
+                // The successor is shown normally, without the desktop overlap protocol.
+                let mut args = new_run_args(&keep, r.as_ref(), None, &file);
+                args.truncate(args.len() - 2);
+                args.extend(handoff.1.iter().map(|why| format!("--load-refused={why}")));
+                match crate::android::restart(&args) {
+                    Ok(()) => { *h = Leaving::HandedOver; }
+                    Err(error) => { warn!("load: {error}; staying"); uncover.write(Uncover); }
+                }
+            }
+            #[cfg(not(target_os = "android"))]
+            let started = {
+                let mut args = new_run_args(&keep, r.as_ref(), window.single().ok().map(|(e, w)| placement(w, e)), &file);
+                args.extend(handoff.1.iter().map(|why| format!("--load-refused={why}")));
+                std::env::current_exe()
+                    .map_err(|e| format!("cannot find this program to start it again: {e}"))
+                    .and_then(|exe| {
+                        let mut cmd = std::process::Command::new(&exe);
+                        cmd.args(&args);
+                        // The whole line, so a report shows what the new run was given (#1903).
+                        info!("load: the new run's command line: {} {}", exe.display(), args.join(" "));
+                        remove_driving_aids(&mut cmd, std::env::vars_os().map(|(key, _)| key));
+                        cmd.spawn().map_err(|e| format!("could not start {}: {e}", exe.display()))
+                    })
+            };
+            #[cfg(not(target_os = "android"))]
             match started {
                 Ok(child) => {
                     info!("load: handing over to a new run with {}", r.as_ref().map_or("--menu".to_string(), |r| format!("--load {}", r.path.display())));
@@ -343,6 +397,7 @@ pub fn leave(
                 }
             }
         }
+        #[cfg(not(target_os = "android"))]
         Leaving::Waiting(mut s) => {
             if s.file.exists() {
                 info!("load: the new run is up after {:.2} s; ending this one", s.started.elapsed().as_secs_f64());
@@ -403,6 +458,8 @@ fn end_now(world: &mut World) {
     if matches!(world.resource::<Handoff>().0, Leaving::HandedOver) {
         crate::frame_telemetry::finish_for_exit(world);
         crate::dlss::end_now(world, "the run hands over to a new one");
+        // Android's private restart activity owns termination and relaunch ordering.
+        #[cfg(not(target_os = "android"))]
         std::process::exit(0);
     }
 }
@@ -420,6 +477,10 @@ pub fn tell_load_failed(mut commands: Commands, failed: Option<Res<LoadFailed>>,
         return;
     }
     tell_player(&failed.0);
+    #[cfg(target_os = "android")]
+    if crate::android::activity_string("loadRefused", Some(&failed.0)).is_err() {
+        warn!("load: the Android load refusal view could not be opened");
+    }
     commands.remove_resource::<LoadFailed>();
 }
 

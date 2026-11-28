@@ -113,6 +113,11 @@ impl Equipment {
     }
 }
 
+/// On a co-op puppet (coop.rs): what its player wears and holds, in place of the
+/// simulation's (it has no reference there).
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
+pub struct PuppetEquipment(pub Equipment);
+
 /// [`Equipment::of`] kept per actor until its inventory changes (#1359): readiness
 /// (`readahead::ready_to_draw`) asks every frame while an actor waits to be drawn, and
 /// before its outfitting the simulation's answer sorts the whole inventory
@@ -243,7 +248,7 @@ pub struct CreatureArms {
 
 /// A drawn NPC whose outfit follows the rules: its root, rig, outfit, clips (none in the
 /// bind pose) and whether it is a corpse.
-type Followed<'w> = (Entity, &'w ActorRig, &'w mut Dressed, Option<&'w mut BlendPlayer>, Has<Corpse>);
+type Followed<'w> = (Entity, &'w ActorRig, &'w mut Dressed, Option<&'w mut BlendPlayer>, Has<Corpse>, Option<&'w PuppetEquipment>);
 
 /// At most this many drawn NPCs are dressed again in one frame (#1359): a mass change
 /// of equipment (a script equipping a crowd, a battle's looting) spreads over frames,
@@ -289,9 +294,9 @@ fn follow_inventory(
     let profiling = crate::profile::interval().is_some();
     let (mut replacements, mut replacement_ms) = (0, 0.0);
     let mut deferred = 0;
-    for (entity, rig, mut dressed, mut player, dead) in &mut actors {
+    for (entity, rig, mut dressed, mut player, dead, puppet) in &mut actors {
         let reload_mask = batch.remove(&FormId(rig.reference)).unwrap_or(0);
-        let Some(equipment) = Equipment::of(&world, Some(&sim.world), rig.reference) else { continue };
+        let Some(equipment) = puppet.map(|p| p.0.clone()).or_else(|| Equipment::of(&world, Some(&sim.world), rig.reference)) else { continue };
         let Equipment { ref worn, weapon, weapon_mods: mods } = equipment;
         let dressed = &mut *dressed;
         let force_weapon = (reload_mask & fnv_game::nvse_gaps::EQUIP_SLOT_WEAPON_BIT) != 0;
@@ -567,7 +572,7 @@ pub(crate) mod tests {
             race_facegen: false, show_disabled: false, pose: crate::actors::ActorPose::Bind,
             pose_time: None, walk_test: None, weapon_mode: crate::weapons::WeaponMode::Holstered,
             weapon_test: None, anims: Default::default(), rolls: Default::default(),
-            changes: Default::default(), levels: Default::default(), faces: Default::default(), face_bases: Default::default(),
+            changes: Default::default(), looks: Default::default(), levels: Default::default(), faces: Default::default(), face_bases: Default::default(),
         }
     }
 
@@ -731,6 +736,9 @@ pub(crate) mod tests {
     }
 
     pub(crate) struct TestFiles(std::path::PathBuf);
+    impl TestFiles {
+        pub(crate) fn path(&self) -> &std::path::Path { &self.0 }
+    }
     impl Drop for TestFiles {
         fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
     }

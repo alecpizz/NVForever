@@ -273,9 +273,19 @@ struct BoxRoot;
 #[derive(Component)]
 struct Frame(usize);
 
-fn spawn_box(commands: &mut Commands, view: &PanelView, faces: &Faces, selected: usize, icon: Option<Handle<Image>>) {
+type BoxFrame = (Vec2, crate::touch_safe_area::SafeInsets, f32);
+
+fn spawn_box(
+    commands: &mut Commands,
+    view: &PanelView,
+    faces: &Faces,
+    selected: usize,
+    icon: Option<Handle<Image>>,
+    (view_px, safe, menu_scale): BoxFrame,
+) {
     let l = layout(view, &faces.body.font, &faces.title.font);
-    let screen = Node {
+    let fit = crate::interface::fit_centered_box(menu_scale, view_px, safe, l.width + 48.0, l.height + 48.0);
+    let mut screen = Node {
         position_type: PositionType::Absolute,
         width: Val::Percent(100.0),
         height: Val::Percent(100.0),
@@ -283,6 +293,10 @@ fn spawn_box(commands: &mut Commands, view: &PanelView, faces: &Faces, selected:
         align_items: AlignItems::Center,
         ..default()
     };
+    if let Some((_, pad)) = fit {
+        screen.padding = pad;
+    }
+    let _units = fit.map(|(s, _)| crate::interface::units_at(s));
     let bright = amber(255.0);
     commands.spawn((BoxRoot, screen, GlobalZIndex(108))).with_children(|root| {
         root.spawn(Node { width: u(l.width), height: u(l.height), ..default() }).with_children(|b| {
@@ -363,14 +377,21 @@ fn draw(
     mut frames: Query<(&Frame, &mut Visibility)>,
     mut faces: Local<Option<Faces>>,
     (mut shown, mut was_tiled, mut font_revision): (Local<Option<PanelView>>, Local<bool>, Local<u32>),
+    mut last_frame: Local<Option<BoxFrame>>,
     (menus, script): (Option<Res<crate::tiles::vanilla::TileMenus>>, Option<Res<crate::script::ScriptState>>),
+    (windows, safe): (Query<&Window, With<bevy::window::PrimaryWindow>>, Option<Res<crate::touch_safe_area::SafeInsets>>),
 ) {
     // T15a: the box drawn from its tiles spawns nothing here.
     let tiled = script.as_ref().and_then(|s| s.rt.as_ref()).is_some_and(|rt| crate::tiles::menus::message_tiled(menus.as_ref().is_some_and(|m| m.message), &rt.game));
     let revision = crate::cjk_font::revision();
-    if panel.view != *shown || tiled != *was_tiled || *font_revision != revision {
+    let view_px = windows.single().map_or(Vec2::new(1280.0, 720.0), |w| Vec2::new(w.width(), w.height()));
+    let safe_insets = safe.as_deref().copied().unwrap_or_default();
+    let frame_key = (view_px, safe_insets, crate::interface::unit_scale());
+    let frame_changed = panel.view.is_some() && !tiled && *last_frame != Some(frame_key);
+    if panel.view != *shown || tiled != *was_tiled || *font_revision != revision || frame_changed {
         *was_tiled = tiled;
         *font_revision = revision;
+        *last_frame = Some(frame_key);
         for e in &roots {
             commands.entity(e).despawn();
         }
@@ -387,7 +408,7 @@ fn draw(
                 load_faces(data.as_deref(), &mut images, bc_supported(formats.as_deref()))
             });
             let icon = view.icon.as_deref().and_then(|p| data.as_deref().and_then(|d| texture(p, d, &mut images, bc_supported(formats.as_deref())))).map(|t| t.0);
-            spawn_box(&mut commands, view, faces, panel.selected, icon);
+            spawn_box(&mut commands, view, faces, panel.selected, icon, frame_key);
         }
         shown.clone_from(&panel.view);
         return;
@@ -525,6 +546,25 @@ People like you.", &["Ok"]);
         p.set(Some(view(None, "z", &["a", "b"])));
         p.key(1, false);
         assert_eq!(p.selected, 1);
+    }
+
+    #[test]
+    fn high_menu_scale_clamps_tall_confirmation_message_box_inside_safe_viewport() {
+        use crate::touch_safe_area::SafeInsets;
+        let v = view(
+            Some("Character Rebuild"),
+            "You are about to leave Goodsprings. Would you like to rebuild your character's name, appearance, S.P.E.C.I.A.L., tag skills, and traits before entering the Mojave Wasteland?",
+            &["Rebuild Character", "Continue with Current Character", "Cancel"],
+        );
+        let l = layout(&v, &font(31.0), &font(34.0));
+        let safe = SafeInsets { left: 40.0, top: 12.0, right: 40.0, bottom: 28.0 };
+        let view_px = Vec2::new(960.0, 540.0);
+        for scale in [1.25f32, 1.5, 2.0] {
+            let (s, _) = crate::interface::fit_centered_box(scale, view_px, safe, l.width + 48.0, l.height + 48.0).expect("clamped");
+            let px_per_u = (view_px.y / 960.0) * s;
+            assert!(l.width * px_per_u <= view_px.x - safe.left - safe.right, "width @ {scale}");
+            assert!(l.height * px_per_u <= view_px.y - safe.top - safe.bottom, "buttons fit @ {scale}");
+        }
     }
 
     /// `bPopupMenusDontMoveCursor`: opening a popup message box leaves the OS window cursor

@@ -1,7 +1,7 @@
 //! The launcher's icon in the Windows executable (Explorer, shortcuts); the window sets the
 //! same picture itself (main.rs). Common Controls 6 for the folder picker, as nvforever's
 //! build.rs embeds it.
-#[cfg(windows)]
+#[cfg(all(windows, feature = "desktop"))]
 const MANIFEST: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
   <dependency>
@@ -14,7 +14,7 @@ const MANIFEST: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?
 
 fn main() {
     println!("cargo:rerun-if-changed=assets/nvf-launcher.ico");
-    #[cfg(windows)]
+    #[cfg(all(windows, feature = "desktop"))]
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let mut res = winresource::WindowsResource::new();
         res.set_icon("assets/nvf-launcher.ico");

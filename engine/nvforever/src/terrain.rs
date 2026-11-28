@@ -74,6 +74,17 @@
 //! blend as before. Their coverage over the folded result is unchanged, but height does not
 //! compete across that draw boundary.
 //!
+//! # Heights from a diffuse's alpha
+//!
+//! [design, #3486; docs/spec-notes/pbr-materials.md "Heights from a ground pack's diffuse
+//! alpha"] The ground packs made for the original's terrain parallax shaders keep a height map
+//! in the landscape diffuse's alpha (DXT5). While Terrain parallax is on, a folded layer or base whose
+//! diffuse the authored index knows no set for takes that alpha as its height map
+//! (nvf_assets `TextureCache::alpha_height`: the alpha's blocks copied to a BC4 texture), at
+//! one depth for every pack. From there it is a height map like any other: same slot, same
+//! march, same blend. The switch gives them to the materials and takes them away in place
+//! ([`sync_alpha_heights`]); their images then go with the texture cache's usual grace.
+//!
 //! # Anti-tiling
 //!
 //! [design, #2551; docs/design/graphics-enhanced.md §3.13] The settings switch Terrain
@@ -118,16 +129,17 @@
 //! hold a height map are edited, noted for the frame ([`ParallaxEdits`]), and the mesh
 //! terrain blend does not recapture for those edits alone when what its captures are made
 //! from compares equal (the bake copy drops the switch). terrain.wesl marches once over the
-//! blended depth, each layer's ordered share (painted opacity x the layer texture's alpha)
+//! blended depth, each layer's ordered share of the painted opacity
 //! x its own set's depth x (1 - its height), on one step grid for every quadrant
 //! ([`PARALLAX_SCALE`]), then reads every texture at the one shifted coordinate, the layers
-//! blended by the alphas read at the plain coordinate, the march's own; the march fades out
-//! between [`PARALLAX_FADE`]'s distances, well inside the loaded cells. A layer without a
-//! height map, and the base always, adds no depth (flat at the surface), so the shift falls
-//! to nothing where the layers with height maps fade out, a layer moves as far on both sides
-//! of a quadrant edge whatever else either quadrant holds, and nothing jumps at the edge of
-//! a quadrant drawn without folded layers (the separate landscape material, unshifted). The
-//! base's own `_p` is not used in this first stage for that reason. Never with anti-tiling
+//! blended by the march's own shares; the march fades out
+//! between [`PARALLAX_FADE`]'s distances, well inside the loaded cells. The base is marched as
+//! a layer is, by its share and its own height map (#3846); a quadrant without painted layers
+//! whose base has one (or may have, [`TerrainCtx::base_may_march`]) is drawn by the folded
+//! material with no layers for it, so nothing jumps at its edge. A layer or base without a
+//! height map adds no depth (flat at the surface), so the shift falls to nothing where those
+//! with height maps fade out, and a layer moves as far on both sides of a quadrant edge
+//! whatever else either quadrant holds. Never with anti-tiling
 //! (the key leaves parallax off while it is on): its offset and turned reads take their
 //! place from the world, and the march would read other texels than the ones drawn. Only the
 //! folded draw's main pass moves its texture coordinates: the depth prepass, the shadows,
@@ -150,7 +162,7 @@ use fnv_world::land_surface::{block_of, load_heights, LandIds, QuadrantDraw, Sur
 use nvf_assets::model::ModelCtx;
 use nvf_assets::nif_material::sort_first;
 use nvf_assets::{nif_material, NifMaterial};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 #[derive(Resource)]
@@ -174,9 +186,16 @@ pub struct TerrainCache {
     pub folded_layers: usize,
     /// Layers drawn blended over a folded quadrant (past [`folded_layers`]), so far.
     pub overflow_layers: usize,
-    /// Folded materials made with at least one authored height map (module notes,
-    /// "Parallax"), so far.
+    /// Quadrants without painted layers drawn by the folded material (#3846), so far.
+    pub marched_bases: usize,
+    /// Folded materials made with at least one layer's authored height map (module notes,
+    /// "Parallax"; not the base's), so far.
     pub parallax_materials: usize,
+    /// Folded materials made with at least one height from a diffuse's alpha, so far.
+    pub alpha_height_materials: usize,
+    alpha_height_textures: HashSet<String>,
+    /// What [`TerrainCtx::base_may_march`] found, by diffuse path.
+    base_marches: HashMap<String, bool>,
     pub quadrants_without_base: usize,
     pub layers: usize,
     /// Cells drawn on the smoothed surface and on the stored one (#2149).
@@ -204,6 +223,13 @@ impl TerrainCache {
 pub const FOLDED_LAYERS: usize = 6;
 pub const FOLDED_LAYERS_WITH_UV: usize = 4;
 
+/// The base's place after the layers' in [`TerrainLayers::height_bits`] and
+/// [`TerrainLayers::alpha_heights`], and its index in terrain.wesl's `layer_height` (#3846).
+pub const BASE_HEIGHT: usize = FOLDED_LAYERS;
+
+/// The layers' bits of those, without the base's.
+const LAYER_BITS: u32 = (1 << FOLDED_LAYERS) - 1;
+
 /// How many layers a quadrant folds with textures repeating every `tile` units: all
 /// [`FOLDED_LAYERS`] when a cell holds a whole number of repeats (16 at the game's 256),
 /// since the texture coordinate of a vertex is then its place in the cell over `tile`,
@@ -228,7 +254,7 @@ const SURFACE_BAKE_SHADER: Handle<Shader> = uuid_handle!("6da97f8c-732c-4697-b34
 /// do (nvf_assets nif_material.rs "Bindless"), so quadrants still draw in one batch.
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
 #[data(50, TerrainLayersUniform, binding_array(101))]
-#[bindless(limit(512), index_table(range(50..70), binding(100)))]
+#[bindless(limit(512), index_table(range(50..71), binding(100)))]
 #[bind_group_data(TerrainLayersKey)]
 pub struct TerrainLayers {
     /// [design] Dedicated unlit surface capture of a folded base, terrain_surface.rs
@@ -255,6 +281,12 @@ pub struct TerrainLayers {
     /// Each layer's depth in texture-coordinate units, its height map's set's (0 for a layer
     /// without one) [design, #3322: kept per layer, so a layer moves as far wherever it lies].
     pub parallax_depths: [f32; FOLDED_LAYERS],
+    /// The base's depth (0 without a height map, #3846).
+    pub base_depth: f32,
+    /// Bit k set when layer k's height map, bit [`BASE_HEIGHT`] when the base's, is its
+    /// diffuse's alpha (module notes, "Heights from
+    /// a diffuse's alpha"); none while the switch is off ([`sync_alpha_heights`]).
+    pub alpha_heights: u32,
     #[texture(51)]
     pub diffuse0: Option<Handle<Image>>,
     #[texture(52)]
@@ -283,10 +315,10 @@ pub struct TerrainLayers {
     /// scorched (terrain.wesl "Scorch"). `None`: no fires, nothing scorched.
     #[texture(63)]
     pub burn: Option<Handle<Image>>,
-    /// The authored height maps (`_p`, module notes "Parallax") of each folded layer's
-    /// diffuse, in the layers' order; `None` where the layer has none (flat for the march)
-    /// and always while the run's Authored materials state is off. The base has none: it
-    /// counts as flat (module notes).
+    /// The height maps of each folded layer's diffuse (an authored set's `_p`, module notes
+    /// "Parallax", or the diffuse's alpha, "Heights from a diffuse's alpha"), in the layers'
+    /// order, and the base's after them (#3846); `None` where there is none (flat for the
+    /// march) and always while the run's Authored materials state is off.
     #[texture(64)]
     pub height0: Option<Handle<Image>>,
     #[texture(65)]
@@ -299,20 +331,46 @@ pub struct TerrainLayers {
     pub height4: Option<Handle<Image>>,
     #[texture(69)]
     pub height5: Option<Handle<Image>>,
+    #[texture(70)]
+    pub height_base: Option<Handle<Image>>,
 }
 
 impl TerrainLayers {
+    /// The layers' height maps in the layers' order, to be changed.
+    fn heights_mut(&mut self) -> [&mut Option<Handle<Image>>; FOLDED_LAYERS] {
+        [&mut self.height0, &mut self.height1, &mut self.height2, &mut self.height3, &mut self.height4, &mut self.height5]
+    }
+
+    /// Layer `k` (the base for [`BASE_HEIGHT`]) takes the alpha height `height`
+    /// ([`Self::alpha_heights`]), or loses it.
+    fn set_alpha_height(&mut self, k: usize, height: Option<(Handle<Image>, f32)>) {
+        let (image, depth) = height.map_or((None, 0.0), |(h, d)| (Some(h), d));
+        self.alpha_heights = self.alpha_heights & !(1 << k) | u32::from(image.is_some()) << k;
+        if k == BASE_HEIGHT {
+            (self.height_base, self.base_depth) = (image, depth);
+        } else {
+            self.parallax_depths[k] = depth;
+            *self.heights_mut()[k] = image;
+        }
+    }
+
+    /// Whether layer `k` (the base for [`BASE_HEIGHT`]) has a height map, drawn or not.
+    fn has_height(&self, k: usize) -> bool {
+        if k == BASE_HEIGHT { self.height_base.is_some() } else { self.heights()[k].is_some() }
+    }
+
     /// The layers' height maps in the layers' order.
     pub fn heights(&self) -> [&Option<Handle<Image>>; FOLDED_LAYERS] {
         [&self.height0, &self.height1, &self.height2, &self.height3, &self.height4, &self.height5]
     }
 
     /// Bit k set when layer k has a height map, among the layers drawn (the uniform's layer
-    /// count).
+    /// count), and bit [`BASE_HEIGHT`] when the base has one.
     pub fn height_bits(&self) -> u32 {
         let most = if self.tile > 0.0 { FOLDED_LAYERS } else { FOLDED_LAYERS_WITH_UV };
         let held = self.count.min(most as u32) as usize;
-        self.heights().iter().take(held).enumerate().filter(|(_, h)| h.is_some()).fold(0u32, |b, (k, _)| b | 1 << k)
+        let base = u32::from(self.height_base.is_some()) << BASE_HEIGHT;
+        self.heights().iter().take(held).enumerate().filter(|(_, h)| h.is_some()).fold(base, |b, (k, _)| b | 1 << k)
     }
 
     /// Each layer's depth as the march takes it: its own where it is drawn and has a height
@@ -322,6 +380,11 @@ impl TerrainLayers {
         std::array::from_fn(|k| if bits & 1 << k != 0 { self.parallax_depths[k].clamp(0.0, PARALLAX_SCALE) } else { 0.0 })
     }
 
+    /// The base's depth as the march takes it: 0 without a height map.
+    pub fn marched_base_depth(&self) -> f32 {
+        if self.height_base.is_some() { self.base_depth.clamp(0.0, PARALLAX_SCALE) } else { 0.0 }
+    }
+
     /// The march's scale: [`PARALLAX_SCALE`] when the material holds a height map, else 0.
     pub fn parallax_scale(&self) -> f32 {
         if self.holds_heights() { PARALLAX_SCALE } else { 0.0 }
@@ -329,7 +392,7 @@ impl TerrainLayers {
 
     /// Whether the material holds a height map the march can read (and a depth to march).
     pub fn holds_heights(&self) -> bool {
-        self.layer_depths().iter().any(|&d| d > 0.0)
+        self.marched_base_depth() > 0.0 || self.layer_depths().iter().any(|&d| d > 0.0)
     }
 }
 
@@ -343,7 +406,7 @@ impl TerrainLayers {
 /// ([`TerrainLayers::parallax_scale`]), its most layers ([`PARALLAX_LAYERS`]) and the
 /// distances its fade starts and ends at ([`PARALLAX_FADE`]), `depths_low` and
 /// `depths_high` each layer's own depth ([`TerrainLayers::layer_depths`]: layers 0 to 3,
-/// then 4 and 5) [design, #3322].
+/// then 4 and 5) and the base's in `depths_high.z` [design, #3322, #3846].
 #[derive(Clone, Default, ShaderType)]
 pub struct TerrainLayersUniform {
     pub counts: UVec4,
@@ -489,7 +552,7 @@ impl From<&TerrainLayers> for TerrainLayersUniform {
             height: height_blend_params().uniform(),
             parallax,
             depths_low: Vec4::new(d[0], d[1], d[2], d[3]),
-            depths_high: Vec4::new(d[4], d[5], 0.0, 0.0),
+            depths_high: Vec4::new(d[4], d[5], l.marched_base_depth(), 0.0),
         }
     }
 }
@@ -564,6 +627,11 @@ impl MaterialExtension for TerrainLayers {
         if key.bind_group_data.anti_tiling {
             nvf_assets::terrain_sampling::anti_tiling_defs(descriptor, false);
         }
+        if nvf_assets::authored::physical_pbr() && !descriptor.vertex.shader_defs.contains(&bevy::shader::ShaderDefVal::from("PREPASS_PIPELINE")) {
+            if let Some(fragment) = descriptor.fragment.as_mut() {
+                fragment.shader_defs.push("NVF_PHYSICAL_PBR".into());
+            }
+        }
         Ok(())
     }
 }
@@ -591,7 +659,8 @@ impl Plugin for TerrainPlugin {
 /// mesh terrain blend's capture refresh (after the events) that same frame.
 fn add_switch_systems(app: &mut App) {
     app.init_resource::<ParallaxEdits>()
-        .add_systems(PostUpdate, (sync_height_blend, sync_anti_tiling, sync_parallax).before(bevy::asset::AssetEventSystems))
+        .init_resource::<AlphaHeightSync>()
+        .add_systems(PostUpdate, (sync_height_blend, sync_anti_tiling, (sync_parallax, alpha_heights_system()).chain()).before(bevy::asset::AssetEventSystems))
         .add_systems(Last, |mut edits: ResMut<ParallaxEdits>| edits.0.clear());
 }
 
@@ -674,6 +743,98 @@ pub fn sync_parallax(graphics: Option<Res<crate::graphics::Graphics>>, mut mater
     *last = Some(want);
 }
 
+/// A layer's height map and its depth.
+type HeightMap = (Handle<Image>, f32);
+
+/// Where [`sync_alpha_heights`] is: the switch it last followed and the folded materials (their
+/// base's and layers' diffuse paths) still to be asked about.
+#[derive(Resource, Default)]
+pub struct AlphaHeightSync {
+    last: Option<bool>,
+    pending: Vec<(Option<String>, Vec<String>, Handle<TerrainMaterial>)>,
+    changed: usize,
+    textures: HashSet<String>,
+}
+
+/// The main thread's time a frame [`sync_alpha_heights`] may start another layer in (one
+/// texture, whole, may go over it) [engineering policy].
+const ALPHA_HEIGHTS_FRAME: std::time::Duration = std::time::Duration::from_millis(3);
+
+/// Whether [`sync_alpha_heights`] has anything to do.
+fn alpha_heights_due(sync: Res<AlphaHeightSync>, graphics: Option<Res<crate::graphics::Graphics>>) -> bool {
+    sync.last != Some(parallax_wanted(graphics.as_deref())) || !sync.pending.is_empty()
+}
+
+/// [`sync_alpha_heights`] where a world's resources are (not in the tests of the other
+/// switches) and it has something to do.
+fn alpha_heights_system() -> bevy::ecs::schedule::ScheduleConfigs<bevy::ecs::system::ScheduleSystem> {
+    sync_alpha_heights
+        .run_if(resource_exists::<TerrainCache>)
+        .run_if(resource_exists::<TerrainSettings>)
+        .run_if(resource_exists::<nvf_assets::GameData>)
+        .run_if(resource_exists::<nvf_assets::TextureCache>)
+        .run_if(resource_exists::<nvf_assets::ModelCache>)
+        .run_if(alpha_heights_due)
+}
+
+/// Parallax switched on or off, for the heights read from diffuse alphas (module notes,
+/// "Heights from a diffuse's alpha"): on, each folded material's layers without a height map
+/// ask for their diffuse's, a few a frame ([`ALPHA_HEIGHTS_FRAME`]: each new one reads its
+/// file), so the relief comes in over some frames; off, the materials let go of them at once.
+/// A material given its first height is flipped with it (after [`sync_parallax`] has been);
+/// the edits are noted in [`ParallaxEdits`] as that one's are (the mesh terrain blend's
+/// captures hold no height maps). New materials ask when they are made
+/// ([`TerrainCtx::folded_material`]).
+pub fn sync_alpha_heights(mut sync: ResMut<AlphaHeightSync>, mut tm: TerrainMaterials, mut assets: ModelCtx, mut edits: Option<ResMut<ParallaxEdits>>) {
+    let want = parallax_wanted(tm.graphics.as_deref());
+    let sync = &mut *sync;
+    if sync.last != Some(want) {
+        sync.last = Some(want);
+        sync.pending = tm.cache.folded.iter().map(|((base, layers, _), h)| (base.clone(), layers.clone(), h.clone())).collect();
+        sync.changed = 0;
+        sync.textures.clear();
+        if sync.pending.is_empty() {
+            return;
+        }
+    }
+    let start = std::time::Instant::now();
+    while let Some((base, layers, handle)) = sync.pending.pop() {
+        let Some(e) = tm.folded.get(&handle).map(|m| &m.extension) else { continue };
+        let (bits, held) = (e.alpha_heights, std::array::from_fn::<bool, { BASE_HEIGHT + 1 }, _>(|k| e.has_height(k)));
+        let mut set: Vec<(usize, Option<HeightMap>)> = Vec::new();
+        let paths = layers.iter().enumerate().take(FOLDED_LAYERS).chain(base.iter().map(|b| (BASE_HEIGHT, b)));
+        for (k, layer) in paths {
+            if want && !held[k] {
+                let found = TerrainCtx { tm: &mut tm, assets: &mut assets }.alpha_height(layer);
+                if let Some(height) = found {
+                    sync.textures.insert(layer.clone());
+                    set.push((k, Some(height)));
+                }
+            } else if !want && bits & 1 << k != 0 {
+                set.push((k, None));
+            }
+        }
+        if !set.is_empty() {
+            if let Some(mut m) = tm.folded.get_mut(&handle) {
+                for (k, height) in set {
+                    m.extension.set_alpha_height(k, height);
+                }
+                m.extension.parallax = want;
+                sync.changed += 1;
+                if let Some(edits) = edits.as_deref_mut() {
+                    *edits.0.entry(handle.id()).or_default() += 1;
+                }
+            }
+        }
+        if want && start.elapsed() >= ALPHA_HEIGHTS_FRAME {
+            break;
+        }
+    }
+    if sync.pending.is_empty() && sync.changed > 0 {
+        info!("terrain: heights from diffuse alphas {}: {} folded quadrant materials changed, {} textures", if want { "on" } else { "off" }, sync.changed, sync.textures.len());
+    }
+}
+
 /// The diffuse paths the ground pack test aid writes height-only sets for (nvf_assets
 /// `seed_ground_pack`, #3322): every landscape texture the load order `plugins` names (each
 /// LTEX's winning definition, its texture set's TX00, as [`TerrainCtx::texture_of`] reads it
@@ -703,8 +864,7 @@ fn ground_pack_list(diffuses: impl Iterator<Item = Option<String>>) -> Vec<Strin
 /// [`folded_layers`] folded into the quadrant's draw and those past them drawn on their own
 /// over it (unshifted, module notes "Parallax"), and the folded material the cell made for
 /// them ([`TerrainCache`]), with the height maps it holds. A CPU estimate from the painted
-/// opacities alone (each layer texture's alpha, which also enters the shares, taken as 1)
-/// [design].
+/// opacities [design].
 #[derive(Debug, Clone, PartialEq)]
 pub struct GroundCover {
     pub grid: (i32, i32),
@@ -718,9 +878,13 @@ pub struct GroundCover {
     /// Whether the quadrant has a folded material (none: drawn by the separate materials,
     /// which the march never reaches).
     pub material: bool,
-    /// The height-mapped folded layers' share of the folded blend at the point (the ordered
-    /// shares, terrain_weights.wesl `terrain_ordered_shares`).
+    /// Whether the base has a height map (#3846).
+    pub base_height: bool,
+    /// The share of the folded blend at the point that has a height map, the layers' and the
+    /// base's (the ordered shares, terrain_weights.wesl `terrain_ordered_shares`).
     pub height_share: f32,
+    /// The height-mapped layers' part of it.
+    pub layer_share: f32,
     /// How much of the folded draw the layers drawn over it hide at the point.
     pub over_cover: f32,
 }
@@ -732,14 +896,20 @@ impl GroundCover {
         if self.material { self.height_share * (1.0 - self.over_cover) } else { 0.0 }
     }
 
+    /// [`Self::shifted`] of the layers' part alone.
+    pub fn layers_shifted(&self) -> f32 {
+        if self.material { self.layer_share * (1.0 - self.over_cover) } else { 0.0 }
+    }
+
     pub fn describe(&self) -> String {
         format!(
-            "cell ({}, {}) quadrant {}: {} folded layers ({} with height maps{}), {} drawn over them; shifted share {:.2} (height-mapped {:.2}, hidden by the layers over them {:.2})",
+            "cell ({}, {}) quadrant {}: {} folded layers ({} with height maps{}{}), {} drawn over them; shifted share {:.2} (height-mapped {:.2}, hidden by the layers over them {:.2})",
             self.grid.0,
             self.grid.1,
             self.quadrant,
             self.folded,
             self.with_heights,
+            if self.base_height { ", the base too" } else { "" },
             if self.material { "" } else { "; no folded material" },
             self.over,
             self.shifted(),
@@ -793,8 +963,7 @@ impl CellCover {
             let base = drawn.iter().rev().find(|l| l.base && l.quadrant == q).and_then(|b| b.texture);
             let first: Option<Vec<String>> = layers.iter().take(most).map(|l| name(l.texture)).collect();
             let bits = first
-                .filter(|f| !f.is_empty())
-                .and_then(|f| cache.folded.get(&(name(base), f, shader_tile > 0.0)))
+                .and_then(|f| { let tiled = shader_tile > 0.0 && !f.is_empty(); cache.folded.get(&(name(base), f, tiled)) })
                 .and_then(|h| materials.get(h))
                 .map(|m| m.extension.height_bits());
             // The folded layers, then those drawn on their own over them: only the ones the
@@ -814,15 +983,17 @@ impl CellCover {
         let spacing = fnv_world::land::SPACING;
         let (u, v) = ((x - qx as f32 * half) / spacing, (y - qy as f32 * half) / spacing);
         let quad = &self.quads[q];
-        let (height_share, over_cover) = cover_shares(&quad.grids, quad.folded, quad.bits.unwrap_or(0), u, v);
+        let (layer_share, base_share, over_cover) = cover_shares(&quad.grids, quad.folded, quad.bits.unwrap_or(0), u, v);
         GroundCover {
             grid: self.grid,
             quadrant: q as u8,
             folded: quad.folded,
-            with_heights: quad.bits.map_or(0, |b| b.count_ones() as usize),
+            with_heights: quad.bits.map_or(0, |b| (b & LAYER_BITS).count_ones() as usize),
+            base_height: quad.bits.is_some_and(|b| b >> BASE_HEIGHT != 0),
             over: quad.grids.len() - quad.folded,
             material: quad.bits.is_some(),
-            height_share,
+            height_share: layer_share + base_share,
+            layer_share,
             over_cover,
         }
     }
@@ -856,8 +1027,9 @@ fn opacity_at(g: &[f32], u: f32, v: f32) -> f32 {
 
 /// For a quadrant's layers' opacity `grids` in drawing order, the first `folded` folded with
 /// height-map bits `bits`: the height-mapped layers' ordered share of the folded blend at
-/// `(u, v)`, and how much the layers past the folded ones hide of it there.
-fn cover_shares(grids: &[Vec<f32>], folded: usize, bits: u32, u: f32, v: f32) -> (f32, f32) {
+/// `(u, v)`, the base's when it has a height map (else 0), and how much the layers past the
+/// folded ones hide of it there.
+fn cover_shares(grids: &[Vec<f32>], folded: usize, bits: u32, u: f32, v: f32) -> (f32, f32, f32) {
     let mut remaining = 1.0f32;
     let mut height_share = 0.0f32;
     for k in (0..folded.min(grids.len())).rev() {
@@ -868,7 +1040,7 @@ fn cover_shares(grids: &[Vec<f32>], folded: usize, bits: u32, u: f32, v: f32) ->
         remaining *= 1.0 - paint;
     }
     let through: f32 = grids.iter().skip(folded).map(|g| 1.0 - opacity_at(g, u, v)).product();
-    (height_share, 1.0 - through)
+    (height_share, if bits >> BASE_HEIGHT & 1 != 0 { remaining } else { 0.0 }, 1.0 - through)
 }
 
 /// Whether the settings ask for anti-tiling (module notes); false without the `Graphics`
@@ -994,6 +1166,17 @@ impl TerrainCtx<'_, '_, '_> {
         a.textures.authored_height(diffuse, &a.data, &mut a.images, a.formats.as_deref())
     }
 
+    /// The height in a landscape texture's alpha (module notes, "Heights from a diffuse's
+    /// alpha"), while the switch is on: `None` otherwise, where the authored index knows a set
+    /// for the texture, and where its alpha is none.
+    fn alpha_height(&mut self, diffuse: &str) -> Option<(Handle<Image>, f32)> {
+        if !parallax_wanted(self.tm.graphics.as_deref()) {
+            return None;
+        }
+        let a = &mut *self.assets;
+        a.textures.alpha_height(diffuse, &a.data, &mut a.images, a.formats.as_deref())
+    }
+
     /// The lit surface of a landscape texture: diffuse and normal map. `None` for the
     /// diffuse path (an LTEX without a texture set) gives a plain grey.
     fn surface(&mut self, tex: Option<&str>) -> StandardMaterial {
@@ -1019,7 +1202,32 @@ impl TerrainCtx<'_, '_, '_> {
         h
     }
 
-    /// The material of a quadrant with `layers` (diffuse paths, in order) folded into the
+    /// Whether a quadrant of the base `tex` alone, without painted layers, is drawn by the
+    /// folded material with no layers, so it can march over the base's height (#3846): the base
+    /// has an authored height map, or no set and a diffuse of the layout whose alpha may be one
+    /// (BC3, whatever the switch and the alpha, so the draws do not change with them). The
+    /// game's own ground (DXT1, no sets) never: it keeps the separate landscape material. Told
+    /// once a texture and run.
+    fn base_may_march(&mut self, tex: Option<&str>) -> bool {
+        let Some(tex) = tex.filter(|_| nvf_assets::authored::enabled()) else { return false };
+        if let Some(&known) = self.tm.cache.base_marches.get(tex) {
+            return known;
+        }
+        let a = &mut *self.assets;
+        let key = nvf_assets::texture::resolved_path(tex, |p| a.data.vfs.exists(p));
+        let may = if a.data.pbr_index().lookup(&key).is_some() {
+            self.height(tex).is_some()
+        } else {
+            // The alpha before the picture, as `folded_material` asks.
+            use bevy::render::render_resource::TextureFormat::{Bc3RgbaUnorm, Bc3RgbaUnormSrgb};
+            self.alpha_height(tex).is_some() || self.image(tex, true).and_then(|h| self.assets.images.get(&h)).is_some_and(|i| matches!(i.texture_descriptor.format, Bc3RgbaUnorm | Bc3RgbaUnormSrgb))
+        };
+        self.tm.cache.base_marches.insert(tex.to_string(), may);
+        may
+    }
+
+    /// The material of a quadrant with `layers` (diffuse paths, in order; none: the base alone,
+    /// [`Self::base_may_march`]) folded into the
     /// base `tex`. `None` when a layer's diffuse texture is not found: the quadrant then
     /// keeps its blended layers, which leave such a layer out.
     fn folded_material(&mut self, tex: Option<String>, layers: &[String], tile: f32) -> Option<Handle<TerrainMaterial>> {
@@ -1027,6 +1235,9 @@ impl TerrainCtx<'_, '_, '_> {
         if let Some(h) = self.tm.cache.folded.get(&key) {
             return Some(h.clone());
         }
+        // Asked for before the pictures: a file read ahead is still there to be looked at.
+        let alphas: Vec<Option<HeightMap>> = layers.iter().take(FOLDED_LAYERS).map(|l| self.alpha_height(l)).collect();
+        let base_alpha = tex.as_deref().and_then(|t| self.alpha_height(t));
         let mut textures = Vec::with_capacity(layers.len());
         for l in layers {
             let diffuse = self.image(l, true)?;
@@ -1037,9 +1248,28 @@ impl TerrainCtx<'_, '_, '_> {
         let mut next = || textures.next().map_or((None, None), |(d, n)| (Some(d), n));
         let ((diffuse0, normal0), (diffuse1, normal1), (diffuse2, normal2), (diffuse3, normal3), (diffuse4, normal4), (diffuse5, normal5)) = (next(), next(), next(), next(), next(), next());
         // The layers' authored height maps in their order (module notes, "Parallax"); none
-        // while the run's Authored materials state is off. The base's is not asked for.
-        let layer_heights: Vec<Option<(Handle<Image>, f32)>> = layers.iter().map(|l| self.height(l)).collect();
+        // while the run's Authored materials state is off. The base's likewise (#3846). One
+        // without an authored set may have a height in its diffuse's alpha ("Heights
+        // from a diffuse's alpha").
+        let mut alpha_heights = 0u32;
+        let layer_heights: Vec<Option<(Handle<Image>, f32)>> = layers
+            .iter()
+            .enumerate()
+            .map(|(k, l)| {
+                // Never both: an alpha is none where the index knows a set.
+                self.height(l).or_else(|| {
+                    let height = alphas.get(k).cloned().flatten();
+                    alpha_heights |= u32::from(height.is_some()) << k;
+                    height
+                })
+            })
+            .collect();
         let (heights, parallax_depths) = layer_height_slots(layer_heights);
+        let base_height = tex.as_deref().and_then(|t| self.height(t)).or_else(|| {
+            alpha_heights |= u32::from(base_alpha.is_some()) << BASE_HEIGHT;
+            base_alpha
+        });
+        let (height_base, base_depth) = base_height.map_or((None, 0.0), |(h, d)| (Some(h), d));
         let [height0, height1, height2, height3, height4, height5] = heights;
         let burn = self.tm.burn.as_deref().map(|b| b.0.clone());
         let height_blend = height_blend_wanted(self.tm.graphics.as_deref());
@@ -1047,14 +1277,25 @@ impl TerrainCtx<'_, '_, '_> {
         let texture_repeat = self.tm.settings.tile;
         let parallax = parallax_wanted(self.tm.graphics.as_deref());
         let extension = TerrainLayers {
-            count: layers.len() as u32, tile, height_blend, anti_tiling, texture_repeat, parallax, parallax_depths,
+            count: layers.len() as u32, tile, height_blend, anti_tiling, texture_repeat, parallax, parallax_depths, base_depth, alpha_heights,
             diffuse0, normal0, diffuse1, normal1, diffuse2, normal2, diffuse3, normal3, diffuse4, normal4, diffuse5, normal5, burn,
-            height0, height1, height2, height3, height4, height5, ..default()
+            height0, height1, height2, height3, height4, height5, height_base, ..default()
         };
-        if extension.holds_heights() {
+        if alpha_heights != 0 {
+            let cache = &mut *self.tm.cache;
+            cache.alpha_height_materials += 1;
+            cache.alpha_height_textures.extend(layers.iter().enumerate().take(FOLDED_LAYERS).chain(tex.iter().map(|t| (BASE_HEIGHT, t))).filter(|(k, _)| alpha_heights & 1 << k != 0).map(|(_, l)| l.clone()));
+            let n = cache.alpha_height_materials;
+            if n == 1 {
+                info!("terrain: first folded material with heights from diffuse alphas: {} of {} layers{} (depth {})", (alpha_heights & LAYER_BITS).count_ones(), layers.len(), if alpha_heights >> BASE_HEIGHT != 0 { " and the base" } else { "" }, nvf_assets::ALPHA_HEIGHT_DEPTH);
+            } else if n.is_power_of_two() {
+                info!("terrain: {n} folded materials made with heights from {} textures' diffuse alphas", cache.alpha_height_textures.len());
+            }
+        }
+        if extension.height_bits() & !extension.alpha_heights & LAYER_BITS != 0 {
             self.tm.cache.parallax_materials += 1;
             if self.tm.cache.parallax_materials == 1 {
-                info!("terrain: first folded material with authored height maps: {} of {} layers (depths {:?}, marched on scale {PARALLAX_SCALE})", extension.height_bits().count_ones(), layers.len(), extension.layer_depths());
+                info!("terrain: first folded material with authored height maps: {} of {} layers (depths {:?}, marched on scale {PARALLAX_SCALE})", (extension.height_bits() & !extension.alpha_heights & LAYER_BITS).count_ones(), layers.len(), extension.layer_depths());
             }
         }
         let base = self.surface(tex.as_deref());
@@ -1870,7 +2111,7 @@ impl NearDraw<'_, '_, '_> {
 #[allow(clippy::too_many_arguments)]
 fn quadrant_draws(mut near: Option<NearDraw>, world: &WorldData, drawn: &[Layer], q: u8, meshes: QuadMeshes, tile: f32, tm: &mut TerrainCtx, folds: bool, mut capture: Option<&mut crate::terrain_surface::SurfaceCell>) -> SpawnedQuadrant {
     use crate::terrain_surface::{CaptureDraw, CapturePath, CaptureSource, DetailBase, DetailCapture, SurfaceCaptureMaterial};
-    let QuadMeshes { base: base_mesh, layers: mut layer_meshes, folded } = meshes;
+    let QuadMeshes { base: mut base_mesh, layers: mut layer_meshes, folded } = meshes;
     let count = near.as_ref().is_some_and(|n| n.count);
     let most = folded_layers(tile);
     // The repeat for the shader to work the texture coordinate out with, 0 when the mesh
@@ -1896,6 +2137,8 @@ fn quadrant_draws(mut near: Option<NearDraw>, world: &WorldData, drawn: &[Layer]
             let first: Option<Vec<String>> = layers.iter().take(most).map(|(_, l)| tm.texture_of(world, l.texture)).collect();
             first.and_then(|first: Vec<String>| Some((mesh, tm.folded_material(tex.clone(), &first, shader_tile)?, first.len())))
         }
+        // The base alone (#3846): its own mesh, which carries the texture coordinate.
+        None if folds && layers.is_empty() && base_mesh.is_some() && tm.base_may_march(tex.as_deref()) => tm.folded_material(tex.clone(), &[], 0.0).and_then(|mat| Some((base_mesh.take()?, mat, 0))),
         None => None,
     };
     if let Some((mesh, mat, n)) = folded_mat {
@@ -1905,16 +2148,22 @@ fn quadrant_draws(mut near: Option<NearDraw>, world: &WorldData, drawn: &[Layer]
             // ([`land_resolution`]); the detail reads the drawn mesh itself.
             stack = Some((true, vec![(land_resolution(&mesh), CaptureDraw::Folded(Box::new(tm.tm.folded.get(&mat).unwrap().clone())))]));
             detail = Some(DetailParts {
-                base: DetailBase::Folded(mat.clone()), vertices: detail_vertices(&mesh), cell_local: shader_tile > 0.0,
+                base: DetailBase::Folded(mat.clone()), vertices: detail_vertices(&mesh), cell_local: n > 0 && shader_tile > 0.0,
                 opacity: layers.iter().take(n).map(|(_, l)| alpha_grid(l)).collect(), overflow: Vec::new(),
             });
         }
         if let Some(near) = near.as_mut() {
             near.spawn(tm, &mut out, q, mesh, MeshMaterialAny::Folded(mat));
         }
-        if count {
+        if count && n > 0 {
             tm.tm.cache.folded_quadrants += 1;
             tm.tm.cache.folded_layers += n;
+        }
+        if count && n == 0 {
+            tm.tm.cache.marched_bases += 1;
+            if tm.tm.cache.marched_bases == 1 {
+                info!("terrain: first quadrant without painted layers drawn by the folded material (its base has or may have a height)");
+            }
         }
         blended_from = n;
     } else {
@@ -2578,14 +2827,15 @@ mod tests {
         assert_eq!(names, ["counts", "tile", "height", "parallax", "depths_low", "depths_high"], "TerrainLayersUniform's fields, in order");
         assert!(layers[0].1 == "vec4<u32>" && layers[1..].iter().all(|(_, t)| t == "vec4<f32>"), "{layers:?}");
         assert_eq!(TerrainLayersUniform::min_size().get(), 16 * layers.len() as u64);
-        // The index table: one u32 per index of range(50..70) (the data, then every texture).
+        // The index table: one u32 per index of range(50..71) (the data, then every texture).
         let indices = fields("TerrainIndices");
-        assert_eq!(indices.len(), 70 - 50);
+        assert_eq!(indices.len(), 71 - 50);
         assert!(indices.iter().all(|(_, t)| t == "u32"));
         let heights: Vec<&str> = indices.iter().map(|(n, _)| n.as_str()).filter(|n| n.starts_with("height")).collect();
-        assert_eq!(heights, ["height0", "height1", "height2", "height3", "height4", "height5"], "bindings 64 to 69, last");
+        assert_eq!(heights, ["height0", "height1", "height2", "height3", "height4", "height5", "height_base"], "bindings 64 to 70, last");
         assert!(terrain.contains("    height0: u32,   // 64") && terrain.contains("    height5: u32,   // 69"));
-        assert!(include_str!("terrain.rs").contains("index_table(range(50..70), binding(100))"));
+        assert!(terrain.contains("    height_base: u32, // 70"));
+        assert!(include_str!("terrain.rs").contains("index_table(range(50..71), binding(100))"));
     }
 
     #[test]
@@ -2605,6 +2855,12 @@ mod tests {
         assert_eq!((l.layer_depths(), l.parallax_scale()), ([0.0, 0.02, 0.0, 0.05, 0.0, 0.0], PARALLAX_SCALE));
         let u = TerrainLayersUniform::from(&l);
         assert_eq!((u.parallax.x, u.depths_low, u.depths_high), (PARALLAX_SCALE, Vec4::new(0.0, 0.02, 0.0, 0.05), Vec4::ZERO));
+        // The base's (#3846): its own bit and depth, clamped as a layer's, alone enough to march.
+        let based = TerrainLayers { height_base: Some(a.clone()), base_depth: 0.04, ..l.clone() };
+        assert_eq!((based.height_bits(), TerrainLayersUniform::from(&based).depths_high, TerrainLayersUniform::from(&based).counts.y >> HEIGHT_BITS_SHIFT), (0b100_1010, Vec4::new(0.0, 0.0, 0.04, 0.0), 0b100_1010));
+        let alone = TerrainLayers { height_base: Some(a.clone()), base_depth: 9.0, parallax: true, texture_repeat: 256.0, ..default() };
+        assert_eq!((alone.height_bits(), alone.marched_base_depth(), alone.holds_heights(), TerrainLayersKey::from(&alone).parallax), (1 << BASE_HEIGHT, PARALLAX_SCALE, true, true));
+        assert!(!TerrainLayers { base_depth: 0.04, ..default() }.holds_heights(), "a depth without a map is none");
         // Only the layers drawn count: with three, the fourth's map and depth are left out.
         let three = TerrainLayers { count: 3, ..l.clone() };
         assert_eq!((three.height_bits(), three.layer_depths()), (0b10, [0.0, 0.02, 0.0, 0.0, 0.0, 0.0]));
@@ -2763,10 +3019,31 @@ mod tests {
     }
 
     /// The blended depth on the march's scale, as `parallax_depth_at` adds it from a
-    /// material's uniform: each layer's share x its depth over the scale x (1 - height).
-    fn parallax_depth_from(u: &TerrainLayersUniform, shares: [f32; 6], heights: [f32; 6]) -> f32 {
-        let depths = [u.depths_low.x, u.depths_low.y, u.depths_low.z, u.depths_low.w, u.depths_high.x, u.depths_high.y];
-        (0..6).filter(|&k| shares[k] > 0.0 && depths[k] > 0.0).map(|k| shares[k] * depths[k] / u.parallax.x * (1.0 - heights[k])).sum()
+    /// material's uniform: each layer's share x its depth over the scale x (1 - height), and the
+    /// base's after them (#3846).
+    fn parallax_depth_from(u: &TerrainLayersUniform, shares: [f32; 7], heights: [f32; 7]) -> f32 {
+        let depths = [u.depths_low.x, u.depths_low.y, u.depths_low.z, u.depths_low.w, u.depths_high.x, u.depths_high.y, u.depths_high.z];
+        (0..7).filter(|&k| shares[k] > 0.0 && depths[k] > 0.0).map(|k| shares[k] * depths[k] / u.parallax.x * (1.0 - heights[k])).sum()
+    }
+
+    /// #3846: a base marches by its own share and depth as a layer of the same height map would.
+    #[test]
+    fn a_base_moves_as_a_layer_of_the_same_map_would() {
+        let image = Handle::<Image>::default();
+        let layer = TerrainLayersUniform::from(&TerrainLayers { count: 1, tile: 256.0, parallax: true, height0: Some(image.clone()), parallax_depths: [0.03, 0.0, 0.0, 0.0, 0.0, 0.0], ..default() });
+        let base = TerrainLayersUniform::from(&TerrainLayers { parallax: true, height_base: Some(image), base_depth: 0.03, ..default() });
+        assert_eq!((layer.parallax.x, base.parallax.x), (PARALLAX_SCALE, PARALLAX_SCALE));
+        let ridges = |p: Vec2| 0.5 + 0.5 * (p.x * 900.0).sin().powi(15);
+        let tilted = Vec3::new(0.6, 0.0, -0.8);
+        for share in [1.0, 0.4] {
+            let a = parallax_march(&|p| parallax_depth_from(&layer, [share, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [ridges(p); 7]), tilted, layer.parallax.x);
+            let b = parallax_march(&|p| parallax_depth_from(&base, [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, share], [ridges(p); 7]), tilted, base.parallax.x);
+            assert_eq!(a, b, "share {share}");
+            assert_ne!(b, Vec2::ZERO);
+        }
+        let terrain = include_str!("terrain.wesl").replace("\r\n", "\n");
+        assert!(terrain.contains("    if w[0] > 0.0 && scale[6] > 0.0 {\n        depth += w[0] * scale[6] * (1.0 - layer_height(6u, instance_index, uv, footprint));\n    }\n"));
+        assert!(terrain.contains("    var relief = w[0] > 0.0 && scale[6] > 0.0;\n"));
     }
 
     #[test]
@@ -2783,9 +3060,9 @@ mod tests {
         assert_eq!(PARALLAX_SCALE, 0.08, "the scalar range's end (fnv_pbr::PARALLAX_DEPTH_RANGE)");
         let tilted = Vec3::new(0.6, 0.0, -0.8);
         // Narrow ridges along U in the 0.02 layer's height map; the 0.08 layer high and flat.
-        let ridges = |p: Vec2| [0.5 + 0.5 * (p.x * 900.0).sin().powi(15), 0.9, 0.0, 0.0, 0.0, 0.0];
+        let ridges = |p: Vec2| [0.5 + 0.5 * (p.x * 900.0).sin().powi(15), 0.9, 0.0, 0.0, 0.0, 0.0, 0.0];
         for share in [1.0, 0.6, 0.25] {
-            let shares = [share, 0.0, 0.0, 0.0, 0.0, 0.0];
+            let shares = [share, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
             let a = parallax_march(&|p| parallax_depth_from(&ua, shares, ridges(p)), tilted, ua.parallax.x);
             let b = parallax_march(&|p| parallax_depth_from(&ub, shares, ridges(p)), tilted, ub.parallax.x);
             assert!(a.length() > 0.0 && a == b, "share {share}: {a} and {b}");
@@ -2810,16 +3087,19 @@ mod tests {
         let layer = |o: Option<f32>| alpha_grid(&Layer { quadrant: 0, texture: Some(1), layer: 0, base: false, alpha: o.map_or_else(Vec::new, |o| (0..cells).map(|p| (p, o)).collect()) });
         let (full, half, none) = (|_: i16, _: u32| layer(Some(1.0)), |_: i16, _: u32| layer(Some(0.5)), |_: i16, _: u32| layer(None));
         // Two folded layers, both with height maps, the top one painted fully: all of it.
-        assert_eq!(cover_shares(&[half(0, 1), full(1, 2)], 2, 0b11, 3.0, 4.0), (1.0, 0.0));
+        assert_eq!(cover_shares(&[half(0, 1), full(1, 2)], 2, 0b11, 3.0, 4.0), (1.0, 0.0, 0.0));
         // Only the lower one has a height map: the top one hides it.
-        assert_eq!(cover_shares(&[half(0, 1), full(1, 2)], 2, 0b01, 3.0, 4.0), (0.0, 0.0));
+        assert_eq!(cover_shares(&[half(0, 1), full(1, 2)], 2, 0b01, 3.0, 4.0), (0.0, 0.0, 0.0));
         // A half-painted top layer without a height map over a full one with: half of it.
-        assert_eq!(cover_shares(&[full(0, 1), half(1, 2)], 2, 0b01, 3.0, 4.0), (0.5, 0.0));
+        assert_eq!(cover_shares(&[full(0, 1), half(1, 2)], 2, 0b01, 3.0, 4.0), (0.5, 0.0, 0.0));
         // A layer past the folded ones (drawn on its own, unshifted) painted fully hides it all.
-        assert_eq!(cover_shares(&[full(0, 1), full(1, 2)], 1, 0b1, 3.0, 4.0), (1.0, 1.0));
+        assert_eq!(cover_shares(&[full(0, 1), full(1, 2)], 1, 0b1, 3.0, 4.0), (1.0, 0.0, 1.0));
         // Unpainted layers and the base alone: nothing to move.
-        assert_eq!(cover_shares(&[none(0, 1)], 1, 0b1, 3.0, 4.0), (0.0, 0.0));
-        assert_eq!(cover_shares(&[], 0, 0, 3.0, 4.0), (0.0, 0.0));
+        assert_eq!(cover_shares(&[none(0, 1)], 1, 0b1, 3.0, 4.0), (0.0, 0.0, 0.0));
+        // The base's part, where it has a height map (#3846): what the layers leave.
+        assert_eq!(cover_shares(&[half(0, 1)], 1, 0b1 | 1 << BASE_HEIGHT, 3.0, 4.0), (0.5, 0.5, 0.0));
+        assert_eq!(cover_shares(&[], 0, 1 << BASE_HEIGHT, 3.0, 4.0), (0.0, 1.0, 0.0));
+        assert_eq!(cover_shares(&[], 0, 0, 3.0, 4.0), (0.0, 0.0, 0.0));
         // Between vertices the opacity is interpolated.
         let ramp = alpha_grid(&Layer { quadrant: 0, texture: Some(1), layer: 0, base: false, alpha: vec![(0, 0.0), (1, 1.0), (QUAD_SIDE as u16, 0.0), (QUAD_SIDE as u16 + 1, 1.0)] });
         assert_eq!(opacity_at(&ramp, 0.25, 0.5), 0.25);
@@ -2832,8 +3112,12 @@ mod tests {
             let want: f32 = w.iter().map(|&(k, w)| w * corner[k]).sum();
             assert!((opacity_at(&corner, c as f32 + 0.75, r as f32 + 0.25) - want).abs() < 1e-6, "the meshes' rule at ({r}, {c})");
         }
-        let c = GroundCover { grid: (1, 2), quadrant: 3, folded: 6, with_heights: 6, over: 2, material: true, height_share: 0.8, over_cover: 0.25 };
+        let c = GroundCover { grid: (1, 2), quadrant: 3, folded: 6, with_heights: 6, over: 2, material: true, base_height: false, height_share: 0.8, layer_share: 0.8, over_cover: 0.25 };
         assert!((c.shifted() - 0.6).abs() < 1e-6);
+        // The base's part counts for what moves, not for the layers' (#3846).
+        let based = GroundCover { base_height: true, height_share: 1.0, ..c.clone() };
+        assert!((based.shifted() - 0.75).abs() < 1e-6 && (based.layers_shifted() - 0.6).abs() < 1e-6);
+        assert!(based.describe().contains("6 folded layers (6 with height maps, the base too), 2 drawn over them; shifted share 0.75"), "{}", based.describe());
         assert_eq!(GroundCover { material: false, ..c.clone() }.shifted(), 0.0, "no folded material: the march never runs");
         assert!(c.describe().contains("6 folded layers (6 with height maps), 2 drawn over them; shifted share 0.60"), "{}", c.describe());
     }
@@ -2864,6 +3148,134 @@ mod tests {
         assert!(!parallax_wanted(None));
     }
 
+    /// #3486: a layer's alpha height takes the layer's height slot and depth and says so, and
+    /// goes again, the authored ones beside it untouched; the bake copy holds neither.
+    #[test]
+    fn an_alpha_height_fills_a_layers_slot_and_goes_with_the_switch() {
+        let mut images = Assets::<Image>::default();
+        let (authored, alpha) = (images.add(Image::default()), images.add(Image::default()));
+        let mut l = TerrainLayers { count: 3, tile: 256.0, texture_repeat: 256.0, height1: Some(authored.clone()), parallax: true, ..default() };
+        l.parallax_depths[1] = 0.08;
+        l.set_alpha_height(2, Some((alpha.clone(), nvf_assets::ALPHA_HEIGHT_DEPTH)));
+        assert_eq!((l.height_bits(), l.alpha_heights, l.parallax_depths[1], l.parallax_depths[2]), (0b110, 0b100, 0.08, nvf_assets::ALPHA_HEIGHT_DEPTH));
+        assert_eq!((l.height1.clone(), l.height2.clone()), (Some(authored.clone()), Some(alpha)));
+        assert!(TerrainLayersKey::from(&l).parallax);
+        l.set_alpha_height(2, None);
+        assert_eq!((l.height_bits(), l.alpha_heights, l.parallax_depths[2], l.height2.is_none()), (0b010, 0, 0.0, true));
+        assert_eq!(l.height1, Some(authored));
+        // Alone it is enough for the march, and nothing is left without it.
+        let mut only = TerrainLayers { count: 1, tile: 256.0, texture_repeat: 256.0, parallax: true, ..default() };
+        only.set_alpha_height(0, Some((images.add(Image::default()), nvf_assets::ALPHA_HEIGHT_DEPTH)));
+        assert!(TerrainLayersKey::from(&only).parallax);
+        only.set_alpha_height(0, None);
+        assert!(!TerrainLayersKey::from(&only).parallax && !only.holds_heights());
+    }
+
+    /// #3486, the switch over materials in place: on, a layer without a height takes its
+    /// diffuse's alpha (an authored one beside it untouched) and the material marches; off, it
+    /// lets go; a layer whose alpha does not vary stays flat; the edits are all noted.
+    #[test]
+    fn the_parallax_switch_gives_and_takes_the_alpha_heights_in_place() {
+        use crate::graphics::Graphics;
+        let dir = std::env::temp_dir().join(format!("nvf-alpha-heights-{}", std::process::id()));
+        let land = dir.join("textures").join("landscape");
+        std::fs::create_dir_all(&land).unwrap();
+        // A 8x4 DXT5 of two blocks whose alphas are 200 and 200 - `by`.
+        let dds = |by: u8| {
+            let mut b = vec![0u8; 128];
+            b[..4].copy_from_slice(b"DDS ");
+            for (at, v) in [(4, 124u32), (8, 0x1007), (12, 4), (16, 8), (76, 32), (80, 4), (108, 0x1000)] {
+                b[at..at + 4].copy_from_slice(&v.to_le_bytes());
+            }
+            b[84..88].copy_from_slice(b"DXT5");
+            for a in [200, 200 - by] {
+                b.extend_from_slice(&[a, a, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0]);
+            }
+            b
+        };
+        std::fs::write(land.join("deep.dds"), dds(100)).unwrap();
+        std::fs::write(land.join("flat.dds"), dds(0)).unwrap();
+        // A DXT1, and a DXT5 with an authored set that has no height.
+        let mut plain = dds(0);
+        plain[84..88].copy_from_slice(b"DXT1");
+        plain.truncate(128 + 16);
+        std::fs::write(land.join("plain.dds"), plain).unwrap();
+        std::fs::write(land.join("coloured.dds"), dds(100)).unwrap();
+        let pbr = dir.join("textures").join("pbr").join("landscape");
+        std::fs::create_dir_all(&pbr).unwrap();
+        std::fs::write(pbr.join("coloured_orm.dds"), dds(0)).unwrap();
+        let mut app = App::new();
+        app.init_resource::<Assets<TerrainMaterial>>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<NifMaterial>>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>()
+            .init_resource::<nvf_assets::TextureCache>()
+            .init_resource::<nvf_assets::ModelCache>()
+            .init_resource::<TerrainCache>()
+            .insert_resource(TerrainSettings { tile: 256.0 })
+            .init_resource::<AlphaHeightSync>()
+            .init_resource::<ParallaxEdits>()
+            .insert_resource(nvf_assets::GameData::new(std::sync::Arc::new(fnv_vfs::Vfs::open(&dir, &[]).unwrap()), std::sync::Arc::new(fnv_nif::Schema::default())))
+            .insert_resource(Graphics { terrain_parallax: false, ..Graphics::preset(crate::graphics::Preset::Vanilla) });
+        app.add_systems(Update, (sync_parallax, alpha_heights_system()).chain());
+        let authored = app.world_mut().resource_mut::<Assets<Image>>().add(Image::default());
+        let mut e = TerrainLayers { count: 3, tile: 256.0, texture_repeat: 256.0, height0: Some(authored.clone()), ..default() };
+        e.parallax_depths[0] = 0.08;
+        let both = app.world_mut().resource_mut::<Assets<TerrainMaterial>>().add(TerrainMaterial { base: default(), extension: e });
+        let alone = app.world_mut().resource_mut::<Assets<TerrainMaterial>>().add(TerrainMaterial { base: default(), extension: TerrainLayers { count: 2, tile: 256.0, texture_repeat: 256.0, ..default() } });
+        // A quadrant of its base alone (#3846).
+        let base = app.world_mut().resource_mut::<Assets<TerrainMaterial>>().add(TerrainMaterial { base: default(), extension: TerrainLayers { texture_repeat: 256.0, ..default() } });
+        let path = |p: &str| format!("landscape\\{p}.dds");
+        {
+            let mut cache = app.world_mut().resource_mut::<TerrainCache>();
+            cache.folded.insert((None, vec![path("set"), path("deep"), path("flat")], true), both.clone());
+            cache.folded.insert((None, vec![path("flat"), path("deep")], true), alone.clone());
+            cache.folded.insert((Some(path("deep")), Vec::new(), false), base.clone());
+        }
+        let state = |app: &App, h: &Handle<TerrainMaterial>| {
+            let e = &app.world().resource::<Assets<TerrainMaterial>>().get(h).unwrap().extension;
+            (e.height_bits(), e.alpha_heights, TerrainLayersKey::from(e).parallax)
+        };
+        let set = |app: &mut App, on: bool| {
+            app.world_mut().resource_mut::<Graphics>().terrain_parallax = on;
+            app.world_mut().resource_mut::<ParallaxEdits>().0.clear();
+            for _ in 0..8 {
+                app.update();
+            }
+        };
+        set(&mut app, false);
+        assert_eq!((state(&app, &both), state(&app, &alone)), ((0b001, 0, false), (0, 0, false)), "off: nothing read");
+        for _ in 0..2 {
+            set(&mut app, true);
+            assert_eq!((state(&app, &both), state(&app, &alone)), ((0b011, 0b010, true), (0b010, 0b010, true)));
+            assert_eq!(state(&app, &base), (1 << BASE_HEIGHT, 1 << BASE_HEIGHT, true), "the base's alpha");
+            assert_eq!((app.world().resource::<ParallaxEdits>().0[&both.id()], app.world().resource::<ParallaxEdits>().0[&alone.id()]), (2, 1), "each edit noted: the flip and the height, the height alone");
+            assert_eq!(app.world().resource::<Assets<TerrainMaterial>>().get(&both).unwrap().extension.height0, Some(authored.clone()));
+            set(&mut app, false);
+            assert_eq!((state(&app, &both), state(&app, &alone)), ((0b001, 0, false), (0, 0, false)), "and gone again");
+            assert_eq!(state(&app, &base), (0, 0, false));
+        }
+        // Which bases alone take the folded material (#3846): a BC3 diffuse without a set does,
+        // varying alpha or not; a DXT1 one does not, nor a BC3 one whose set has no height, nor
+        // none. Whatever the switch.
+        use bevy::ecs::system::RunSystemOnce;
+        for on in [true, false] {
+            set(&mut app, on);
+            app.world_mut().resource_mut::<TerrainCache>().base_marches.clear();
+            let found = app
+                .world_mut()
+                .run_system_once(|mut tm: TerrainMaterials, mut assets: ModelCtx| {
+                    let mut ctx = TerrainCtx { tm: &mut tm, assets: &mut assets };
+                    ["deep", "flat", "plain", "coloured", "missing"].map(|p| ctx.base_may_march(Some(&format!("landscape\\{p}.dds"))))
+                })
+                .unwrap();
+            assert_eq!(found, [true, true, false, false, false], "switch {on}");
+        }
+        assert_eq!(app.world().resource::<TerrainCache>().base_marches.len(), 5);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn parallax_moves_every_read_by_one_shift_and_none_head_on() {
         // The shader's text: the coordinate moved once before the surface set-up (never with
@@ -2886,14 +3298,15 @@ mod tests {
         assert!(terrain.contains("    let scale = parallax_scales(instance_index, values.x);"));
         // One set of weights, worked out at the plain place before the shift.
         for line in [
-            "            parallax_texels[k] = layer_diffuse_antitiled(k, in.instance_index, parallax_plain_taps, parallax_plain_fp);",
+            "            parallax_paint[k] = saturate(opacity[k]);",
+            "                    let parallax_texel = layer_diffuse_antitiled(k, in.instance_index, parallax_plain_taps, parallax_plain_fp);",
             "        parallax_w = terrain_ordered_shares(parallax_paint, parallax_n);",
             "            parallax_w = terrain_height_weights(parallax_w, parallax_height, parallax_params.x);",
         ] {
             assert!(terrain.find(line).unwrap_or_else(|| panic!("{line}")) < shift, "{line}: before the shift");
         }
         assert!(terrain.contains("        in.uv += parallax_shift(in.instance_index, in.uv, in.world_position, calculate_tbn_mikktspace(in.world_normal, in.world_tangent), parallax_w, parallax_n, parallax_footprint);"));
-        assert!(terrain.contains("                @if(TERRAIN_PARALLAX) let share = saturate(opacity[k]) * parallax_alpha[k];"), "the ordinary blend by the march's alphas");
+        assert!(terrain.contains("                @if(TERRAIN_PARALLAX) let share = saturate(opacity[k]);"), "the ordinary blend by the march's shares");
         assert!(terrain.contains("            @if(TERRAIN_PARALLAX) f = parallax_w;"), "the height blend by the march's weights");
         // The drawn reads: at the moved place with the plain place's gradients, base included.
         assert!(terrain.contains("            parallax_ddx = parallax_dx * exp2(view.mip_bias);"));
@@ -3090,9 +3503,8 @@ mod tests {
         for line in [
             "                if remaining == 0.0 {",
             "                if o == 0.0 {",
-            "                let a = saturate(o * raw[k + 1u].a);",
-            "                w[k + 1u] = a * remaining;",
-            "                remaining *= 1.0 - a;",
+            "                w[k + 1u] = o * remaining;",
+            "                remaining *= 1.0 - o;",
             "            if w[0] != 0.0 {",
             "                    height[0] = terrain_height(raw[0].rgb, base_reference(in.instance_index, vec2(0.5), vec2(0.0), vec2(0.0), 0.0), anti_params.y);",
             "                        height[k + 1u] = terrain_height(raw[k + 1u].rgb, layer_reference(k, in.instance_index, vec2(0.5), vec2(0.0), vec2(0.0), 0.0), anti_params.y);",
@@ -3102,9 +3514,8 @@ mod tests {
     }
 
     /// CPU mirror of terrain.wesl's anti-tiled walk over the layers: the ordered shares
-    /// (base at 0, layer k at k + 1) and which diffuse textures were read. `alpha` is the
-    /// texture alpha a read would give.
-    fn antitiled_walk(opacity: [f32; 6], alpha: [f32; 7], n: usize) -> ([f32; 7], [bool; 7]) {
+    /// (base at 0, layer k at k + 1) and which diffuse textures were read.
+    fn antitiled_walk(opacity: [f32; 6], n: usize) -> ([f32; 7], [bool; 7]) {
         let mut w = [0.0f32; 7];
         let mut read = [false; 7];
         let mut remaining = 1.0f32;
@@ -3117,9 +3528,8 @@ mod tests {
                 continue;
             }
             read[k + 1] = true;
-            let a = (o * alpha[k + 1]).clamp(0.0, 1.0);
-            w[k + 1] = a * remaining;
-            remaining *= 1.0 - a;
+            w[k + 1] = o * remaining;
+            remaining *= 1.0 - o;
         }
         w[0] = remaining;
         read[0] = w[0] != 0.0;
@@ -3128,8 +3538,7 @@ mod tests {
 
     #[test]
     fn the_antitiled_walk_gives_the_ordered_shares_and_reads_only_what_can_show() {
-        // Synthetic opacities and alphas (no texture's values): the same shares as the
-        // ordered blend, exactly.
+        // Synthetic opacities: the same shares as the ordered blend, exactly.
         let mut seed = 0x2551u32;
         let mut next = || {
             seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
@@ -3138,22 +3547,16 @@ mod tests {
         for case in 0..600 {
             let n = case % 7;
             let mut opacity = [0.0f32; 6];
-            let mut alpha = [1.0f32; 7];
-            for k in 0..6 {
-                opacity[k] = match (next() * 5.0) as u32 {
+            for o in &mut opacity {
+                *o = match (next() * 5.0) as u32 {
                     0 => 0.0,
                     1 => 1.0,
                     2 => 1e-4,
                     _ => next(),
                 };
-                alpha[k + 1] = match (next() * 4.0) as u32 {
-                    0 => 0.0,
-                    1 => 1.0,
-                    _ => next(),
-                };
             }
-            let paint: [f32; 6] = std::array::from_fn(|k| opacity[k].clamp(0.0, 1.0) * alpha[k + 1]);
-            let (w, read) = antitiled_walk(opacity, alpha, n);
+            let paint = opacity.map(|o| o.clamp(0.0, 1.0));
+            let (w, read) = antitiled_walk(opacity, n);
             assert_eq!(w, ordered_shares(paint, n), "case {case}");
             for k in 0..n {
                 // Opacity 0: never read. A share above 0: always read.
@@ -3176,19 +3579,14 @@ mod tests {
             }
         }
         // A fully covering later layer: everything under it (the base too) is not read.
-        let (w, read) = antitiled_walk([0.6, 0.3, 1.0, 0.0, 0.0, 0.0], [1.0; 7], 3);
+        let (w, read) = antitiled_walk([0.6, 0.3, 1.0, 0.0, 0.0, 0.0], 3);
         assert_eq!(w, [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]);
         assert_eq!(read, [false, false, false, true, false, false, false]);
-        // An alpha of 0 is only found by reading: the layer is read and shares nothing.
-        let mut alpha = [1.0; 7];
-        alpha[2] = 0.0;
-        let (w, read) = antitiled_walk([0.0, 1.0, 0.0, 0.0, 0.0, 0.0], alpha, 2);
-        assert!(read[2] && w[2] == 0.0 && read[0] && w[0] == 1.0);
         // A tiny painted share survives (exact zeros skip, no epsilon).
-        let (w, read) = antitiled_walk([1e-4, 0.0, 0.0, 0.0, 0.0, 0.0], [1.0; 7], 1);
+        let (w, read) = antitiled_walk([1e-4, 0.0, 0.0, 0.0, 0.0, 0.0], 1);
         assert!(read[1] && w[1] > 0.0 && w[1] < 1e-3);
         // Unpainted ground reads the base alone.
-        assert_eq!(antitiled_walk([0.0; 6], [1.0; 7], 6).1, [true, false, false, false, false, false, false]);
+        assert_eq!(antitiled_walk([0.0; 6], 6).1, [true, false, false, false, false, false, false]);
     }
 
     #[test]
@@ -3577,11 +3975,11 @@ mod tests {
     }
 
     /// The separately drawn overflow layers over the base draw's colour: each mixed in by
-    /// saturate(opacity) x its alpha, white-tinted (graphics-enhanced.md §3.14: the
+    /// saturate(opacity), white-tinted (graphics-enhanced.md §3.14: the
     /// detail's albedo approximation of their lit blend, the same for both mirrors).
     fn overflow_mix(mut colour: [f32; 3], c: &DetailCase, from: usize) -> [f32; 3] {
         for (texel, o) in &c.overflow[from..] {
-            let share = o.clamp(0.0, 1.0) * texel[3];
+            let share = o.clamp(0.0, 1.0);
             let layer = mul3(rgb(*texel), c.tint);
             for (x, l) in colour.iter_mut().zip(layer) {
                 *x = *x * (1.0 - share) + l * share;
@@ -3622,9 +4020,8 @@ mod tests {
                         continue;
                     }
                     raw[k + 1] = l.0;
-                    let s = (o * raw[k + 1][3]).clamp(0.0, 1.0);
-                    wt[k + 1] = s * remaining;
-                    remaining *= 1.0 - s;
+                    wt[k + 1] = o * remaining;
+                    remaining *= 1.0 - o;
                 }
                 wt[0] = remaining;
             } else {
@@ -3636,7 +4033,7 @@ mod tests {
                         continue;
                     }
                     raw[k + 1] = l.0;
-                    paint[k] = o * raw[k + 1][3];
+                    paint[k] = o;
                 }
                 wt = ordered_shares(paint, n);
             }
@@ -3669,13 +4066,9 @@ mod tests {
             }
         }
         for k in if weighted { folded } else { 0 }..total {
-            // #2661 review: opacity first, then the share; either exactly 0 skips the overlay.
+            // #2661 review: an opacity of exactly 0 skips the overlay.
             let (texel, o, is_folded) = overlay(k);
-            let o = o.clamp(0.0, 1.0);
-            if o == 0.0 {
-                continue;
-            }
-            let share = o * texel[3];
+            let share = o.clamp(0.0, 1.0);
             if share == 0.0 {
                 continue;
             }
@@ -3701,7 +4094,7 @@ mod tests {
             (None, false) => {
                 let mut colour = base_colour;
                 for l in &c.folded {
-                    let share = l.1.clamp(0.0, 1.0) * l.0[3];
+                    let share = l.1.clamp(0.0, 1.0);
                     for (x, v) in colour.iter_mut().zip(layer(l)) {
                         *x = *x * (1.0 - share) + v * share;
                     }
@@ -3711,10 +4104,9 @@ mod tests {
             _ => {
                 let w = if anti {
                     let opacity: [f32; 6] = std::array::from_fn(|k| c.folded.get(k).map_or(0.0, |l| l.1));
-                    let alpha: [f32; 7] = std::array::from_fn(|i| if i == 0 { 1.0 } else { c.folded.get(i - 1).map_or(1.0, |l| l.0[3]) });
-                    antitiled_walk(opacity, alpha, n).0
+                    antitiled_walk(opacity, n).0
                 } else {
-                    let paint: [f32; 6] = std::array::from_fn(|k| c.folded.get(k).map_or(0.0, |l| l.1.clamp(0.0, 1.0) * l.0[3]));
+                    let paint: [f32; 6] = std::array::from_fn(|k| c.folded.get(k).map_or(0.0, |l| l.1.clamp(0.0, 1.0)));
                     ordered_shares(paint, n)
                 };
                 let f = match height {
@@ -3750,7 +4142,8 @@ mod tests {
     /// both height references: the detail's mirror ([`detail_mirror`], driven by the table
     /// words the publication packs from `DetailFeatures`) against this module's mirrors of
     /// terrain.wesl ([`near_mirror`]). The shader's lines are kept to the mirror by
-    /// mesh_blend_shader_tests.rs. Synthetic texels, opacities and references only.
+    /// mesh_blend_shader_tests.rs. Synthetic texels, opacities and references only. The
+    /// texels' alpha has no part in either (#3789).
     #[test]
     fn the_mesh_blend_detail_composes_as_the_near_draw_with_and_without_the_switches() {
         use nvf_assets::nif_surface_blend::{DetailFeatures, DetailQuadrant};
@@ -3792,6 +4185,13 @@ mod tests {
                 for (d, e) in detail.iter().zip(near) {
                     assert!((d - e).abs() < 2e-5, "case {case} switches {switches}: detail {detail:?} near {near:?}");
                 }
+                // #3789: whatever the texels' alpha.
+                let clear = DetailCase {
+                    folded: c.folded.iter().map(|l| ([l.0[0], l.0[1], l.0[2], 0.0], l.1, l.2)).collect(),
+                    overflow: c.overflow.iter().map(|l| ([l.0[0], l.0[1], l.0[2], 0.0], l.1)).collect(),
+                    ..c
+                };
+                assert_eq!((detail_mirror(&words, &clear), near_mirror(&clear, height.filter(|_| n > 0), anti)), (detail, near), "case {case}");
                 checked[switches] += 1;
             }
         }

@@ -217,19 +217,46 @@ impl Block {
 /// block of `me`, the character itself, is left out.
 #[allow(clippy::too_many_arguments)]
 pub fn clip(me: u32, velocity: [f32; 2], feet: [f32; 3], radius: f32, height: f32, dt: f32, blocks: &mut [Block], pushes: &mut Vec<Push>) -> [f32; 2] {
+    clip_inner(me, velocity, feet, radius, height, dt, blocks, Some(pushes))
+}
+
+/// [`clip`] for a walker that pushes nobody aside ([`ActorBlocks::carried`]): every
+/// block stops it.
+#[allow(clippy::too_many_arguments)]
+pub fn clip_pushing_nobody(me: u32, velocity: [f32; 2], feet: [f32; 3], radius: f32, height: f32, dt: f32, blocks: &mut [Block]) -> [f32; 2] {
+    clip_inner(me, velocity, feet, radius, height, dt, blocks, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn clip_inner(me: u32, velocity: [f32; 2], feet: [f32; 3], radius: f32, height: f32, dt: f32, blocks: &mut [Block], mut pushes: Option<&mut Vec<Push>>) -> [f32; 2] {
     let mut v = velocity;
-    // Twice: sliding along one block can lead into the next.
+    let mut speed = v[0].hypot(v[1]);
+    // Twice: sliding along one block can lead into the next. If the first pass made no
+    // contact at all, the velocity and blocks are unchanged and the second pass is a no-op.
     for _ in 0..2 {
+        let mut touched = false;
+        let mut step_reach = speed * dt;
         for b in blocks.iter_mut() {
             if b.actor == me || feet[2] >= b.top || feet[2] + height <= b.bottom {
+                continue;
+            }
+            // Cheap axis-aligned rejection before projecting onto the block's torso segment:
+            // if the point lies beyond `reach` on either axis, the Euclidean distance to
+            // any point on segment `a..=b` is strictly greater than `reach`.
+            let reach = b.radius + radius + step_reach;
+            let (min_x, max_x) = if b.a[0] <= b.b[0] { (b.a[0], b.b[0]) } else { (b.b[0], b.a[0]) };
+            if feet[0] < min_x - reach || feet[0] > max_x + reach {
+                continue;
+            }
+            let (min_y, max_y) = if b.a[1] <= b.b[1] { (b.a[1], b.b[1]) } else { (b.b[1], b.a[1]) };
+            if feet[1] < min_y - reach || feet[1] > max_y + reach {
                 continue;
             }
             let c = b.nearest([feet[0], feet[1]]);
             let d = [feet[0] - c[0], feet[1] - c[1]];
             let dist = d[0].hypot(d[1]);
             let room = dist - (b.radius + radius);
-            let speed = v[0].hypot(v[1]);
-            if room > speed * dt {
+            if room > step_reach {
                 continue;
             }
             // Away from the block; standing on its line, the way the character goes.
@@ -243,33 +270,26 @@ pub fn clip(me: u32, velocity: [f32; 2], feet: [f32; 3], radius: f32, height: f3
             let towards = -(v[0] * n[0] + v[1] * n[1]);
             let most = if room < 0.0 { -(-room / dt).min(PUSH_OUT) } else { room / dt };
             if towards > most {
+                touched = true;
                 let mut stop = towards - most;
                 if b.pushable {
-                    let give = PUSH_SHARE * stop;
-                    let by = [-n[0] * give * dt, -n[1] * give * dt];
-                    b.shift(by);
-                    pushes.push(Push { actor: b.actor, by });
-                    stop -= give;
+                    if let Some(pushes) = pushes.as_deref_mut() {
+                        let give = PUSH_SHARE * stop;
+                        let by = [-n[0] * give * dt, -n[1] * give * dt];
+                        b.shift(by);
+                        pushes.push(Push { actor: b.actor, by });
+                        stop -= give;
+                    }
                 }
                 v[0] += n[0] * stop;
                 v[1] += n[1] * stop;
+                speed = v[0].hypot(v[1]);
+                step_reach = speed * dt;
             }
         }
-    }
-    v
-}
-
-/// [`clip`] for a walker that pushes nobody aside ([`ActorBlocks::carried`]): every
-/// block stops it.
-#[allow(clippy::too_many_arguments)]
-pub fn clip_pushing_nobody(me: u32, velocity: [f32; 2], feet: [f32; 3], radius: f32, height: f32, dt: f32, blocks: &mut [Block]) -> [f32; 2] {
-    let was: Vec<bool> = blocks.iter().map(|b| b.pushable).collect();
-    for b in blocks.iter_mut() {
-        b.pushable = false;
-    }
-    let v = clip(me, velocity, feet, radius, height, dt, blocks, &mut Vec::new());
-    for (b, p) in blocks.iter_mut().zip(was) {
-        b.pushable = p;
+        if !touched {
+            break;
+        }
     }
     v
 }
@@ -495,5 +515,32 @@ mod tests {
         // Alone with its own block, nothing happens.
         assert_eq!(super::clip(1, [50.0, 0.0], [0.0, 0.0, 0.0], 22.0, 128.0, DT, &mut blocks[..1], &mut pushes), [50.0, 0.0]);
         assert!(pushes.is_empty());
+    }
+
+    #[test]
+    fn clip_aabb_reject_and_no_push_match_exact_two_pass_semantics() {
+        // Mix distant blocks, overlapping block, angled corner pair (requiring second pass),
+        // and pushable block; verify both `clip` and `clip_pushing_nobody`.
+        let initial = vec![
+            Block::character(10, [5000.0, 5000.0, 0.0], 22.0, 128.0, true),
+            Block::character(11, [-4000.0, 10.0, 0.0], 22.0, 128.0, false),
+            Block { actor: 12, a: [44.0, -20.0], b: [44.0, 20.0], radius: 22.0, bottom: 0.0, top: 128.0, pushable: true },
+            Block::character(13, [0.0, 44.0, 0.0], 22.0, 128.0, false),
+            Block::character(14, [12.0, 0.0, 0.0], 22.0, 128.0, true),
+        ];
+        // `clip_pushing_nobody` must not mutate `pushable` flags or shift pushable blocks.
+        let mut no_push_blocks = initial.clone();
+        let v_no_push = super::clip_pushing_nobody(1, [180.0, 180.0], [0.0, 0.0, 0.0], 22.0, 128.0, DT, &mut no_push_blocks);
+        assert_eq!(no_push_blocks, initial);
+        assert!(v_no_push[0] < 0.0, "overlapping block at +X pushes walker toward -X: {v_no_push:?}");
+
+        // `clip` shifts pushable blocks and records pushes, leaving distant blocks untouched.
+        let mut push_blocks = initial.clone();
+        let mut pushes = Vec::new();
+        let v_push = super::clip(1, [180.0, 180.0], [0.0, 0.0, 0.0], 22.0, 128.0, DT, &mut push_blocks, &mut pushes);
+        assert!(!pushes.is_empty());
+        assert_eq!(push_blocks[0], initial[0], "distant block untouched");
+        assert_eq!(push_blocks[1], initial[1], "distant block untouched");
+        assert_ne!(v_push, v_no_push, "pushing yields less stop than clip_pushing_nobody");
     }
 }

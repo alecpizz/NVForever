@@ -301,9 +301,61 @@ fn cnd_draws_three_hints_in_the_existing_slots() {
     assert_eq!(Val::Vh(first), crate::interface::u(STATUS.min.y + HINT_Y));
     assert!(first < middle && middle < last);
     assert!((middle - first - (last - middle)).abs() < 1e-4, "{first} {middle} {last}");
-    for (labels, expected) in [(crate::pad::Labels::Keys, ["S)", "X)", "E)"]), (crate::pad::Labels::Xbox, ["A)", "X)", "Y)"]), (crate::pad::Labels::PlayStation, ["Cross)", "Square)", "Triangle)"])] {
+    for (labels, expected) in [(crate::pad::Labels::Keys, ["[S]", "[X]", "[E]"]), (crate::pad::Labels::Xbox, ["[A]", "[X]", "[Y]"]), (crate::pad::Labels::PlayStation, ["[Cross]", "[Square]", "[Triangle]"])] {
         crate::pad::set_labels(labels);
         assert_eq!([hint_key(&StatsView::default(), 0), hint_key(&StatsView::default(), SWITCH_LIMBS), hint_key(&StatsView::default(), 1)], expected);
     }
     crate::pad::set_labels(crate::pad::Labels::Keys);
+}
+
+#[test]
+fn projected_mobile_scroll_uses_real_stats_view_bounds_and_does_not_use_a_hint(){
+    let mut app=input_app(0,2);
+    {let mut view=app.world_mut().resource_mut::<StatsView>();view.lens[2]=20;view.set_rows_shown(2,5);}
+    let mut scroll=super::super::touch_scroll::WheelFrame::default();
+    scroll.set(app.world().resource::<PipBoy>(),Vec2::new(40.0,100.0),-60.0);app.insert_resource(scroll);app.update();
+    assert_eq!(app.world().resource::<StatsView>().top[2],3);
+    assert!(app.world().resource::<Messages<UseHint>>().is_empty());
+}
+
+#[test]
+fn physical_mouse_and_wheel_keep_their_description_target_and_a_later_pure_touch_scrolls_the_list(){
+    use crate::pipboy::{self,touch_items::TouchItems,touch_scroll::{TouchPointerPlugin,WheelFrame,PhysicalPriority}};
+    use bevy::input::touch::{TouchInput,TouchPhase};
+    fn project(mut touch:ResMut<TouchItems>){touch.project(Some);}
+    fn finger(app:&mut App,phase:TouchPhase,at:Vec2,id:u64){assert!(app.world_mut().resource_mut::<TouchItems>().event(&TouchInput{window:Entity::PLACEHOLDER,id,phase,position:at,force:None},0));}
+    for cause in 0..7 {
+        let mut app=input_app(0,2);let desc=desc_rect(2).unwrap().center();let list=Vec2::new(40.,100.);
+        {let mut view=app.world_mut().resource_mut::<StatsView>();view.lens[2]=20;view.set_rows_shown(2,5);view.set_desc_bound(100);view.desc=10;}
+        app.init_resource::<TouchItems>().init_resource::<pipboy::PipBoyAid>().init_resource::<pipboy::PointerMoved>();
+        let camera=app.world_mut().spawn_empty().id();app.insert_resource(pipboy::PipBoyScreen{image:Handle::default(),camera,on_model:false,pointer:Some(desc),scale:1.0});
+        app.add_plugins(TouchPointerPlugin).add_systems(Last,project);app.update();
+        if cause!=6 {
+            finger(&mut app,TouchPhase::Started,list,201);app.update();app.update();
+            finger(&mut app,TouchPhase::Moved,list-Vec2::Y*60.,201);app.update();
+            finger(&mut app,TouchPhase::Ended,list-Vec2::Y*60.,201);
+        }
+        match cause {
+            0=>app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left),
+            1=>app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right),
+            2=>{let mut m=app.world_mut().resource_mut::<ButtonInput<MouseButton>>();m.press(MouseButton::Left);m.release(MouseButton::Left);},
+            3=>{let mut m=app.world_mut().resource_mut::<ButtonInput<MouseButton>>();m.press(MouseButton::Left);m.clear();m.release(MouseButton::Left);},
+            4|6=>{app.world_mut().write_message(MouseWheel{window:Entity::PLACEHOLDER,unit:MouseScrollUnit::Line,x:0.,y:1.,phase:TouchPhase::Moved});},
+            _=>{}
+        }
+        app.update();
+        if cause!=5 {assert!(app.world().resource::<PhysicalPriority>().active);assert_eq!(app.world().resource::<WheelFrame>().lines(app.world().resource::<PipBoy>()),0.);}
+        assert_eq!(app.world().resource::<StatsView>().top[2],if cause==5 {3}else{0});
+        assert_eq!(app.world().resource::<StatsView>().desc,if cause==4||cause==6 {9}else{10});
+        if cause==0 {assert!(app.world().resource::<ButtonInput<MouseButton>>().pressed(MouseButton::Left));}
+        if cause==1 {assert!(app.world().resource::<ButtonInput<MouseButton>>().pressed(MouseButton::Right));}
+        if cause==3 {assert!(app.world().resource::<ButtonInput<MouseButton>>().just_released(MouseButton::Left));}
+        {let mut mouse=app.world_mut().resource_mut::<ButtonInput<MouseButton>>();mouse.release(MouseButton::Left);mouse.release(MouseButton::Right);mouse.clear();}
+        app.update();app.update();
+        let before=app.world().resource::<StatsView>().top[2];
+        finger(&mut app,TouchPhase::Started,list,202);finger(&mut app,TouchPhase::Moved,list-Vec2::Y*60.,202);finger(&mut app,TouchPhase::Ended,list-Vec2::Y*60.,202);
+        for _ in 0..5{app.update();}
+        assert_eq!(app.world().resource::<StatsView>().top[2],before+3,"pure touch resumes with a fresh source-owned contact");
+        assert_eq!(app.world().resource::<StatsView>().desc,if cause==4||cause==6 {9}else{10});
+    }
 }

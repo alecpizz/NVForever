@@ -155,7 +155,7 @@ fn static_target_gets_shots_and_repeat_fire_keeps_going() {
     assert!(!use_.done);
 }
 
-/// [hypothesis, #2652] Sibling worldspaces share coordinates for non-actor targets;
+/// (#2652; see crates/fnv-ai/src/goal.rs) Sibling worldspaces share coordinates for non-actor targets;
 /// [design] authored WNAM records exercise the parent index and real shooter together.
 #[test]
 fn sibling_worldspace_static_gets_shots_at_its_bounds_centre() {

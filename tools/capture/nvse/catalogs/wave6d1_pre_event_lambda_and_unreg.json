@@ -1,0 +1,109 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6d1_pre_event_lambda_and_unreg",
+  "description": "Wave 6D-1 strictly read-only console-only clean-room probe catalog verifying ShowOff:OnPreScriptedActivate expression-only lambda veto (=> 0) and mid-dispatch RemoveEventHandler cancellation.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)",
+    "ShowOffNVSE Plugin": "184",
+    "lStewieAl's Tweaks": "1005"
+  },
+  "batches": [
+    {
+      "id": "w6d1_pre_event_lambda_and_unreg",
+      "title": "Wave 6D-1 - Pre-Event Expression Lambda Veto and Mid-Dispatch Unregister",
+      "extender": "xNVSE 6.4.9 + JIP LN 57.30 + ShowOffNVSE 184",
+      "required_plugins": [
+        "jip_nvse.dll",
+        "ShowOffNVSE.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6d1_13_pre_scripted_lambda_and_unregister",
+          "bucket": "A",
+          "extender": "ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/preactivation-events.md",
+          "spec_line": 18,
+          "functions_tested": [
+            "ShowOff:OnPreScriptedActivate",
+            "SetEventHandlerAlt",
+            "RemoveEventHandler"
+          ],
+          "claim": "Verify whether an expression-only lambda ({rA, iB, iOk} => 0) vetoes ShowOff:OnPreScriptedActivate without SetFunctionValue, and whether unregistering a later array-filtered handler mid-dispatch skips or runs it.",
+          "expected": "Check lambda => 0 vs => 1 veto behavior and whether a later handler unregistered mid-dispatch still runs (snapshot) or is skipped.",
+          "script_lines": [
+            "ref rCapB = GetFormFromMod \"FalloutNV.esm\" \"F\"",
+            "ref r1 = Player.PlaceAtMe rCapB 1",
+            "ref r2 = Player.PlaceAtMe rCapB 1",
+            "ref r3 = Player.PlaceAtMe rCapB 1",
+            "ref rLam0 = ({ref rA, int iB, int iOk} => 0)",
+            "SetEventHandlerAlt \"ShowOff:OnPreScriptedActivate\" rLam0 0::r1",
+            "int c0 = Player.GetItemCount rCapB",
+            "r1.Activate Player 0",
+            "int c1 = Player.GetItemCount rCapB",
+            "RemoveEventHandler \"ShowOff:OnPreScriptedActivate\" rLam0",
+            "ref rLam1 = ({ref rA, int iB, int iOk} => 1)",
+            "SetEventHandlerAlt \"ShowOff:OnPreScriptedActivate\" rLam1 0::r2",
+            "r2.Activate Player 0",
+            "int c2 = Player.GetItemCount rCapB",
+            "RemoveEventHandler \"ShowOff:OnPreScriptedActivate\" rLam1",
+            "ref cbUnreg = CompileScript \"nvseprobe_s_w6d1_13_unreg.gek\"",
+            "ref cbLate = CompileScript \"nvseprobe_s_w6d1_13_late.gek\"",
+            "Player.AuxVarSetRef \"*w6d1_13_late\" cbLate",
+            "Player.AuxVarSetFlt \"*w6d1_13_lran\" 0",
+            "array_var aRef = ar_List r3",
+            "SetEventHandlerAlt \"ShowOff:OnPreScriptedActivate\" cbUnreg 0::r3 \"priority\"::10",
+            "SetEventHandlerAlt \"ShowOff:OnPreScriptedActivate\" cbLate 0::aRef \"priority\"::5",
+            "r3.Activate Player 0",
+            "int lRan = Player.AuxVarGetFlt \"*w6d1_13_lran\"",
+            "RemoveEventHandler \"ShowOff:OnPreScriptedActivate\" cbUnreg",
+            "RemoveEventHandler \"ShowOff:OnPreScriptedActivate\" cbLate",
+            "if r1.GetDisabled == 0",
+            "  r1.Disable 0",
+            "endif",
+            "r1.MarkForDelete",
+            "r2.Disable 0",
+            "r2.MarkForDelete",
+            "r3.Disable 0",
+            "r3.MarkForDelete",
+            "Player.RemoveItem rCapB (Player.GetItemCount rCapB) 1",
+            "PrintToConsole \"PROBE|w6d1_13_pre_scripted_lambda_and_unregister|lam0=%g->%g|lam1=%g->%g|lateRan=%g\" c0 c1 c1 c2 lRan"
+          ],
+          "helper_scripts": {
+            "nvseprobe_s_w6d1_13_unreg.gek": [
+              "begin Function { ref rA, int iB, int iOk }",
+              "ref cbL = Player.AuxVarGetRef \"*w6d1_13_late\"",
+              "RemoveEventHandler \"ShowOff:OnPreScriptedActivate\" cbL"
+            ],
+            "nvseprobe_s_w6d1_13_late.gek": [
+              "begin Function { ref rA, int iB, int iOk }",
+              "Player.AuxVarSetFlt \"*w6d1_13_lran\" 1"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

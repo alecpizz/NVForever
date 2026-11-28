@@ -1,0 +1,114 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6c_showoff_on_explosion_hit",
+  "description": "Read-only console-only probe verifying ShowOff:OnExplosionHit calling reference (GetSelfAlt = live EXPL reference), hit actor (arg1), source actor (arg2), and GetExplosionHitDamage.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)",
+    "ShowOffNVSE Plugin": "184"
+  },
+  "batches": [
+    {
+      "id": "w6c_so_expl_hit",
+      "title": "Wave 6C - ShowOff:OnExplosionHit Calling Ref & Source Arg",
+      "extender": "xNVSE 6.4.9 + JIP LN 57.30 + ShowOff 184",
+      "required_plugins": [
+        "jip_nvse.dll",
+        "ShowOffNVSE.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6t2_01_showoff_on_explosion_hit",
+          "bucket": "B",
+          "extender": "ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-showoff.md",
+          "spec_line": 30,
+          "functions_tested": [
+            "ShowOff:OnExplosionHit",
+            "GetExplosionHitDamage",
+            "SetExplosionHitDamage",
+            "GetSelfAlt"
+          ],
+          "claim": "Verify ShowOff:OnExplosionHit calling reference (GetSelfAlt = live EXPL ref), arg1 (hit actor), arg2 (source actor), and GetExplosionHitDamage.",
+          "expected": "reg=1,n=1,selfIsP=0,tSelf=81,tBase=81,base=0007078B,hitIsP=1,src=00000014,dmg=100.0",
+          "script_lines": [
+            "ref cb = CompileScript \"nvseprobe_s_w6t2_01_cb.gek\"",
+            "Player.AuxVarSetFlt \"*w6t2_01_n\" 0",
+            "int reg = SetEventHandler \"ShowOff:OnExplosionHit\" cb",
+            "Player.AuxVarSetFlt \"*w6t2_01_reg\" reg",
+            "Player.AuxVarSetRef \"*w6t2_01_cb\" cb",
+            "ref rExpl = GetFormFromMod \"FalloutNV.esm\" \"7078B\"",
+            "Player.PlaceAtMe rExpl 1"
+          ],
+          "wait_ticks_after": 4,
+          "helper_scripts": {
+            "nvseprobe_s_w6t2_01_cb.gek": [
+              "begin Function { ref rHit, ref rSrc }",
+              "ref rSelf = GetSelfAlt",
+              "ref rSelfBase = rSelf.GetBaseObject",
+              "int tSelf = GetType rSelf",
+              "int tBase = GetType rSelfBase",
+              "float fDmg = GetExplosionHitDamage",
+              "SetExplosionHitDamage 1",
+              "Player.AuxVarSetFlt \"*w6t2_01_n\" ((Player.AuxVarGetFlt \"*w6t2_01_n\") + 1)",
+              "Player.AuxVarSetRef \"*w6t2_01_self\" rSelf",
+              "Player.AuxVarSetRef \"*w6t2_01_base\" rSelfBase",
+              "Player.AuxVarSetRef \"*w6t2_01_hit\" rHit",
+              "Player.AuxVarSetRef \"*w6t2_01_src\" rSrc",
+              "Player.AuxVarSetFlt \"*w6t2_01_ts\" tSelf",
+              "Player.AuxVarSetFlt \"*w6t2_01_tb\" tBase",
+              "Player.AuxVarSetFlt \"*w6t2_01_dmg\" fDmg"
+            ]
+          },
+          "extra_steps": [
+            {
+              "suffix": "read",
+              "wait_ticks": 0,
+              "script_lines": [
+                "ref cb = Player.AuxVarGetRef \"*w6t2_01_cb\"",
+                "RemoveEventHandler \"ShowOff:OnExplosionHit\" cb",
+                "int reg = Player.AuxVarGetFlt \"*w6t2_01_reg\"",
+                "int n = Player.AuxVarGetFlt \"*w6t2_01_n\"",
+                "ref rSelf = Player.AuxVarGetRef \"*w6t2_01_self\"",
+                "ref rBase = Player.AuxVarGetRef \"*w6t2_01_base\"",
+                "ref rHit = Player.AuxVarGetRef \"*w6t2_01_hit\"",
+                "ref rSrc = Player.AuxVarGetRef \"*w6t2_01_src\"",
+                "int ts = Player.AuxVarGetFlt \"*w6t2_01_ts\"",
+                "int tb = Player.AuxVarGetFlt \"*w6t2_01_tb\"",
+                "float dmg = Player.AuxVarGetFlt \"*w6t2_01_dmg\"",
+                "int selfIsP = (rSelf == Player)",
+                "int hitIsP = (rHit == Player)",
+                "string_var sBase = GetFormIDString rBase",
+                "string_var sSrc = GetFormIDString rSrc",
+                "Player.RestoreAV Health 200",
+                "PrintToConsole \"PROBE|w6t2_01_showoff_on_explosion_hit|reg=%g,n=%g,selfIsP=%g,tSelf=%g,tBase=%g,base=%z,hitIsP=%g,src=%z,dmg=%.1f\" reg n selfIsP ts tb sBase hitIsP sSrc dmg"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

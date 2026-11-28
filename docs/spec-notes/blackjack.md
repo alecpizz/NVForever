@@ -69,8 +69,12 @@ Laid out in `schemas/fnv/objects.json` [documented: xEdit wbDefinitionsFNV.pas]:
   the chips as the cards are dealt [hypothesis].
 - **The deal**: one card to the player, one face up to the dealer, a second to the player,
   the dealer's second face down [hypothesis: the order of the models' sequences
-  `Hand1_01`, `Dealer_01`, `Hand1_02`, `Dealer_02`; the second dealer card is the one
-  `Dealer_Reveal` turns over (§6)].
+  `Hand1_01`, `Dealer_01`, `Hand1_02`, `Dealer_02`]. In the dealer model it is the first
+  card that lies face down: `Dealer_01` lays its card face down and `Dealer_02` lays its
+  card face up [observed: buckallobill, in game, FNV 1.4.0.525: frames of a round in NVForever
+  playing the model's sequences]. NVForever keeps the rules' order and draws the hole card's face
+  on the model's first card, which `Dealer_Reveal` turns over (nvforever
+  `blackjack_view.rs`, `dealer_face_slot`).
 - **A natural**: an ace and a ten-card in the first two. With the player's, the hole card
   is turned at once: the dealer's natural too is a push, else the player is paid the bet
   times the payout ratio (1.5: three to two, as the felt says [observed: "BLACKJACK PAYS 3
@@ -166,9 +170,10 @@ numeric encoding.
 ## 5. The menu (`menus\black_jack_menu.xml`)
 
 - The information box: as the lockpicking menu's (400 × 175, the bracket of lines, three
-  rows in font 7 at 35, 80, 125) [documented]: "Current Bet:", "Chips:" and "<casino>
-  Earnings:" (the casino's FULL name, "Gommorah Earnings:" at Gomorrah) [observed: the
-  screenshot; the titles are set in code].
+  rows in font 7 at 35, 80, 125) [documented]: the bet, the chips and the casino's
+  winnings, with the casino's FULL name; the titles are set in code. NVForever's titles
+  are its own words, "Your bet:", "Your chips:" and "Won at <casino>:" [design, #4495: in
+  place of the titles read from the original's screen].
 - Six buttons, right-aligned 50 in from the right, under each other [documented], each its
   label and its key [observed: "Hit F)", "Double Down W)", "Split E)", "Switch Hands Q)",
   "Surrender S)", "Stay R)"; keys documented: `_PCButton_F/W/E/Q/S/R`]. While betting the
@@ -196,7 +201,8 @@ numeric encoding.
 - The cards: `NV_Blackjack-Dealer.NIF` (`Dealer_01`–`07`), `-Hand1.NIF` (`Hand1_01`–`07`)
   and `-Hand2.NIF` (`Hand2_01`–`07`), every card at the shoe until its sequence moves it:
   `Hand1_0n` (0.63 s) deals the player's n-th card, `Dealer_0n` the dealer's,
-  `Dealer_Reveal` (0.63 s) turns the hole card, `<x>_Discard` (1.3 s) sweeps a hand away;
+  `Dealer_Reveal` (0.63 s) turns the hole card (NVForever plays it in 0.35 s, then waits
+  0.65 s before the dealer draws or the result shows [design]), `<x>_Discard` (1.3 s) sweeps a hand away;
   the table's `Players_Discard` and `Dealers_Discard` move the shoe [observed: the files'
   sequences and text keys]. A card's face is the shape `<name>:n`, its back the shape under
   `<name>_Back`, its shadow `<name>_Shadow` [observed: the names]; NVForever puts the card's

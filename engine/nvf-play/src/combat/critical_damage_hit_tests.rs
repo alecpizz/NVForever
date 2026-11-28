@@ -411,7 +411,13 @@ fn explosion_falloff_reaches_get_hit_base_weapon_damage() {
     };
 
     // 1. Point-blank blast at target center (0, 80, 50) -> full 100.0 base damage.
-    a.world_mut().resource_mut::<Combat>().boom.push((expl_id, [0.0, 80.0, 50.0], None, Some([0.0, 0.0, 1.0])));
+    a.world_mut().resource_mut::<Combat>().boom.push(QueuedBlast {
+        id: expl_id,
+        at: [0.0, 80.0, 50.0],
+        cause: None,
+        normal: Some([0.0, 0.0, 1.0]),
+        source: None,
+    });
     let close_hits = tick(&mut a);
     assert_eq!(close_hits.len(), 1, "point-blank blast must hit target");
     assert_eq!(target_get(&mut a, "struck.GetHitExtendedFlag 8"), XVal::Num(1.0));
@@ -425,7 +431,13 @@ fn explosion_falloff_reaches_get_hit_base_weapon_damage() {
     assert!((hd_close - bd_close).abs() < 1e-3, "unarmored normal-difficulty health damage must match base ({hd_close} vs {bd_close})");
 
     // 2. Distant blast at (0, 280, 50) (d ~ 200u within radius 400u) -> attenuated base damage (< 100.0).
-    a.world_mut().resource_mut::<Combat>().boom.push((expl_id, [0.0, 280.0, 50.0], None, Some([0.0, 0.0, 1.0])));
+    a.world_mut().resource_mut::<Combat>().boom.push(QueuedBlast {
+        id: expl_id,
+        at: [0.0, 280.0, 50.0],
+        cause: None,
+        normal: Some([0.0, 0.0, 1.0]),
+        source: None,
+    });
     let far_hits = tick(&mut a);
     assert_eq!(far_hits.len(), 1, "distant blast within radius must hit target");
     assert_eq!(target_get(&mut a, "struck.GetHitExtendedFlag 8"), XVal::Num(1.0));

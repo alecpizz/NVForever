@@ -24,6 +24,10 @@ const MOD_SILENCER: u32 = 0x806;
 const VENDOR_BOX: u32 = 0x807;
 const VENDOR_REF: u32 = 0x808;
 const BOOM: u32 = 0x810;
+const MELEE: u32 = 0x811;
+const TEST_PERK: u32 = 0x812;
+const TEST_CHEM: u32 = 0x813;
+const UMON: u32 = 0x14F;
 
 struct Fixture {
     data: GameData,
@@ -77,11 +81,44 @@ fn fixture() -> Fixture {
     let cell = record(b"CELL", 0, 0x820, &[sub(b"EDID", z("ShopCell"))]);
     let children = group(0x820u32.to_le_bytes(), 6, &group(0x820u32.to_le_bytes(), 8, &refr));
     let cells = top(b"CELL", &group(0u32.to_le_bytes(), 2, &group(0u32.to_le_bytes(), 3, &[cell, children].concat())));
+    let umon_data = [
+        0u32.to_le_bytes().as_slice(),
+        &0.0f32.to_le_bytes(),
+        &0u32.to_le_bytes(),
+        &[0xFF; 8],
+        &[0; 4],
+        &[0; 4],
+        &1.0f32.to_le_bytes(),
+        &[0; 24],
+        &[0; 8],
+        &0u32.to_le_bytes(),
+        &(-1i32).to_le_bytes(),
+    ]
+    .concat();
+    let mgef = record(b"MGEF", 0, UMON, &[sub(b"EDID", z("UsageMonitor")), sub(b"DATA", umon_data)]);
+    let chem_enit = [10u32.to_le_bytes().as_slice(), &[0, 0, 0, 0], &0u32.to_le_bytes(), &0.0f32.to_le_bytes(), &0u32.to_le_bytes()].concat();
+    let chem_efit = [30u32.to_le_bytes().as_slice(), &0u32.to_le_bytes(), &60u32.to_le_bytes(), &0u32.to_le_bytes(), &(-1i32).to_le_bytes()].concat();
+    let chem = record(
+        b"ALCH",
+        0,
+        TEST_CHEM,
+        &[
+            sub(b"EDID", z("TestChem")),
+            sub(b"DATA", 0.5f32.to_le_bytes().to_vec()),
+            sub(b"ENIT", chem_enit),
+            sub(b"EFID", UMON.to_le_bytes().to_vec()),
+            sub(b"EFIT", chem_efit),
+        ],
+    );
+    let perk = record(b"PERK", 0, TEST_PERK, &[sub(b"EDID", z("TestPerk")), sub(b"FULL", z("Test Perk")), sub(b"DATA", vec![0, 1, 1, 1, 0])]);
     let bytes = [
         tes4(),
-        top(b"WEAP", &[weap(GUN, "TestPistol", 3), modded_weap(RIFLE, "TestRifle", 75, [MOD_MAGS, MOD_SCOPE, MOD_SILENCER])].concat()),
+        top(b"MGEF", &mgef),
+        top(b"PERK", &perk),
+        top(b"WEAP", &[weap(GUN, "TestPistol", 3), weap(MELEE, "TestKnife", 1), modded_weap(RIFLE, "TestRifle", 75, [MOD_MAGS, MOD_SCOPE, MOD_SILENCER])].concat()),
         top(b"IMOD", &[imod(MOD_MAGS, "ModMags", 75), imod(MOD_SCOPE, "ModScope", 125), imod(MOD_SILENCER, "ModSilencer", 100)].concat()),
         top(b"ARMO", &[armo(PIP, "TestPip", 1 << 6, 0x40), armo(VEST, "TestVest", 1 << 2, 0)].concat()),
+        top(b"ALCH", &chem),
         top(b"CONT", &cont),
         top(b"EXPL", &expl),
         top(b"NPC_", &record(b"NPC_", 0, 0x7, &[sub(b"EDID", z("Player"))])),
@@ -144,7 +181,7 @@ fn the_level_up_menu_and_the_pause_menu_take_the_asks() {
     assert_eq!(g.showoff.b5.levelup.page_request, Some(2));
     assert_eq!(n(&mut g, "SetLevelUpMenuCanExitEarly 1"), 1.0);
     assert!(g.showoff.b5.levelup.can_exit_early);
-    // With a menu open, no second menu [hypothesis].
+    // With a menu open, no second menu (see docs/spec-notes/ext-showoff.md).
     assert_eq!(n(&mut g, "ShowSkillMenu 5"), 0.0);
     g.close_menu();
     // ShowSkillMenu 0 0: no points and not to be shown anyway.
@@ -312,7 +349,98 @@ fn calculated_item_value_includes_weapon_mods_and_live_barter_multipliers() {
     assert!(on(&mut g, player_rifle, "GetCalculatedItemValue 1") < 326.0);
     assert!(on(&mut g, vendor_rifle, "GetCalculatedItemValue 1") > 375.0);
 
-    // Non-item returns -1; Stewie gate remains at 945.
+    // Non-item returns -1; Stewie gate is at 960 (#3183).
     assert_eq!(n(&mut g, "player.GetCalculatedItemValue"), -1.0);
-    assert_eq!(n(&mut g, "GetPluginVersion \"lStewieAl's Tweaks\""), 945.0);
+    assert_eq!(n(&mut g, "GetPluginVersion \"lStewieAl's Tweaks\""), 960.0);
+}
+
+#[test]
+fn show_perk_menu_force_recoil_and_spell_usage_follow_wave4_observations() {
+    let f = fixture();
+    let mut g = game(&f);
+
+    // ShowPerkMenu returns 1 even while SkillMenu is already open [observed:
+    // so_36_show_perk_menu_while_open: 1,1,1], and GetLevelUpMenuPoints 1 0 reads 0
+    // same-frame after ShowPerkMenu 2 [observed: so_26_levelup_perk_menu_points: 1,0,0,1,-1].
+    assert_eq!(n(&mut g, "ShowSkillMenu 3"), 1.0);
+    assert_eq!(n(&mut g, "ShowPerkMenu 2"), 1.0);
+    assert_eq!(n(&mut g, "GetLevelUpMenuPoints 1 0"), 0.0);
+    assert_eq!(n(&mut g, "GetLevelUpMenuPoints 1 1"), 0.0);
+    let ask = g.showoff.b5.levelup.open_as.clone().unwrap();
+    assert!(ask.perks_only);
+    assert_eq!(ask.count, Some(2));
+    assert_eq!(n(&mut g, "SetLevelUpMenuCurrentPage 2"), 1.0);
+    g.close_menu();
+    assert_eq!(n(&mut g, "GetLevelUpMenuPoints 1 0"), -1.0);
+
+    // ForceRecoilAnim returns 1 unarmed/melee and 0 with a ranged gun equipped
+    // [observed: so_33_force_recoil_unarmed_vs_gun: 1,0,0].
+    assert_eq!(n(&mut g, "player.ForceRecoilAnim"), 1.0);
+    assert_eq!(n(&mut g, "player.ForceHitReaction"), 0.0);
+    q(&mut g, "player.AddItem TestPistol 1 1\nplayer.EquipItem TestPistol 0 1");
+    assert_eq!(n(&mut g, "player.ForceRecoilAnim"), 0.0);
+    q(&mut g, "player.AddItem TestKnife 1 1\nplayer.EquipItem TestKnife 0 1");
+    assert_eq!(n(&mut g, "player.ForceRecoilAnim"), 1.0);
+    q(&mut g, "player.UnequipItem TestKnife 0 1");
+    assert_eq!(n(&mut g, "player.ForceRecoilAnim"), 1.0);
+
+    // GetSpellUsageNumEx returns 0 before ingestion and usage monitor magnitude (30)
+    // after 1 use [observed: so_35_spell_usage_num_ex: 0,30].
+    assert_eq!(n(&mut g, "player.GetSpellUsageNumEx TestChem"), 0.0);
+    q(&mut g, "player.AddItem TestChem 1 1\nplayer.EquipItem TestChem 0 1");
+    assert_eq!(n(&mut g, "player.GetSpellUsageNumEx TestChem"), 30.0);
+}
+
+#[test]
+fn show_perk_menu_menu_guard_allows_none_and_levelup_only() {
+    let f = fixture();
+    let mut g = game(&f);
+
+    // (a) Succeeds when no menu is open.
+    assert_eq!(g.menu, None);
+    assert_eq!(n(&mut g, "ShowPerkMenu 0"), 1.0);
+    assert_eq!(g.menu, Some(menus::LEVEL_UP));
+    let ask = g.showoff.b5.levelup.open_as.clone().unwrap();
+    assert!(ask.perks_only);
+    assert_eq!(ask.count, Some(0));
+    g.close_menu();
+    g.showoff.b5.levelup.open_as = None;
+
+    // (b) Succeeds while SkillMenu or LevelUpMenu (both menus::LEVEL_UP) is open.
+    assert_eq!(n(&mut g, "ShowSkillMenu 3"), 1.0);
+    assert_eq!(g.menu, Some(menus::LEVEL_UP));
+    assert_eq!(n(&mut g, "ShowPerkMenu 1"), 1.0);
+    assert_eq!(g.menu, Some(menus::LEVEL_UP));
+    let ask = g.showoff.b5.levelup.open_as.clone().unwrap();
+    assert!(ask.perks_only);
+    assert_eq!(ask.count, Some(1));
+    g.close_menu();
+    g.showoff.b5.levelup.open_as = None;
+
+    g.open_menu(menus::LEVEL_UP);
+    assert_eq!(n(&mut g, "ShowPerkMenu 2"), 1.0);
+    assert_eq!(g.menu, Some(menus::LEVEL_UP));
+    assert_eq!(g.showoff.b5.levelup.open_as.as_ref().and_then(|a| a.count), Some(2));
+    g.close_menu();
+    g.showoff.b5.levelup.open_as = None;
+
+    // (c) Refuses without replacing the open menu when Container, Pip-Boy, or Barter is open,
+    // preserving the active menu and its close event.
+    for other in [fnv_game::runner::CONTAINER_MENU, menus::INVENTORY, menus::STATS, menus::MAP, menus::BARTER] {
+        g.events.clear();
+        g.open_menu(other);
+        assert_eq!(g.menu, Some(other));
+        assert_eq!(n(&mut g, "ShowPerkMenu 1"), 0.0, "must refuse while menu {other} is open");
+        assert_eq!(g.menu, Some(other), "menu {other} must not be overwritten");
+        assert!(g.showoff.b5.levelup.open_as.is_none(), "levelup.open_as must stay untouched");
+        assert!(
+            !g.events.iter().any(|e| matches!(e.kind, fnv_game::trace::EventKind::MenuOpened { menu: menus::LEVEL_UP })),
+            "must not emit MenuOpened(LEVEL_UP) while menu {other} is open"
+        );
+        g.close_menu();
+        assert!(
+            g.events.iter().any(|e| matches!(e.kind, fnv_game::trace::EventKind::MenuClosed { menu } if menu == other)),
+            "closing menu {other} must still emit MenuClosed"
+        );
+    }
 }

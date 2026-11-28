@@ -48,6 +48,13 @@ pub const LIMB_CONDITIONS: std::ops::RangeInclusive<u16> = 25..=31;
 /// one limb from the Pip-Boy (`Mods::limb`), that limb gets the whole amount.
 pub const PARTS_LIMB_SHARE: f64 = 1.0 / 6.0;
 
+/// Health a second that one point of a regeneration's magnitude gives back
+/// ([`regenerates`]: Rad Child's 2, 4, 6 and 8 at the stages of radiation sickness, Solar
+/// Powered's 1): the magnitude per real second, a little every frame [observed:
+/// obs284_rad_child_regen, obs284_stage250]. Applied where the effect ticks
+/// ([`Game::tick_change_at`]), so saves hold magnitudes.
+pub const REGENERATION_RATE: f64 = 1.0;
+
 /// The settings of potency and addiction, with the GECK wiki's defaults [documented:
 /// Ingestible Settings, Addiction Formula].
 pub const SETTINGS: [(&str, f64); 5] = [
@@ -65,7 +72,9 @@ pub enum ChangeKind {
     Modifier,
     /// No Recover, duration 0 (or an ability): restored or damaged once, at the start.
     Once,
-    /// No Recover, a duration: `amount` per second while it lasts.
+    /// No Recover, a duration: `amount` per second while it lasts. On a permanent effect
+    /// a regeneration ([`regenerates`]): `amount` × [`REGENERATION_RATE`] per second while
+    /// it is active.
     PerSecond,
 }
 
@@ -130,6 +139,18 @@ fn floored(code: u16) -> bool {
     (5..=11).contains(&code) || (32..=45).contains(&code)
 }
 
+/// Whether a base effect that restores `code` acts over and over while a permanent effect
+/// (an ability, a stage of radiation sickness) is active: a Value Modifier on Health with
+/// No Duration, without Recover, neither Hostile nor Detrimental [hypothesis; aid-items.md
+/// §3]. In the masters that is one base effect, `Regen` ("Regeneration"), whose users'
+/// own words ask for it ("you will regenerate more and more health", "slowly regenerate
+/// lost Health") [observed: FalloutNV.esm and the add-ons]. The plain "Restore Health"
+/// (no such flag) and the 10,000 damage of the fatal stages stay at once.
+pub fn regenerates(m: &MagicEffectDef, code: u16) -> bool {
+    const UNWANTED: u32 = MagicEffectDef::RECOVER | MagicEffectDef::HOSTILE | MagicEffectDef::DETRIMENTAL;
+    m.archetype == ARCHETYPE_VALUE_MODIFIER && code == crate::actor_values::HEALTH && m.has(MagicEffectDef::NO_DURATION) && !m.has(UNWANTED)
+}
+
 /// The value change of one effect item, or `None` when its base effect changes no actor
 /// value (another archetype, or no actor value named). The EFIT's actor value is used,
 /// else the MGEF's [hypothesis; aid-items.md §2]. `potency` multiplies the magnitude of
@@ -159,6 +180,8 @@ pub fn value_change(m: &MagicEffectDef, e: &EffectItem, potency: f64, permanent:
     let amount = sign * if harmful { magnitude } else { (magnitude * potency + 1e-9).floor() };
     let kind = if m.has(MagicEffectDef::RECOVER) && m.archetype != ARCHETYPE_LIMB_CONDITION {
         ChangeKind::Modifier
+    } else if permanent && regenerates(m, code) {
+        ChangeKind::PerSecond
     } else if e.duration == 0 || permanent {
         ChangeKind::Once
     } else {
@@ -615,7 +638,10 @@ impl Game<'_> {
     }
 
     /// One frame of an effect that changes a value by the second: the share of the
-    /// seconds from `before` to its elapsed time that lie inside its duration.
+    /// seconds from `before` to its elapsed time that lie inside its duration. A permanent
+    /// one (a regeneration, [`regenerates`]) has no duration: all the seconds count, at
+    /// [`REGENERATION_RATE`], on a living actor that is hurt [hypothesis: the dead do not
+    /// regenerate].
     /// `hint` is the effect's position, if known (checked by id): one lookup serves the
     /// whole tick (#1389); the change is written back by id again, as changing the value
     /// can run scripts that move the effect.
@@ -626,15 +652,30 @@ impl Game<'_> {
         if c.kind != ChangeKind::PerSecond {
             return;
         }
-        let seconds = e.elapsed.min(e.duration) - before.min(e.duration);
+        let (target, caster, permanent) = (e.target, e.caster, e.permanent);
+        let seconds = if permanent { (e.elapsed - before) * REGENERATION_RATE } else { e.elapsed.min(e.duration) - before.min(e.duration) };
         if seconds <= 0.0 {
             return;
         }
-        let (target, caster) = (e.target, e.caster);
+        if permanent && (self.is_dead(target) || fa::damage(self, target, c.code) <= 0.0) {
+            return;
+        }
         let amount = c.amount * seconds;
         self.change_value(target, c.code, amount, c.parts, c.limb, caster);
         c.applied += amount;
         self.set_change_at(id, Some(i), c);
+    }
+
+    /// After a load: a regeneration saved as one restoration at the start (before #3471)
+    /// goes on by the second, rather than waiting for its stage to be entered again.
+    pub(crate) fn renew_regenerations(&mut self) {
+        for i in 0..self.effects.len() {
+            let e = &self.effects[i];
+            let Some(c) = e.change.filter(|c| e.permanent && c.kind == ChangeKind::Once) else { continue };
+            if self.magic_effect_def(e.effect).is_some_and(|m| regenerates(&m, c.code)) {
+                self.effects[i].change = Some(ValueChange { kind: ChangeKind::PerSecond, applied: 0.0, ..c });
+            }
+        }
     }
 
     /// Addictions are held back while their chem is active, and come back when it ends.
@@ -727,6 +768,24 @@ mod tests {
         // The EFIT's actor value, else the MGEF's.
         assert_eq!(value_change(&mgef(0, 0, Some(16)), &item(1, 0, None), 1.0, false).unwrap().code, 16);
         assert_eq!(value_change(&mgef(0, 0, Some(16)), &item(1, 0, Some(20)), 1.0, false).unwrap().code, 20);
+    }
+
+    /// #3471: only a permanent "Regeneration" effect (Health, No Duration, no Recover,
+    /// harmless) goes by the second; the rest of a permanent effect's restorations and
+    /// damage stay at once, and so does the same base effect cast once.
+    #[test]
+    fn only_a_permanent_regeneration_goes_by_the_second() {
+        let n = MagicEffectDef::NO_DURATION;
+        let kind = |flags: u32, av: u16, permanent: bool| value_change(&mgef(0, flags, Some(av)), &item(6, 0, Some(av)), 1.0, permanent).unwrap().kind;
+        assert_eq!(kind(n, 16, true), ChangeKind::PerSecond);
+        assert_eq!(kind(n, 16, false), ChangeKind::Once);
+        // "Restore Health" (GhoulRadHeal), the fatal stages' damage, a drain, another value.
+        assert_eq!(kind(0, 16, true), ChangeKind::Once);
+        assert_eq!(kind(H | D, 16, true), ChangeKind::Once);
+        assert_eq!(kind(n | D, 16, true), ChangeKind::Once);
+        assert_eq!(kind(n | H, 16, true), ChangeKind::Once);
+        assert_eq!(kind(n, 15, true), ChangeKind::Once);
+        assert_eq!(kind(n | R, 16, true), ChangeKind::Modifier);
     }
 
     #[test]

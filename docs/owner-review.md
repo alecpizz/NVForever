@@ -176,6 +176,13 @@ the bullet and note the ruling in the spec it links to.
     into fights you start (they join once the other side fights back), say where.
     Observer check 217 asks the original. ([combat-ai §10.3](design/combat-ai.md))
 
+- **While VATS targets are chosen, world sounds and voices slow only as far as while
+  VATS fires (0.71 speed), no longer to 0.4 (#3784).** A player took 17 s to mark in the
+  NCRCF fight and read the voices, played more than an octave down all that time, as
+  broken sound. Your "more drawn out and lower pitch like the base game" still holds;
+  rule otherwise for the old 0.4 drone, or for silence (or ducking) while marking.
+  [docs/design/vats-mode.md](design/vats-mode.md) §4.
+
 ## Tier 2: movement and controls feel
 
 - **Harmless authored drops without Allow Falls (#2532).** [design, #2532]
@@ -322,6 +329,35 @@ the bullet and note the ruling in the spec it links to.
 
 ## Tier 3: rules where we chose to differ, or that the original has no answer for
 
+- **Killing soldiers of a side you started a fight with costs karma (#3401).** [design:
+  your earlier ask that killing innocents cost karma] A Neutral NPC killed in a fight the
+  player started is a murder, −25 karma each (a quarter of `fKarmaModKillingEvilActor`).
+  Legion soldiers are Neutral in the data (karma 0; VCaesarsLegionFaction has no Evil
+  flag), so opening fire on Nipton's Legion costs 25 karma per legionary, while Vulpes
+  (Very Evil) gives +100. Players on Discord and in #3401 expect no karma for Neutral
+  enemies, as they believe the original does (not observed yet). Choices: (a) keep it;
+  (b) a Neutral NPC already fighting the player when it dies is no murder, whoever
+  started the fight, which keeps the cost for shooting bystanders; (c) Neutral kills give
+  no karma at all, as HelpKarma's rule reads. Until you rule, (a) stays
+  ([crime-karma §4](spec-notes/crime-karma.md)).
+- **Chinese and other multi-byte game text, and a bundled font (#1443 step 4).** [design,
+  #1443] NVForever's own words have a Simplified Chinese file (`lang/zh.toml`) and the
+  menus draw it with a CJK font only when the system has one or `[Interface] CjkFontPath`
+  names one; nothing is bundled. Game text in Chinese needs plugins in a multi-byte
+  encoding (`[Text] CodePage=936` reads GBK/GB18030; which encoding community
+  translations use is not known) and the game's 256-glyph `.fnt` fonts cannot draw it.
+  Nothing more is built until you choose: (a) leave it as now (a font the player
+  supplies), (b) bundle an open-licence CJK font (about 10-20 MB per weight; licence and
+  size to pick), or (c) also draw every game-font text through it when the code page is
+  936. ([fonts §2](spec-notes/fonts.md), lang/README.md "Simplified Chinese and fonts")
+- **Switching the game's language means another game folder (#1443 step 2).** [design,
+  #1443] A language is a different set of data files, and Steam keeps one install of the
+  game, so a second language is a copy of the folder. The launcher's Game folder page
+  already restarts into another folder; no in-game Language-of-the-game row is built (the
+  settings page's Language row switches NVForever's own words live). Keep it in the
+  launcher, or add an in-game row that lists game folders and restarts into one?
+  (lang/README.md, `crates/nvf-launcher` Game folder page)
+
 - **Saving while a mod's temporary clone is placed (#3147).** [design, #3147] While a
   reference whose base was made by `TempCloneForm` is alive, every save is refused
   whole (`Game::checked_snapshot`; a failed save now says so in a corner message). A mod
@@ -341,13 +377,12 @@ the bullet and note the ruling in the spec it links to.
   a mean bone-weight share of `PART_TRIANGLE_SHARE = 0.5`, then filled at the same mask
   opacity as whole parts. A different threshold changes the boundary, not its strength;
   coarse meshes may need finer clipping. [Classic VATS §12](design/vats-classic.md#12-the-selected-part-lit-on-the-target-2026-11-10).
-- **SayTo's "no target look" flag turns nobody (#2796).** [hypothesis, #2796] A SayTo with
-  `noTargetLookFlag` 1 now turns neither the speaker nor the target, so Curtis talks into
-  his radio in the McCarran tower without turning to the player below. Without the flag
-  the speaker still turns to whom it talks (your 2026-10-11 rule). This changes the 22
-  shipped SayTo calls to the player that carry the flag (the monorail guards would warn
-  you without turning). The narrower reading, the speaker stays only when the target is
-  the player, is a one-line change. ([dialogue-play §9.2](design/dialogue-play.md))
+- **SayTo's "no target look" flag turns the speaker again (#3989).** [observed, check 218]
+  The original turns a standing speaker to its target with the flag as without it; only
+  the target is not made to look. NVForever now does the same, so Curtis may turn to the
+  player for his radio call in the McCarran tower again (#2796), until what keeps him
+  still in the original (his package or idle there, check 218's open part) is matched.
+  ([dialogue-play §9.2](design/dialogue-play.md))
 - **Hold CLAMP effect idles (#2685).** [design, #2685] `HOLD_CLAMP_EFFECT_IDLES` keeps
   a CLAMP actor idle with material/emitter tracks at its exact end until replacement or
   stop, overriding repeat counts. This keeps attached chamber effects and pod glow;

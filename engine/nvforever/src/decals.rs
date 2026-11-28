@@ -51,6 +51,7 @@ use fnv_combat::rng::SplitMix;
 use fnv_sim::FormId;
 use nvf_assets::model::ModelCtx;
 use nvf_play::combat::{Combat, ImpactFx};
+use nvf_play::phys::PhysState;
 use nvf_play::sfx::Sfx;
 use bevy::mesh::skinning::SkinnedMesh;
 use nvf_assets::actor::{skin_weights, LimbShape};
@@ -199,6 +200,7 @@ type DrawnShape = (&'static RefVisual, &'static LimbShape, &'static Mesh3d, Opti
 fn place(
     mut commands: Commands,
     mut landed: MessageReader<ImpactFx>,
+    phys: Option<Res<PhysState>>,
     sfx: Option<Res<Sfx>>,
     mut models: ModelCtx,
     mut materials: ResMut<Assets<ForwardDecalMaterial<StandardMaterial>>>,
@@ -365,7 +367,13 @@ fn place(
                 alpha_mode: AlphaMode::Blend,
                 ..default()
             },
-            extension: ForwardDecalMaterialExt { depth_fade_factor: if hit.actor.is_some() { data.depth.clamp(1.0, ACTOR_DEPTH) } else { data.depth.max(MIN_DEPTH) } },
+            extension: ForwardDecalMaterialExt {
+                depth_fade_factor: if hit.actor.is_some() { data.depth.clamp(1.0, ACTOR_DEPTH) } else { data.depth.max(MIN_DEPTH) },
+                // A placed pool can have a thin physics volume above its bed. Its
+                // visible surface still refracts marks deeper than the volume [design].
+                before_transmission: hit.actor.is_none()
+                    && phys.as_ref().and_then(|p| p.world.water_surface_at(point.x, point.y)).is_some_and(|height| point.z < height),
+            },
         });
         let side = data.side(st.rng.next_f32());
         let side = if hit.actor.is_some() { side.min(ACTOR_MAX_SIDE) } else { side };
@@ -655,6 +663,46 @@ mod tests {
         let material = world.resource::<Assets<ForwardDecalMaterial<StandardMaterial>>>().get(handle).unwrap();
         assert_eq!(material.extension.depth_fade_factor, 9.0);
         material.base.clone()
+    }
+
+    #[test]
+    fn submerged_world_hits_are_included_in_the_refraction_source() {
+        use fnv_collide::{CollisionObject, Iso, Motion, Shape};
+        use fnv_phys::{RefPose, WaterArea};
+
+        let (_inputs, mut world) = bc5_fixture::inputs();
+        world.insert_resource(owned_sfx());
+        world.init_resource::<Decals>();
+        world.init_resource::<Messages<ImpactFx>>();
+        world.init_resource::<Assets<ForwardDecalMaterial<StandardMaterial>>>();
+        world.init_resource::<PhysState>();
+        world.spawn((WorldRoot, GlobalTransform::IDENTITY));
+
+        let routes_before_water = |world: &mut World| {
+            emit_decal(world, None, false);
+            let entity = world.resource::<Decals>().live.back().unwrap().entity;
+            let handle = &world.get::<Decal>(entity).unwrap().material;
+            let material = world.resource::<Assets<ForwardDecalMaterial<StandardMaterial>>>().get(handle).unwrap();
+            material.extension.before_transmission
+        };
+        // The receiver is at (5, 6, 7). Equality leaves it in the ordinary pass.
+        for (surface, before_water) in [(Some(7.0), false), (Some(8.0), true), (None, false)] {
+            world.resource_mut::<PhysState>().world.set_water(WaterArea::Exterior(0, 0), surface);
+            assert_eq!(routes_before_water(&mut world), before_water);
+        }
+
+        let pool = CollisionObject {
+            node: None, node_block: 0, node_transform: Iso::IDENTITY, body_transform: Iso::IDENTITY,
+            motion: Motion::Static, layer: fnv_phys::layers::WATER, mass: 0.0, friction: 0.0, restitution: 0.0,
+            shape: Shape::Box { half_extents: [4.0, 4.0, 0.5] }.into(), shell: 0.0, material: None, wind: false,
+        };
+        // The bed is below the phantom bottom at 9.5. Moving the same pool off
+        // the receiver distinguishes its footprint from an unbounded water plane.
+        for (x, before_water) in [(5.0, true), (25.0, false)] {
+            let pose = RefPose { form_id: 0x11, position: [x, 6.0, 10.0], rotation: Iso::IDENTITY.rotation, scale: 1.0 };
+            world.resource_mut::<PhysState>().world.add_placed_water(&pose, std::slice::from_ref(&pool));
+            assert_eq!(routes_before_water(&mut world), before_water);
+        }
     }
 
     #[test]

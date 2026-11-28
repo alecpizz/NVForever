@@ -35,6 +35,15 @@ fn hide_flag(a: &Args, i: usize) -> bool {
 pub const ADDED_CONDITION: f32 = 0.999;
 
 pub fn add_item(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
+    // Muted while co-op replays claimed stages: given live already, or a scene for a
+    // player who wasn't there (`crate::coop_joint`) [design].
+    if g.coop_replaying && ctx.subject() == Ok(FormId::PLAYER_REF) {
+        return none();
+    }
+    story_items(g, ctx, |g| add_item_now(g, ctx, a))
+}
+
+fn add_item_now(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
     let to = ctx.subject()?;
     let count = a.int(1)?;
     let silent = hide_flag(a, 2);
@@ -91,6 +100,10 @@ pub fn review_equipment(g: &mut Game, actor: FormId) {
 /// caps with 0 left both counts as they were and the next line ran]; Loyal's reward line
 /// (INFO 0x0010A1BF) passes one when Nellis' arrays are not all fixed (#1113).
 pub fn remove_item(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
+    story_items(g, ctx, |g| remove_item_now(g, ctx, a))
+}
+
+fn remove_item_now(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
     let from = ctx.subject()?;
     let count = a.int(1)?;
     if count == 0 {
@@ -131,12 +144,43 @@ pub fn get_item_count(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String
 /// Ringo's Caravan Deck relies on it: its OnAdd moves the spare deck's 54 cards to the
 /// player with RemoveAllItems and each card's OnAdd runs AddCardToPlayer, caravan.md §2].
 pub fn remove_all_items(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
+    let to_player = a.opt_form(0) == Some(FormId::PLAYER_REF);
+    no_hand_out(g, to_player, |g| story_items(g, ctx, |g| remove_all_items_now(g, ctx, a)))
+}
+
+/// Co-op: a container that gives the player everything it holds (a checkpoint giving the
+/// player's own items back: Dead Money's SCPT 0x01013FB4, a casino's door) hands the
+/// guests nothing (`crate::coop_rewards`): what it gives was the player's (
+/// the way out of the Sierra Madre handed the host's own items out as NVDLC01MQ03's)
+/// [design].
+fn no_hand_out(g: &mut Game, to_player: bool, f: impl FnOnce(&mut Game) -> Result<Value, String>) -> Result<Value, String> {
+    let on = g.coop_rewards.on;
+    if to_player {
+        g.coop_rewards.on = false;
+    }
+    let r = f(g);
+    g.coop_rewards.on = on;
+    r
+}
+
+fn remove_all_items_now(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
     let from = ctx.subject()?;
     let silent = hide_flag(a, 2);
     let keep_owner = a.num_or(1, 0.0) != 0.0;
     let mut added = Vec::new();
     let stacks = match a.opt_form(0) {
         Some(to) => {
+            if to == FormId::PLAYER_REF && !g.coop_guest && g.coop_checkpoint_holds.remove(&from) {
+                g.coop_checkpoints.push((from, -1, None, true));
+            }
+            // Co-op: the player's whole gear put away (Dead Money's bunker trap, SCPT
+            // 0x0100C59E `player.RemoveAllItems` into 0x0100EFCC): every guest
+            // hands over its own the same, and gets it back when the container gives the
+            // host's back (above) [design: the script names the player only; each player].
+            if from == FormId::PLAYER_REF && to != FormId::PLAYER_REF && !g.coop_guest && g.coop_effects.is_some() {
+                g.coop_checkpoints.push((to, -1, None, false));
+                g.coop_checkpoint_holds.insert(to);
+            }
             let moved = g.world.transfer_all_owned(from, to, keep_owner).map_err(|e| e.to_string())?;
             for &(item, count) in &moved {
                 g.emit(EventKind::ItemAdded { to, item, count, silent });
@@ -185,6 +229,9 @@ pub fn equip_item(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
     if !e.consumed && hide_flag(a, 1) {
         g.world.lock_equip(actor, item, Some(EquipLock::NoUnequip)).map_err(|e| e.to_string())?;
     }
+    if !e.consumed && actor == FormId::PLAYER_REF {
+        g.script_worn.insert(item, hide_flag(a, 1));
+    }
     for u in e.unequipped {
         g.item_event(actor, u, event::ON_UNEQUIP, Some(Value::Ref(actor.0)));
     }
@@ -218,11 +265,34 @@ pub fn equip_item(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
 pub fn unequip_item(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
     let actor = ctx.subject()?;
     let item = a.form(0)?;
+    // Scripted UnequipItem dispatches ShowOff:OnPreActivateInventoryItemAlt (with
+    // bEquipping = 1) and honors SetFunctionValue 0 veto [observed: 2026-11-24,
+    // Fallout: New Vegas 1.4.0.525, xNVSE 6.4.9, ShowOffNVSE 184, GSDocMitchellHouse
+    // (0x00103DF9), 10 official base masters,
+    // `tools/capture/nvse/catalogs/wave6d1_pre_activate_inv_alt_unequip.json` probes
+    // `w6d1_15_pre_activate_inv_aid_and_unequip` and
+    // `w6d1p3_15_unequip_alt_beq_and_veto`: `pre=1|veto(eq=1,n=1,bEq=1)|alw(eq=0,n=2,bEq=1)`;
+    // no DLL, PDB, or third-party source consulted].
+    if g.handled(crate::nvse_showoff::ON_PRE_ACTIVATE_INVENTORY_ITEM_ALT)
+        && g.world.get(actor).ok().and_then(|s| s.inventory.as_ref()).is_some_and(|i| i.is_equipped(item))
+        && !g.pre_activate_inventory_item_alt(actor, item, 0, true)
+    {
+        return none();
+    }
     if g.world.equip_lock(actor, item) == Some(EquipLock::NoUnequip) {
         g.world.lock_equip(actor, item, None).map_err(|e| e.to_string())?;
     }
+    // xNVSE OnActorUnequip / OnUnequip fires PRE-unequip (`GetEquipped == 1`) with null
+    // calling reference (`GetSelfAlt == 0`) [observed: `w6d1_08_on_actor_equip_unequip_aliases`].
+    let was_equipped = g.world.get(actor).ok().and_then(|s| s.inventory.as_ref()).is_some_and(|i| i.is_equipped(item));
+    if was_equipped {
+        g.dispatch_event("onactorunequip", vec![fnv_script::vm::XVal::Ref(actor.0), fnv_script::vm::XVal::Ref(item.0)], None);
+    }
     if g.world.unequip(actor, item).map_err(|e| e.to_string())? {
-        g.item_event(actor, item, event::ON_UNEQUIP, Some(Value::Ref(actor.0)));
+        g.item_block_only(actor, item, event::ON_UNEQUIP, Some(Value::Ref(actor.0)));
+    }
+    if actor == FormId::PLAYER_REF {
+        g.script_worn.remove(&item);
     }
     if hide_flag(a, 1) {
         g.world.lock_equip(actor, item, Some(EquipLock::NoEquip)).map_err(|e| e.to_string())?;
@@ -237,6 +307,16 @@ pub fn unequip_item(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> 
 pub fn get_equipped(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
     let actor = ctx.subject()?;
     let wanted = items(g, a.form(0)?);
+    // A co-op guest's shot, run as the player's: the weapon it was fired with
+    // is what the player has equipped as far as weapons go.
+    if let Some(w) = g.shot_for_player.filter(|_| actor == FormId::PLAYER_REF) {
+        if wanted.contains(&w) {
+            return yes(true);
+        }
+        if wanted.iter().all(|&i| g.world.forms.item(i).is_some_and(|f| f.kind == fnv_sim::forms::ItemKind::Weapon)) {
+            return yes(false);
+        }
+    }
     let s = g.world.get(actor).map_err(|e| e.to_string())?;
     yes(s.inventory.as_ref().is_some_and(|i| wanted.iter().any(|&w| i.is_equipped(w))))
 }
@@ -337,9 +417,31 @@ pub fn form_type_code(sig: &[u8; 4]) -> Option<i32> {
 /// items. With a target they move there keeping their condition (and their owner with
 /// the retain flag, otherwise the owner is cleared); without one they are destroyed.
 pub fn remove_all_typed_items(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
+    let to_player = a.opt_form(0) == Some(FormId::PLAYER_REF);
+    no_hand_out(g, to_player, |g| story_items(g, ctx, |g| remove_all_typed_items_now(g, ctx, a)))
+}
+
+fn remove_all_typed_items_now(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
     let from = ctx.subject()?;
-    let except = a.opt_form(4).map(|l| super::refs::list_members(g, l)).unwrap_or_default();
-    let how = RemoveAll { to: a.opt_form(0), retain: a.num_or(1, 0.0) != 0.0, silent: hide_flag(a, 2), code: a.num(3).map(|c| c as i32).unwrap_or(-1), except, quest_items: false, unplayable: false };
+    let to = a.opt_form(0);
+    let code = a.num(3).map(|c| c as i32).unwrap_or(-1);
+    let except_list = a.opt_form(4);
+    if code != 0 {
+        // Co-op: the player's things put away by type (a checkpoint's container) are put
+        // away for the guests too.
+        if let Some(to) = to.filter(|_| from == FormId::PLAYER_REF && !g.coop_guest) {
+            g.coop_checkpoints.push((to, code, except_list, false));
+            g.coop_checkpoint_holds.insert(to);
+        }
+        // The checkpoint giving the player's things back by type, as the Fort's gate does
+        // (`<container>.RemoveAllTypedItems player 1 1`, SCPT 0x00164763): the
+        // guests get theirs back too.
+        if to == Some(FormId::PLAYER_REF) && !g.coop_guest && g.coop_checkpoint_holds.remove(&from) {
+            g.coop_checkpoints.push((from, -1, None, true));
+        }
+    }
+    let except = except_list.map(|l| super::refs::list_members(g, l)).unwrap_or_default();
+    let how = RemoveAll { to, retain: a.num_or(1, 0.0) != 0.0, silent: hide_flag(a, 2), code, except, quest_items: false, unplayable: false };
     remove_all(g, from, &how)?;
     none()
 }
@@ -403,6 +505,10 @@ pub fn remove_all(g: &mut Game, from: FormId, how: &RemoveAll) -> Result<(), Str
 /// leveled list resolves as AddItem, its items at the given condition rather than the
 /// list's own (`World::add_item_at_condition`).
 pub fn add_item_health_percent(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
+    story_items(g, ctx, |g| add_item_health_percent_now(g, ctx, a))
+}
+
+fn add_item_health_percent_now(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
     let to = ctx.subject()?;
     let item = a.form(0)?;
     let count = a.int(1)?;
@@ -482,6 +588,8 @@ pub fn is_weapon_skill_type(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, 
 pub fn reset_inventory(g: &mut Game, ctx: &Ctx, _a: &Args) -> Result<Value, String> {
     let r = ctx.subject()?;
     g.world.reset_inventory(r).map_err(|e| e.to_string())?;
+    g.clear_npc_weapon_mods_roll(r);
+    g.maybe_apply_npc_weapon_mods(r);
     none()
 }
 
@@ -545,6 +653,24 @@ pub fn add_item_to_leveled_list(g: &mut Game, _ctx: &Ctx, a: &Args) -> Result<Va
     let condition = a.num(4).ok().map(|h| (h / 100.0).clamp(0.0, 1.0) as f32).filter(|c| *c < 1.0);
     g.world.add_to_leveled_list(list, fnv_sim::forms::LeveledEntry { level, item, count, condition }).map_err(|e| e.to_string())?;
     none()
+}
+
+/// Run an item call, recording what it changed of the player's items as the host's story
+/// when it counts (`crate::coop_story`).
+fn story_items(g: &mut Game, ctx: &Ctx, f: impl FnOnce(&mut Game) -> Result<Value, String>) -> Result<Value, String> {
+    // Any call may change the player's items (`container.RemoveAllItems player` gives
+    // to it), so every one is watched while the story counts.
+    if !g.story_counts(ctx) {
+        return f(g);
+    }
+    let before = crate::coop_story::player_groups(g);
+    let r = f(g);
+    let after = crate::coop_story::player_groups(g);
+    if before != after {
+        g.coop_story.record_items(&before, &after);
+        tracing::info!("co-op story: {} changed the player's items: {} kinds now recorded", ctx.unit, g.coop_story.items.len());
+    }
+    r
 }
 
 #[cfg(test)]

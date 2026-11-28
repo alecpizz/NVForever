@@ -417,6 +417,15 @@ class TourTest(unittest.TestCase):
             "at": "WastelandNV cell -17,1 Goodsprings, position 1, 2, 3",
         })
 
+    def test_mesh_allocator_fields_read(self):
+        # #3057: the mesh allocator's work over the window.
+        line = self.sample(5, 10000).replace("projectiles 0", "projectiles 0, window 2004 ms, mesh alloc 12.5 ms, "
+                                             "mesh alloc worst 8.25 ms, meshes written 340, meshes freed 210, "
+                                             "slabs made 3, slab mb 24.0, slab mb copied 16.0")
+        s = tour.parse_sample(line)
+        self.assertEqual((s["mesh alloc"], s["mesh alloc worst"], s["meshes written"], s["meshes freed"]), (12.5, 8.25, 340, 210))
+        self.assertEqual((s["slabs made"], s["slab mb"], s["slab mb copied"]), (3, 24.0, 16.0))
+
     def test_a_window_across_a_phase_change_is_flagged(self):
         """Issue #1415: a window a loading screen came down in says so; the old line (no
         window fields) still reads."""

@@ -109,11 +109,28 @@ fn the_fly_camera_place() {
     assert!(g.ui.camera.tfc_set, "the engine is told");
     q(&mut g, "SetTFCAngle Z 400\nSetTFCAngle X -100");
     assert_eq!((n(&mut g, "GetTFCAngle Z"), n(&mut g, "GetTFCAngle X")), (400.0, -100.0));
-    // The raw rotation: X in radians, Y always 0 [observed: sup3 cam.setrot.*].
+    // The raw rotation: X and Z in radians, Y always 0 [observed: sup3 cam.setrot.*,
+    // 2026-11-24 w6_t1_12_sup_tfc_and_mouse & w6_t1_12b_sup_tfc_rot_set].
     q(&mut g, "SetTFCRot X 0.5\nSetTFCRot Y 1");
     assert!((n(&mut g, "GetTFCAngle X") - 28.6479).abs() < 1e-4);
     assert_eq!((n(&mut g, "GetTFCRot X"), n(&mut g, "GetTFCRot Y"), n(&mut g, "GetTFCAngle Z")), (0.5, 0.0, 400.0));
-    // The Ex forms write the script's variables [documented].
+    // SetTFCAngleEx 15 90 -> GetTFCRotEx returns (0.2618, 1.5708) [observed: w6_t1_12_sup_tfc_and_mouse].
+    q(&mut g, "SetTFCAngleEx 15 90");
+    let rot_from_ang = s(&mut g, "GetTFCRotEx fA fB\nlet sOut := sv_Construct \"%.4f %.4f\" fA fB\nSetFunctionValue sOut");
+    assert_eq!(rot_from_ang, "0.2618 1.5708");
+    // SetTFCRotEx 0.5 1.0 -> GetTFCRotEx (0.5000, 1.0000), GetTFCAngleEx (28.65, 57.30),
+    // GetTFCRot X/Y/Z (0.5000, 0.0000, 1.0000) [observed: w6_t1_12b_sup_tfc_rot_set].
+    q(&mut g, "SetTFCRotEx 0.5 1.0");
+    let rot_ex = s(
+        &mut g,
+        "GetTFCRotEx fA fB\nGetTFCAngleEx fX fY\nlet sOut := sv_Construct \"%.4f %.4f %.2f %.2f %.4f %.4f %.4f\" fA fB fX fY (GetTFCRot X) (GetTFCRot Y) (GetTFCRot Z)\nSetFunctionValue sOut",
+    );
+    assert_eq!(rot_ex, "0.5000 1.0000 28.65 57.30 0.5000 0.0000 1.0000");
+    // SetTFCRot Z sets Z in radians [hypothesis: symmetric with GetTFCRot Z & SetTFCRotEx].
+    q(&mut g, "SetTFCRot Z 1.5");
+    assert!((n(&mut g, "GetTFCRot Z") - 1.5).abs() < 1e-6);
+    assert!((n(&mut g, "GetTFCAngle Z") - 1.5_f64.to_degrees()).abs() < 1e-6);
+    // The Ex forms write the script's variables [observed: w6_t1_12_sup_tfc_and_mouse].
     q(&mut g, "SetTFCPosEx 1 2 3\nSetTFCAngleEx 10 20");
     let out = s(&mut g, "GetTFCPosEx fX fY fZ\nGetTFCAngleEx fA fB\nlet sOut := sv_Construct \"%g %g %g %g %g\" fX fY fZ fA fB\nSetFunctionValue sOut");
     assert_eq!(out, "1 2 3 10 20");

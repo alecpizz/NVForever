@@ -205,13 +205,17 @@ impl Ai {
 /// there (a hunter sent after the player would land beside them).
 fn placed_on_an_actor(game: &Game, actor: FormId, def: &PackageDef) -> bool {
     let refs = game.world.placed;
-    let is_actor = |r: FormId| r == FormId::PLAYER_REF || refs.get(r).is_some_and(|p| game.data.actors.contains_key(&p.base));
+    let is_actor = |r: FormId| {
+        r == FormId::PLAYER_REF
+            || refs.get(r).is_some_and(|p| game.data.actors.contains_key(&p.base))
+            || game.world.peek(r).is_some_and(|s| game.data.actors.contains_key(&s.base))
+    };
     if def.ty == PackageType::Guard && def.remain_near_reference() {
         return true;
     }
     match def.location.map(|l| l.kind) {
         Some(LocationKind::NearReference(Some(r))) => is_actor(r),
-        Some(LocationKind::NearLinked) => refs.get(actor).and_then(|p| p.linked).is_some_and(is_actor),
+        Some(LocationKind::NearLinked) => game.linked_ref(actor).is_some_and(is_actor),
         _ => false,
     }
 }

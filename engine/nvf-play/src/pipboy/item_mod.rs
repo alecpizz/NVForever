@@ -94,8 +94,8 @@ const EFFECT_IN: f32 = 15.0;
 pub fn menu_hints(s: &Session) -> [Hint; 2] {
     let chosen = s.selected.checked_sub(1).and_then(|i| s.offer.choices.get(i)).is_some();
     [
-        Hint::new(super::labels::label("sInventoryMod", "Mod"), crate::pad::hint(&[KeyCode::Enter], items_at()), !chosen),
-        Hint::new(super::labels::label("sExit", "Exit"), crate::pad::hint(&[KeyCode::KeyE, KeyCode::Escape], items_at()), false),
+        Hint::new(super::labels::built_in_label("sInventoryMod"), crate::pad::hint(&[KeyCode::Enter], items_at()), !chosen),
+        Hint::new(super::labels::built_in_label("sExit"), crate::pad::hint(&[KeyCode::KeyE, KeyCode::Escape], items_at()), false),
     ]
 }
 
@@ -310,6 +310,7 @@ pub fn keys(
     combat: Option<Res<crate::combat::Combat>>,
     mut sounds: MessageWriter<UiSound>,
     prompt: Res<crate::menu::PromptKeys>,
+    mut touch: crate::maintenance_touch::Requests,
     mut script: Option<ResMut<crate::script::ScriptState>>,
     mut taken: ResMut<super::KeysTaken>,
 ) {
@@ -317,8 +318,9 @@ pub fn keys(
     // Laid out in the Pip-Boy's screen texture, at its size whatever the UI scale (#1631).
     let _canvas = crate::interface::original_units();
     use KeyCode::*;
-    // [design, #2553] Only physical steps take keys, as in super::repair::keys.
-    let mut steps: Vec<_> = aid.read().copied().map(|s| (s, false)).collect();
+    // Only physical steps take keys; aid and touch requests retain their original paths.
+    let mut steps: Vec<(ModInput, Option<crate::maintenance_touch::Request>, bool)> = aid.read().copied().map(|s| (s, None, false)).collect();
+    let mobile = touch.take(crate::maintenance_touch::Kind::Mod);
     let items = pip.open() && pip.page == Page::Items && active.0.as_ref().is_some_and(|m| m.mode == Mode::Inventory);
     if !items {
         if menu.0.take().is_some() {
@@ -331,18 +333,38 @@ pub fn keys(
     }
     let shift = keys.any_pressed([ShiftLeft, ShiftRight]);
     if keys.just_pressed(KeyX) && !shift && !menu.is_open() {
-        steps.push((ModInput::Open, true));
+        steps.push((ModInput::Open, None, true));
     }
     if menu.is_open() {
         for (k, s) in [(&[ArrowUp, KeyW][..], ModInput::Up), (&[ArrowDown, KeyS], ModInput::Down), (&[Enter, NumpadEnter, Space], ModInput::Use), (&[KeyE, Escape], ModInput::Cancel)] {
             if keys.any_just_pressed(k.iter().copied()) {
-                steps.push((s, true));
+                steps.push((s, None, true));
             }
         }
     }
-    for (step, physical) in steps {
+    for request in mobile {
+        use crate::maintenance_touch::Action;
+        let step = match request.action { Action::Select(i) => ModInput::Hover(i), Action::Confirm => ModInput::Use, Action::Cancel => ModInput::Cancel, Action::Scroll(_) => ModInput::Hover(usize::MAX) };
+        steps.push((step, Some(request), false));
+    }
+    for (step, request, physical) in steps {
         if physical && (menu.is_open() || step == ModInput::Open) {
             taken.take();
+        }
+        if let Some(request) = &request {
+            if !crate::maintenance_touch::menu_allows(crate::maintenance_touch::Kind::Mod, script.as_ref().and_then(|s| s.rt.as_ref()).map(|rt| &rt.game)) { continue; }
+            if !request.modding(menu.0.as_ref()) { continue; }
+            let live = current(&active, &sim, combat.as_deref());
+            if menu.0.as_ref().is_none_or(|s| Some(&s.offer) != live.as_ref()) {
+                if let Some(s) = menu.0.as_mut() {
+                    if let Some(offer) = live { s.offer = offer; s.selected = 0; s.first = 0; } else { menu.0 = None; }
+                }
+                continue;
+            }
+            if let crate::maintenance_touch::Action::Scroll(by) = request.action {
+                if let Some(s) = menu.0.as_mut() { s.first = crate::maintenance_touch::scroll(s.first, by, s.offer.choices.len() + 1); }
+                continue;
+            }
         }
         if let ModInput::Click(i) = step {
             info!("pipboy mod: clicked row {i}");
@@ -398,6 +420,8 @@ pub fn keys(
                 if let Some(m) = active.0.as_mut() {
                     if let Err(e) = m.refresh(&mut sim.world) {
                         warn!("pipboy mod: the list: {e:?}");
+                    } else if let Some(rt) = script.as_deref_mut().and_then(|s| s.rt.as_mut()) {
+                        crate::menu::sync_ysi_model(m, &mut rt.game);
                     }
                 }
                 // The menu stays open on the weapon as it is now, the same mod chosen
@@ -444,10 +468,10 @@ pub fn detach(inv: &mut fnv_sim::inventory::Inventory, weapon: FormId, unit: Ext
 pub fn figure(effect: Option<&str>, w: &WeaponStats, condition: f32) -> Option<(&'static str, String, Option<f32>)> {
     let n = |title, v: f32, decimals: bool| Some((title, if decimals { format!("{v:.2}") } else { format!("{v:.0}") }, Some(v)));
     match effect? {
-        "Increase Weapon Damage" => n(super::labels::label("sInventoryDamage", "DAM"), w.base_damage as f32, false),
+        "Increase Weapon Damage" => n(super::labels::built_in_label("sInventoryDamage"), w.base_damage as f32, false),
         "Increase Clip Capacity" => n("Clip", w.clip_size as f32, false),
         "Decrease Spread" => n("Spread", w.min_spread, true),
-        "Decrease Weight" => n(super::labels::label("sInventoryWeightUpper", "WG"), w.weight, true),
+        "Decrease Weight" => n(super::labels::built_in_label("sInventoryWeightUpper"), w.weight, true),
         "Increase Max. Condition" => n("Max CND", w.health as f32, false),
         "Increase Rate of Fire" => n("DPS", super::items::weapon_dps(w, condition), false),
         "Increase Zoom" => n("Zoom", w.sight_fov, false),
@@ -543,7 +567,7 @@ pub fn draw_list(p: &mut ChildSpawnerCommands, c: &mut Ctx, s: &Session, combat:
     let cr = Rect::from_corners(MAIN.min + COMPARE.min, MAIN.min + COMPARE.max);
     let half = cr.width() / 2.0;
     let cards = |p: &mut ChildSpawnerCommands, c: &mut Ctx, y: f32, stat: &Option<(&'static str, String)>| {
-        frame::card(p, c, cr.min.x, y, half - 5.0, super::labels::label("sInventoryCondition", "CND"), "");
+        frame::card(p, c, cr.min.x, y, half - 5.0, super::labels::built_in_label("sInventoryCondition"), "");
         let m = Rect::new(cr.min.x + half - 5.0 - METER.x - 15.0, y + 17.0, cr.min.x + half - 5.0 - 15.0, y + 17.0 + METER.y);
         bar(p, m, cmp.condition, bright);
         let (t, v) = stat.as_ref().map_or(("", ""), |(t, v)| (*t, v.as_str()));
@@ -585,7 +609,7 @@ pub fn compare(s: &Session, w: &WeaponStats) -> Compare {
         if effect.is_some() {
             figure(effect.as_deref(), ws, condition).map(|(t, v, _)| (t, v))
         } else {
-            (ws.base_damage > 0).then(|| (super::labels::label("sInventoryDamage", "DAM"), ws.base_damage.to_string()))
+            (ws.base_damage > 0).then(|| (super::labels::built_in_label("sInventoryDamage"), ws.base_damage.to_string()))
         }
     };
     let after = chosen.map(|ch| w.modded(o.extra.mods ^ mod_flag(ch.slot)));
@@ -660,7 +684,7 @@ mod tests {
         assert_eq!(offer(&bare, &forms, &WeaponStats::default(), GUN, Some(1.0), 0, true), None);
     }
 
-    /// The menu's two hints (#1896): "Mod Enter)" over "Exit E)", the Mod hint dim on the
+    /// The menu's two hints (#1896): "Modify [Enter]" over "Exit [E]", the Mod hint dim on the
     /// weapon's own row and bright on a mod; with a controller A and B.
     #[test]
     fn the_menu_shows_its_mod_and_exit_hints() {
@@ -669,13 +693,13 @@ mod tests {
         let groups = vec![(GUN, on, 1), (MAGS, Extra::default(), 1)];
         let mut s = Session { offer: offer(&groups, &forms, &pistol(), GUN, Some(1.0), 0, true).unwrap(), first: 0, selected: 0 };
         let shown = |s: &Session| menu_hints(s).iter().map(|h| (h.text(), h.dim)).collect::<Vec<_>>();
-        assert_eq!(shown(&s), [("Mod Enter)".to_string(), true), ("Exit E)".to_string(), false)]);
+        assert_eq!(shown(&s), [("Modify [Enter]".to_string(), true), ("Exit [E]".to_string(), false)]);
         s.selected = 1;
-        assert_eq!(shown(&s), [("Mod Enter)".to_string(), false), ("Exit E)".to_string(), false)]);
+        assert_eq!(shown(&s), [("Modify [Enter]".to_string(), false), ("Exit [E]".to_string(), false)]);
         crate::pad::set_labels(crate::pad::Labels::Xbox);
         let keys: Vec<String> = menu_hints(&s).iter().map(|h| h.key.clone()).collect();
         crate::pad::set_labels(crate::pad::Labels::Keys);
-        assert_eq!(keys, ["A)", "B)"]);
+        assert_eq!(keys, ["[A]", "[B]"]);
     }
 
     #[test]

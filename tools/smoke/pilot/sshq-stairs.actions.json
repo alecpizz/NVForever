@@ -1,0 +1,52 @@
+{
+  "format": "fnv.script.actions/1",
+  "title": "Pilot smoke: walk down the Sunset Sarsaparilla HQ's stairs to Allen Marks' holotape and back up",
+  "given": [
+    {
+      "kind": "quest",
+      "quest": "VMS09",
+      "running": false,
+      "completed": false,
+      "stage": 30,
+      "done": [
+        20,
+        30
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "op": "note",
+      "text": "The prize room, its corridor and stairs are navmesh 0x0010489C, which no link joins to the cell's main navmesh 0x0010AF20 (#3473); in the original a follower does not cross there either (observer check 279), a player walks the stairs. A Valuable Lesson's stage 10 is set and, as its stand-in in this chain, the corridor door 0x0010487B and the prize room door 0x00103DF6 are unlocked by script (stage 10 alone left the prize room door locked in the pilot's run, 2026-11-27)."
+    },
+    {
+      "op": "set_stage",
+      "quest": "VMS09a",
+      "stage": 10
+    },
+    {
+      "op": "call",
+      "line": "0010487B.Unlock"
+    },
+    {
+      "op": "call",
+      "line": "00103DF6.Unlock"
+    },
+    {
+      "op": "advance_seconds",
+      "seconds": 1
+    },
+    {
+      "op": "move_player",
+      "to": "placed:SSHQAllenMarksHolo"
+    },
+    {
+      "op": "note",
+      "text": "Back up the stairs to Festus, on the main navmesh."
+    },
+    {
+      "op": "move_player",
+      "to": "placed:NVCRFestus"
+    }
+  ]
+}

@@ -93,8 +93,44 @@ Every stored field in `YuiConfig` has a live engine consumer:
   comment: `"; replace hotkey icons with ycons"`; design: NVForever's own precedence
   keeping `SetItemHotkeyIconPath` above ySI icons, and leaving hotkey icon replacement
   off when `yUI.ini` is absent].
+- `[Sorting and Icons] bEnableCategories` (default `1`, gated by `bSortingIcons`):
+  enables JSON-defined clickable Pip-Boy inventory category folders and nested subfolders
+  declared in `menus/ySI/*.json` `"icons"` entries (`name`, `tab` `0..=4`, `count`,
+  `filename`, `template`, `icon`, and member/child `"category"` links) [documented: yUI
+  v1.4d (`https://www.nexusmods.com/newvegas/mods/74357`), `Data\NVSE\Plugins\yUI.ini`
+  verbatim comment: `"; enable keyring-like clickable categories (this destroys vanilla
+  keyring, so you have to have .json files supplying a new keyring category, i.e.
+  ySI.json)"`; ySI - Sorting Ycons v1.4b (`https://www.nexusmods.com/newvegas/mods/74358`),
+  shipped `menus/ySI/ySI.json` `"icons"` verbatim entries for `(jdc0)` Notes, `(jdd0)`
+  Keyring, and `(jde0)` Caravan Deck, e.g.
+  `{ "priority": 100, "tag": "(jdd0)", "systemcolor": -1, "template": "ySIDefault", "filename": "interface\\icons\\Misc_Keychain.dds", "name": "&-sKeyring;", "tab": 3, "count": 2, "icon": "Interface\\Icons\\PipboyImages\\Items\\item_keyring.dds" }`
+  and member entry
+  `{ "priority": 100, "tag": "(jdd1)", "systemcolor": -1, "template": "ySIDefault", "filename": "interface\\icons\\Misc_Key.dds", "category": "(jdd0)" }`;
+  no plugin DLL or source code consulted].
+  - `[hypothesis]` `count` specifies the minimum number of distinct matching rows needed
+    before a category collapses into a folder row (items below the threshold stay flat at
+    the parent level), and a category folder row's displayed count is the number of
+    distinct matching item rows grouped inside it; exact tie-breaking when two JSON files
+    define conflicting category metadata at equal priority and exact behavior when search
+    is active while categories are enabled are unverified in the original engine.
+  - `[design]` NVForever's own behavior beyond the INI/JSON files: when `yUI.ini`/`ySI.ini`
+    are absent or `bSortingIcons = 0` or `bEnableCategories = 0`, Pip-Boy inventory keeps
+    the vanilla flat tabs and native Misc `Keyring` / `Caravan Cards` folders untouched.
+    When enabled and categories exist for tab `3` (Misc), ySI categories replace the
+    hardcoded Misc folders while continuing to include `AddCardToPlayer` Caravan cards so
+    Caravan Deck rules match them. Categories are ordered deterministically by `(tab, tag)`
+    with built-in fallback labels for missing GMST entities, stable `RowKey::at` keys
+    (`0x8000_0000 | id`), and cycle-protected nested parent->child subfolders (max depth
+    16) navigated via a breadcrumb stack (`Back` row / `Backspace` steps up one level and
+    restores selection to the exited folder). Active search queries at tab root bypass
+    collapsed folders so matching items stay directly selectable. Pip-Boy Repair, ItemMod,
+    and Stats refreshes re-apply `sync_ysi_model` so an open ySI folder keeps its `Back`
+    row, subfolder grouping, and row icons. Inside ySI category folders on Weapons/Apparel
+    tabs, `IM_RepairButton` and `IM_ModButton` remain usable on selected item rows while
+    `_KeyringOpen` / `IM_CancelButton` stays exclusive to vanilla Misc `Keyring` /
+    `Caravan Cards` folders so `IM_RepairButton` and `IM_CancelButton` never overlap.
 
-## Already-avoided / intentionally unbuilt keys
+## Already-avoided keys
 
 Skipped during parsing with no dead struct fields:
 
@@ -103,7 +139,3 @@ Skipped during parsing with no dead struct fields:
   condition bits, `ContainerMenu` lists all rows, and `InventoryMenu` tabline tracks only
   the active tab natively in NVForever) [documented: yUI v1.4d
   `Data\NVSE\Plugins\yUI.ini` comments].
-- `[Sorting and Icons] bEnableCategories`: JSON-defined clickable inventory category
-  folders (`category`/`tab`/`count` entries in `menus/ySI/*.json` replacing the vanilla
-  keyring) are not built in this slice; NVForever keeps its native Misc `Keyring` and
-  `Caravan Cards` folders until a dedicated categories PR is implemented.

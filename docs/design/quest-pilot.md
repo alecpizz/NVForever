@@ -44,7 +44,7 @@ NVFOREVER_HOME=<a folder of its own> nvforever --data <Data> --play --new-game \
 
 | step | in the pilot |
 |---|---|
-| `move_player`, `go_to_cell`, `trigger_enter` | (`go_to_cell` of an exterior cell with no COC marker: its middle, at the middle height of what is placed in it) a walk on the navmesh (`fnv_nav`) on the player's own movement controls, through doors; a long way out of doors is cut to its last 3,000 units (a fast-travel stand-in), only within the player's own worldspace, into the Mojave's or another of the base game's (the Strip, Freeside; never a DLC's), and never past a door whose script runs on activation (it is cut to 3,000 units before that door, or not at all when the way to it is indoors: Lonesome Road's Divide east door takes the player's controls, and Ulysses' trigger beyond it gives them back); also on its own side when the search gives up before an end (Vault 112 to the Jefferson Memorial, past 400,000 triangles) or no navmesh joins the two at all with no locked door met (Rivet City's swing bridge: a `no_navmesh_way` finding); into an interior of the other wastelands, outside a door of it that runs no script when there is one (GNR's back door from Dupont Circle, DuponttoGNRRef, only says it is barred: MQ02GNRBackDoorScript [observed]); a load door into its own worldspace (the Strip's gates) counts as gone through by the jump; never put where it could not walk |
+| `move_player`, `go_to_cell`, `trigger_enter` | (`go_to_cell` of an exterior cell with no COC marker: its middle, at the middle height of what is placed in it) a walk on the navmesh (`fnv_nav`) on the player's own movement controls, through doors; a long way out of doors is cut to its last 3,000 units (a fast-travel stand-in), only within the player's own worldspace, into the Mojave's or another of the base game's (the Strip, Freeside; never a DLC's), and never past a door whose script runs on activation (it is cut to 3,000 units before that door, or not at all when the way to it is indoors: Lonesome Road's Divide east door takes the player's controls, and Ulysses' trigger beyond it gives them back); also on its own side when the search gives up before an end (Vault 112 to the Jefferson Memorial, past 400,000 triangles) or no navmesh joins the two at all with no locked door met (Rivet City's swing bridge: a `no_navmesh_way` finding); into an interior of the other wastelands, outside a door of it that runs no script when there is one (GNR's back door from Dupont Circle, DuponttoGNRRef, only says it is barred: MQ02GNRBackDoorScript [observed]); a load door into its own worldspace (the Strip's gates) counts as gone through by the jump; two walkable areas of one interior that no navmesh link joins, within 48 units on the ground and in height, are stepped across on the player's own movement (SSHQ01's prize room stairs, #3473: the original's followers do not cross there either, observer check 279); never put where it could not walk |
 | `talk`, `player_activate` | walk there, turn the view on it, ask the crosshair (`could_not_target` when it does not take it), activate as E does (a `talk` to a teammate opens its companion wheel: Talk is picked on it, Sarah Lyons in Take it Back!) |
 | `choose`, `wait_talk`, `end_talk` | the dialogue screen's own calls; leaving is by the Goodbye choice with its line heard out (#2157), one whose answer runs no script first (the Gomorrah guard's "Here you go. <Hand over all weapons>" is a Goodbye too: taken to leave, it handed the weapons over outside and the next way in kept the controls the door's script took), Tab on a topic list, `no_way_out` otherwise |
 | `say_info` (campaign) | the player brings the line about: keeps the speaker company, talks to it when it stands silent, picks the choices that lead to the line (`choice_toward`, up to 5 picks deep), or, with no known way, tries the choices on offer one topic at a time (up to 12) |
@@ -53,7 +53,7 @@ NVFOREVER_HOME=<a folder of its own> nvforever --data <Data> --play --new-game \
 | `terminal` | walk there, activate, the screen's own input: password on the hacking page, into the sub menu, the entry |
 | `add_item` to the player (campaign) | taken from whoever holds it in the loaded cells, or where it lies; `item_not_found` and the headless gift otherwise |
 | `X.MoveTo marker` (campaign) | the player goes to the marker and waits there on the Wait menu, an hour at a time, up to 24 hours (the actor counts as there only in the marker's own space: two interiors share coordinates, Dad was taken as at MQ05ControlRoomMarker in PPurity01 from PPurity02); `never_came` otherwise |
-| `package`, `patrol_point`, `dialogue_package` | not carried out: the AI has to do it |
+| `package`, `patrol_point`, `dialogue_package` | not carried out: the AI has to do it. A `patrol_point`, and an actor's `trigger_enter`, is checked afterwards: the actor within 256 units of the point or the trigger's reference within 180 s, else an `ai_not_done` finding (also when the chain ends first) |
 | `call_until` | the console line read each frame until it is not 0, for up to its own `max_frames` (30 minutes at most; the 240 s step limit does not apply): Lonesome Road's end slides take about three minutes |
 | `wait_menu`, `get_menus`, `press_button`, `dismiss_message_boxes` | the game's own menu; a box nobody waits for gets its last shown button after 1.5 s |
 | anything else | the headless step on the running game, counted in the report's `headless` by kind |
@@ -132,7 +132,8 @@ state carries the false alarms a thin `given` brings (§2).
 
 - A terminal opened from a message box button is refused in play (East Pump Station, Vault 34):
   being looked into separately.
-- Melee, cover and reach as the NPCs judge them in fights; `hit` steps.
+- Melee, cover and reach as the NPCs judge them in fights.
+- A `package` step's own end is not checked afterwards (patrols, sandboxes and guards never end; a deadline belongs to the scene).
 - From the batch triage of 2026-11-15 (the pilot's own trouble, not filed as bugs):
   picking a lock within the player's Lockpick skill (The Pitt's mine door); going to,
   talking to or searching the actor who holds a door's key (Pacer's key at the King's
@@ -144,5 +145,4 @@ state carries the false alarms a thin `given` brings (§2).
   walked out on the way to Dean's holotape, then met the theater door at lock level 255); waiting out the end of a fight before activating (ED-E's
   repair box refused "in combat"); the scripted activators near a door taken for its
   switch (the Atomic Wrangler's slot machines).
-- A known-difference list, so that the opening's modal boxes stop showing as divergences.
 - The static sweep (`fnvtool`, #2365 item 5) is its own work.

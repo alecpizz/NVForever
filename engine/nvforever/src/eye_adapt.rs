@@ -61,6 +61,14 @@ const METER_HIGH: f32 = 6.0;
 /// 5 %; counting the brightest tenth, where its neon and lamps lie, it is not lifted;
 /// the original's meter may be a plain average, which bright lights hold up (module note)].
 pub const METER_FILTER: std::ops::RangeInclusive<f32> = 0.10..=1.0;
+/// Bi-directional camera auto-exposure parameters for Physical lighting.
+pub const PHYSICAL_LOW_REF: f32 = -6.0;
+pub const PHYSICAL_HIGH_REF: f32 = -1.2;
+pub const PHYSICAL_LIFT_SLOPE: f32 = 0.68;
+pub const PHYSICAL_MAX_LIFT: f32 = 2.6;
+pub const PHYSICAL_DARKEN_SLOPE: f32 = 0.45;
+pub const PHYSICAL_MAX_DARKEN: f32 = 1.4;
+pub const PHYSICAL_METER_FILTER: std::ops::RangeInclusive<f32> = 0.10..=0.98;
 /// The sky's weight in the meter, against 1 for the world [hypothesis, see the module
 /// note; not 0, so a view of nothing but sky still has a reading]. The mask keeps 16
 /// levels (Bevy's auto exposure), so 1/16 is the smallest weight above none.
@@ -144,16 +152,18 @@ pub struct EyeCurve {
     target: f32,
     /// The modifiers' exposure change the curve was made with ([`modifier_ev`]).
     extra: f32,
+    physical: bool,
 }
 
 impl FromWorld for EyeCurve {
     fn from_world(world: &mut World) -> Self {
-        let handle = world.resource_mut::<Assets<AutoExposureCompensationCurve>>().add(curve(BASE_TARGET_LUM, 0.0));
+        let physical = nvf_assets::authored::physical_pbr();
+        let handle = world.resource_mut::<Assets<AutoExposureCompensationCurve>>().add(curve_for(BASE_TARGET_LUM, 0.0, physical));
         let size = Extent3d { width: MASK_SIZE.x, height: MASK_SIZE.y, depth_or_array_layers: 1 };
         let mut image = Image::new_fill(size, TextureDimension::D2, &[255], TextureFormat::R8Unorm, RenderAssetUsages::RENDER_WORLD);
         image.texture_descriptor.usage |= TextureUsages::RENDER_ATTACHMENT;
         let mask = world.resource_mut::<Assets<Image>>().add(image);
-        EyeCurve { handle, mask, target: BASE_TARGET_LUM, extra: 0.0 }
+        EyeCurve { handle, mask, target: BASE_TARGET_LUM, extra: 0.0, physical }
     }
 }
 
@@ -169,21 +179,68 @@ pub fn lift(avg: f32, target_lum: f32) -> f32 {
     (LIFT_SLOPE * (reference_ev(target_lum) - avg)).clamp(0.0, MAX_LIFT)
 }
 
+/// How many EV a picture of average log2 luminance `avg` is exposed under physical PBR:
+/// lifts dim scenes below `PHYSICAL_LOW_REF + shift` and stops down bright daylight scenes
+/// above `PHYSICAL_HIGH_REF + shift`, with a stable deadband between them.
+pub fn physical_exposure(avg: f32, target_lum: f32) -> f32 {
+    let t = if target_lum > 0.0 { target_lum } else { BASE_TARGET_LUM };
+    let shift = (t / BASE_TARGET_LUM).log2();
+    let low = PHYSICAL_LOW_REF + shift;
+    let high = PHYSICAL_HIGH_REF + shift;
+    if avg < low {
+        (PHYSICAL_LIFT_SLOPE * (low - avg)).clamp(0.0, PHYSICAL_MAX_LIFT)
+    } else if avg > high {
+        (PHYSICAL_DARKEN_SLOPE * (high - avg)).clamp(-PHYSICAL_MAX_DARKEN, 0.0)
+    } else {
+        0.0
+    }
+}
+
 /// Bevy's curve: for an average `x` the target exposure is `y − x`, so `y = x + lift(x)`,
 /// raised by the modifiers' `extra` EV everywhere. Corners: the meter's ends, the
-/// reference, and where the lift reaches its cap.
-fn curve(target_lum: f32, extra: f32) -> AutoExposureCompensationCurve {
-    let r = reference_ev(target_lum);
-    let cap = r - MAX_LIFT / LIFT_SLOPE;
-    let mut xs = vec![METER_LOW, cap, r, METER_HIGH];
+/// reference(s), and where the lift/darken slopes reach their caps.
+fn curve_for(target_lum: f32, extra: f32, physical: bool) -> AutoExposureCompensationCurve {
+    let mut xs = if physical {
+        let t = if target_lum > 0.0 { target_lum } else { BASE_TARGET_LUM };
+        let shift = (t / BASE_TARGET_LUM).log2();
+        let low = PHYSICAL_LOW_REF + shift;
+        let high = PHYSICAL_HIGH_REF + shift;
+        vec![
+            METER_LOW,
+            low - PHYSICAL_MAX_LIFT / PHYSICAL_LIFT_SLOPE,
+            low,
+            high,
+            high + PHYSICAL_MAX_DARKEN / PHYSICAL_DARKEN_SLOPE,
+            METER_HIGH,
+        ]
+    } else {
+        let r = reference_ev(target_lum);
+        let cap = r - MAX_LIFT / LIFT_SLOPE;
+        vec![METER_LOW, cap, r, METER_HIGH]
+    };
+    xs.sort_by(f32::total_cmp);
     xs.retain(|x| (METER_LOW..=METER_HIGH).contains(x));
     xs.dedup_by(|a, b| (*a - *b).abs() < 1e-3);
-    let points: Vec<Vec2> = xs.into_iter().map(|x| Vec2::new(x, x + lift(x, target_lum) + extra)).collect();
+    let points: Vec<Vec2> = xs
+        .into_iter()
+        .map(|x| {
+            let xq = (x * 256.0).round() / 256.0;
+            let exp = if physical { physical_exposure(xq, target_lum) } else { lift(xq, target_lum) };
+            let yq = ((xq + exp + extra) * 256.0).round() / 256.0;
+            Vec2::new(xq, yq)
+        })
+        .collect();
     AutoExposureCompensationCurve::from_curve(LinearSpline::new(points)).unwrap_or_default()
+}
+
+#[cfg(test)]
+fn curve(target_lum: f32, extra: f32) -> AutoExposureCompensationCurve {
+    curve_for(target_lum, extra, false)
 }
 
 /// The camera component for an adapting view (inserted with the light glow, graphics.rs).
 pub fn auto_exposure(eye: &EyeCurve) -> AutoExposure {
+    let physical = nvf_assets::authored::physical_pbr();
     AutoExposure {
         range: METER_LOW..=METER_HIGH,
         // Brightening as quickly as darkening (`follow_target_lum` sets them from the
@@ -192,7 +249,7 @@ pub fn auto_exposure(eye: &EyeCurve) -> AutoExposure {
         speed_darken: ADAPT_SPEED,
         compensation_curve: eye.handle.clone(),
         metering_mask: eye.mask.clone(),
-        filter: METER_FILTER,
+        filter: if physical { PHYSICAL_METER_FILTER } else { METER_FILTER },
         ..default()
     }
 }
@@ -210,9 +267,13 @@ fn follow_target_lum(
     mut told: Local<(bool, f32, f32)>,
 ) {
     let hdr = screen.as_deref().and_then(|s| s.graded_hdr()).or_else(|| sky.as_deref().map(|s| s.cinematic().hdr));
-    let target = sky.as_deref().map_or(BASE_TARGET_LUM, |s| s.cinematic().hdr.v[HDR_TARGET_LUM]);
+    let physical = nvf_assets::authored::physical_pbr();
+    let mut target = sky.as_deref().map_or(BASE_TARGET_LUM, |s| s.cinematic().hdr.v[HDR_TARGET_LUM]);
+    if physical && sky.as_deref().is_some_and(|s| s.interior.is_some()) && target > 0.0 {
+        target = target.min(BASE_TARGET_LUM);
+    }
     let extra = modifier_ev(screen.as_deref().map_or(1.0, |s| s.hdr_ratio(HDR_TARGET_LUM)));
-    if (eye.target - target).abs() > 1e-3 || (eye.extra - extra).abs() > 1e-3 || !told.0 {
+    if (eye.target - target).abs() > 1e-3 || (eye.extra - extra).abs() > 1e-3 || eye.physical != physical || !told.0 {
         // A modifier's change is logged in quarter-EV steps, not every frame.
         let step = (extra * 4.0).round() / 4.0;
         if (eye.target - target).abs() > 1e-3 || !told.0 || step != told.1 {
@@ -222,9 +283,18 @@ fn follow_target_lum(
         told.1 = step;
         eye.target = target;
         eye.extra = extra;
-        let _ = curves.insert(&eye.handle, curve(target, extra));
+        eye.physical = physical;
+        let _ = curves.insert(&eye.handle, curve_for(target, extra, physical));
     }
-    let eye_speed = hdr.map_or(BASE_EYE_ADAPT_SPEED, |h| h.v[HDR_EYE_ADAPT_SPEED]);
+    let eye_speed = match (sky.as_deref().map(|s| s.grade), hdr) {
+        // With Colour grade off (`SkyState::grade == false`), `sky.cinematic()` returns
+        // `Cinematic::default()` whose `HDR_EYE_ADAPT_SPEED` is 0; keep the base speed
+        // rather than treating disabled grading as an IMGS requesting instant adaptation
+        // (#3917) [design].
+        (Some(false), _) => BASE_EYE_ADAPT_SPEED,
+        (_, Some(h)) => h.v[HDR_EYE_ADAPT_SPEED],
+        (_, None) => BASE_EYE_ADAPT_SPEED,
+    };
     let speed = adapt_speed(eye_speed);
     if (told.2 - speed).abs() > 1e-3 {
         info!("eye adaptation: speed {speed:.2} EV/s (Eye Adapt Speed {eye_speed:.2})");
@@ -392,5 +462,111 @@ mod tests {
         let c = curve(1.4, 0.0);
         let d = format!("{c:?}");
         assert!(d.contains("min_log_lum: -16.0"), "{d}");
+    }
+
+    /// CPU mirror of `auto_exposure.wesl`'s exposure update step (#3917): exact exponential
+    /// decay clamped to `delta` so no `(speed, dt)` combination can overshoot or oscillate.
+    fn exposure_step(exposure: f32, target: f32, speed_up: f32, speed_down: f32, transition: f32, dt: f32) -> f32 {
+        let delta = target - exposure;
+        let transition = transition.max(1e-6);
+        if target > exposure {
+            let sd = (speed_down * dt).max(0.0);
+            let ed = sd / transition;
+            exposure + delta.min(sd.min(delta * (1.0 - (-ed).exp())))
+        } else {
+            let su = (speed_up * dt).max(0.0);
+            let eu = su / transition;
+            exposure + delta.max((-su).max(delta * (1.0 - (-eu).exp())))
+        }
+    }
+
+    #[test]
+    fn auto_exposure_step_never_overshoots_or_oscillates_under_high_speed_or_slow_frames() {
+        // Reproduces the #3917 playtest conditions: instant adaptation (40 EV/s) or normal
+        // adaptation (3 EV/s) under slow frames (0.05..2.0 s) and Bevy's default 1.5 EV
+        // transition distance, both brightening and darkening.
+        for &(speed, dt, start, target) in &[
+            (INSTANT_ADAPT_SPEED, 0.5, 0.0, 2.0),
+            (INSTANT_ADAPT_SPEED, 1.0, 0.0, 1.0),
+            (INSTANT_ADAPT_SPEED, 0.08, 0.0, 1.0),
+            (INSTANT_ADAPT_SPEED, 0.5, 3.0, 0.0),
+            (ADAPT_SPEED, 1.0, 0.0, 2.0),
+            (ADAPT_SPEED, 2.0, 2.5, 0.0),
+            (ADAPT_SPEED, 1.0 / 60.0, 0.0, 2.0),
+        ] {
+            let mut cur = start;
+            let increasing = target > start;
+            for frame in 0..32 {
+                let next = exposure_step(cur, target, speed, speed, 1.5, dt);
+                assert!(next.is_finite(), "speed={speed} dt={dt} frame={frame}: non-finite {next}");
+                if increasing {
+                    assert!(next >= cur - 1e-6 && next <= target + 1e-6, "overshoot brightening: cur={cur} next={next} target={target}");
+                } else {
+                    assert!(next <= cur + 1e-6 && next >= target - 1e-6, "overshoot darkening: cur={cur} next={next} target={target}");
+                }
+                cur = next;
+            }
+            if speed * dt >= 1.5 {
+                assert!((cur - target).abs() < 1e-3, "speed={speed} dt={dt}: did not converge ({cur} vs {target})");
+            }
+        }
+    }
+
+    #[test]
+    fn colour_grade_off_keeps_base_eye_adaptation_speed() {
+        let mut app = App::new();
+        app.init_resource::<Assets<AutoExposureCompensationCurve>>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<EyeCurve>()
+            .init_resource::<crate::sky::SkyState>()
+            .add_systems(Update, follow_target_lum);
+        let cam = {
+            let eye = app.world().resource::<EyeCurve>();
+            let ae = auto_exposure(eye);
+            app.world_mut().spawn(ae).id()
+        };
+        // Colour grade off: SkyState::cinematic() returns Cinematic::default() whose
+        // HDR_EYE_ADAPT_SPEED is 0.0, which must NOT trigger INSTANT_ADAPT_SPEED (40 EV/s).
+        app.world_mut().resource_mut::<crate::sky::SkyState>().grade = false;
+        app.update();
+        let ae = app.world().get::<AutoExposure>(cam).unwrap();
+        assert!((ae.speed_brighten - ADAPT_SPEED).abs() < 1e-5, "grade off kept base speed: {}", ae.speed_brighten);
+        assert!((ae.speed_darken - ADAPT_SPEED).abs() < 1e-5);
+
+        // Colour grade on with an explicit IMGS Eye Adapt Speed of 0.0 still maps to instant.
+        app.world_mut().resource_mut::<crate::sky::SkyState>().grade = true;
+        let mut zero_hdr = fnv_world::imagespace::Hdr::default();
+        zero_hdr.v[HDR_EYE_ADAPT_SPEED] = 0.0;
+        let mut mods = crate::imagespace::ScreenModifiers::default();
+        mods.set_hdr_for_test(zero_hdr, zero_hdr);
+        app.insert_resource(mods);
+        app.update();
+        let ae = app.world().get::<AutoExposure>(cam).unwrap();
+        assert!((ae.speed_brighten - INSTANT_ADAPT_SPEED).abs() < 1e-5, "explicit IMGS 0.0 speed: {}", ae.speed_brighten);
+    }
+
+    #[test]
+    fn physical_exposure_is_bidirectional_with_deadband_and_smooth_spline() {
+        assert_eq!(physical_exposure(PHYSICAL_LOW_REF, 1.4), 0.0);
+        assert_eq!(physical_exposure(-3.5, 1.4), 0.0);
+        assert_eq!(physical_exposure(PHYSICAL_HIGH_REF, 1.4), 0.0);
+        assert!(physical_exposure(0.0, 1.4) < -0.4, "bright daylight stops down");
+        assert_eq!(physical_exposure(6.0, 1.4), -PHYSICAL_MAX_DARKEN);
+        assert!(physical_exposure(-9.0, 1.4) > 2.0, "dark scenes lift");
+        assert_eq!(physical_exposure(-16.0, 1.4), PHYSICAL_MAX_LIFT);
+
+        for (target_lum, extra) in [(1.4, 0.0), (2.8, 0.5), (1.4, -0.25)] {
+            let c = curve_for(target_lum, extra, true);
+            let mut avg = METER_LOW;
+            while avg <= METER_HIGH {
+                let exposure = c.compensation(avg) - avg;
+                let want = physical_exposure(avg, target_lum) + extra;
+                assert!(
+                    (exposure - want).abs() < 0.03,
+                    "Target LUM {target_lum} avg {avg}: got {exposure}, want {want}"
+                );
+                avg += 0.05;
+            }
+        }
     }
 }

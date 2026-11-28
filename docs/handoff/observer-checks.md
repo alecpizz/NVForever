@@ -808,15 +808,37 @@ The numbers above stay put so links to them hold; each item here gives its own p
     pause the game, and effects do not change while it is paused.
 43. **Does a newly started quest's script run before its first delay?** (P2.) Old World
     Blues: wake in the Think Tank and talk to Dr. Klein at once. Do the Big Empty's random
-    encounters (NVDLC03Enc 10) start? (§10 stall 2.)
+    encounters (NVDLC03Enc 10) start? (§10 stall 2.) — answered 2026-11-26 (o34_43a/b/c,
+    save nvftest, #1113): **no**. After a console `StartQuest NVDLC03MQ01` its script first
+    ran 98-99 game loops later (about 1.65 s), in 4 launches of 4, counted from the start;
+    started and set to 100 on the next loop, the stopped quest's script never ran in 600
+    loops, so Act1XP and NVDLC03Enc 10 stayed unset [observed]. The older chains' stall is
+    the original's too: the data's own. Ours waits the quest's delay (5 s for 0) before the
+    first run; the original's first wait differs from quest to quest (VMS40Timer about
+    3.9 s, scripts.md "Script delay"), so it stays unmodelled.
 44. **What does `RemoveItem <item> 0` do?** — answered 2026-10-31 (o5_00, issue #1113):
     nothing, and the script goes on (12 Stimpaks and 21 caps stayed; the next line ran).
     Built (#1113): ours returns without removing anything (functions/items.rs
     `remove_item`).
 45. **Does a second Nelson explorer stop the player right after the first?** (P3; §10
-    stall 4.)
+    stall 4.) — answered 2026-11-26 (o34_45_nelson, o34_45b_probe, o34_45c_nelson, save
+    nvftest, VDeadSea 0, #1113): **only when the player walks within 512 units of him**,
+    and that conversation closes at once with nothing said (his only greeting, Say Once,
+    was said by explorer 01). With the player 1,224 units from explorer 01 nobody came in
+    200 s, though nvNelsonExplorerBarkSCRIPT calls `StartConversation Player` and `evp`
+    on its first GameMode; inside 512 units (nvNelsonExplorerBarkPackage, a Dialogue
+    package to the player) he stopped the player within 17 loops [observed]. Ours walks
+    the speaker up from any distance (`Game::walk_up_greet`, as the GECK wiki's
+    StartConversation says), so the far explorers' call differs: #4919.
 46. **Does the HELIOS One west-terminal password go to the player from Fantastic's line?**
-    (P3; §10 stall 5.)
+    (P3; §10 stall 5.) — answered 2026-11-26 (o34_46_fantastic, save nvftest, VMS03 10,
+    #1113): **yes**. The line is GOODBYE 0x000E360D (Goodbye, Say Once; GetIsID Fantastic,
+    VMS03 >= 10); its end script `AddNote VMS03HeliosTerminalWestPassword` names no
+    reference, and GetHasNote read 0 before it and 1 after, with or without `player.`
+    [observed]. Ours does the same (`functions/player.rs` `add_note` files the note with
+    the player whoever runs it). The walkthrough's stall was its own: it closed the talk
+    without the goodbye and counted the note with GetItemCount; mq-that-lucky-old-sun now
+    says goodbye and reads GetHasNote.
 47. **Does a talking activator's scripted `Activate player` start its conversation?** —
     answered 2026-10-31 (o9_02, owner save nvfTopsAmbush: Benny's own invitation taken,
     VMQTops 20, BennyAmbush 2, BennyGoToPresidential 0): **yes**. The trigger's script
@@ -830,7 +852,12 @@ The numbers above stay put so links to them hold; each item here gives its own p
     for the player instead (owner). (§11 stall 1.)
 48. **Can Oliver be talked into retreating on House's path?** (P3.) After "You will because
     the alternative is worse", which reply does he give (Topic065 has two lines with the same
-    conditions, 0x00159932 and 0x001596BD)? (§11 stall 2.)
+    conditions, 0x00159932 and 0x001596BD)? (§11 stall 2.) — answered 2026-11-26
+    (o34_48_oliver, save nvftest, #1113): **0x00159932, three times of three** (the topic
+    started by script; neither line is Random) [observed]. As ours: the first line whose
+    conditions pass wins, so 0x001596BD's retreat lines are unreachable from Topic065 in
+    the original too, the data's own. Not checked: reaching the topic from the earlier
+    line by hand, on House's path.
 49. **Does attacking Daniel during Flight from Zion start Chaos in Zion at once?** (P3; a hit
     starts no AI combat headless.) Also: attacked at the Northern Passage, does Jed go down
     unconscious, and does Happy Trails fail? (§11 stall 3.)
@@ -1163,7 +1190,11 @@ The numbers above stay put so links to them hold; each item here gives its own p
     vMOSgtKilborn`], and talked to again he greets with 0x001754C6 and offers nothing.
     NVForever closes the conversation when the line ends (dialogue.md "When a line ends":
     with nothing to offer the conversation ends [hypothesis]). Does the original close it,
-    or does the menu stay open with nothing but a way out?
+    or does the menu stay open with nothing but a way out? — answered 2026-11-26
+    (o34_72_kilborn, save nvftest, #1113): **it closes by itself.** Started on Topic003 by
+    script, Kilborn said both responses; by 22 s the quest was at 100 and stopped and the
+    menu showed his face with no topics and no way out; by 26 s the game was back (menu 0),
+    with no input [observed]. As ours (dialogue.md "When a line ends").
 
 ## Added 2026-11-01 (the pause column MCM waits for, issue #976 T11)
 
@@ -1334,12 +1365,18 @@ The numbers above stay put so links to them hold; each item here gives its own p
 
 ## Added 2026-11-05 (placed particle scale, issue #1547)
 
-87. **Does a placed reference's scale size its particles?** (P2; particles.md §7.7.) The
+87. **Does a placed reference's scale size its particles?** (P2; particles.md §7.7, #3673.) The
     Ultra-Luxe fountain's ULFountainFX (0x0016566E) is placed at scale 0.5. Take a frame of the
     original at hour 12 from about (1176, -700, 1080), facing north, and the same frame in
     NVForever. Check the size of the drops against the basin, how high the spray goes, and
     whether it comes out of the spout. If the original's spray is the file's full size, the
     rule in §7.7 is wrong and the cause of the misplaced spray lies elsewhere.
+    Also compare placed smoke in FalloutNV.esm (#3673): `dlc03fxdarksmoke.nif` at scale
+    0.23 (`0x000E72EF`, WastelandNV 28255, 32694, 5595) against the one at scale 1
+    (`0x00137F86`, -31401, -95650, 6918), measuring puff size beside nearby geometry in
+    the original. If that comparison supports radius scaling, re-check the Ultra-Luxe
+    fountain (`0x0016566E`) and tyre smoke (`fxtiresmoke.nif`) before and after testing
+    the candidate rule.
 
 ## Added 2026-11-05 (leveled rolls and locks, issue #1567)
 
@@ -3181,20 +3218,24 @@ already talking takes over at once, same topic or another; nothing is queued or 
      Guard05 (their health). Also: does a Securitron help when the player alone fights
      Oliver before the guards are down (it has its guard then)?
 
-## Added 2026-11-16 (SayTo's noTargetLookFlag, #2796)
+## Answered 2026-11-25 (SayTo's noTargetLookFlag, #2796)
+
 
 218. **Does `SayTo` with `noTargetLookFlag` 1 turn the speaker to its target?** (P2; #2796,
-     dialogue-play.md §9.2.) When an NPC runs `SayTo player <topic> 0 1`, does the speaker
-     turn to face the player? Ours: nobody turns, body or head [hypothesis]; without the
-     flag the speaker turns head and body to the target [owner decision 2026-10-11]. The
-     GECK wiki says only that the target "is not forced to look at the speaker"
-     [documented: GECK wiki SayTo]. Two places to watch: Camp McCarran's tower at night
-     during I Put a Spell on You (VMS08), entering the tower trigger with Curtis
-     (`CaptainCurtisREF` 0x000F6283) on the walkway behind the player's back: does he turn
-     for "Lupa, this is Frumentarius Picus, over." (VMS08CurtisRadio1) or keep talking
-     into the radio; and one of the McCarran monorail guards' warnings to the player.
-     Read his heading (`GetAngle Z`) and `GetHeadingAngle player` before and at the end of
-     the line. If he turns, the flag is the wiki's alone (only the target stays still).
+     dialogue-play.md §9.2.) Answered [observed, base game, 2026-11-25: capture jobs `o31_218_sayto_flag`, `o31_218b_sayto_flag` (outputs in the private capture folder)]:
+     **yes, the flag does not stop the speaker turning.** Ringo (nvftest, GSGasStation)
+     was moved 150 units in front of the player and faced away (GetHeadingAngle player
+     180), then `RingoRef.SayTo player GREETING 0 <flag>`: standing, he turned his body
+     to the player in about 0.8 s (≈ 30° per 6 frames, GetHeadingAngle 180 → 0) with flag 1
+     in 3 of 3 runs and with flag 0 in 2 of 2, the same rate; with no SayTo he stayed at 180.
+     Walking on his own package (his position changing every sample, procedure 48) he did
+     not turn with either flag (2 runs each). So the turn depends on whether the speaker is
+     free to turn, not on the flag; the flag can only be the wiki's (the *target* is not
+     made to look) [documented: GECK wiki SayTo]. Ours turns nobody with flag 1
+     (`crates/fnv-game/src/functions/misc.rs` `say_to`, test
+     `say_to_with_no_target_look_turns_nobody`): it differs. Still open: why Curtis does
+     not turn for VMS08CurtisRadio1 in the original (#2796's case: his package or idle at
+     the walkway, not the flag), and what the flag does to the target.
 
 ## Added 2026-11-16 (a talking activator's Say and SayTo, #2768)
 
@@ -3213,44 +3254,45 @@ already talking takes over at once, same topic or another; nothing is queued or 
      read `<activator>.IsTalking` and `<actor>.IsTalking`, and note whether a SayToDone
      block in the activator's script runs when it ends (a script print).
 
-## Added 2026-11-16 (an NPC saved while seated, #2797)
+## Answered 2026-11-25 (an NPC saved while seated, #2797)
+
 
 220. **Does an NPC saved while seated come back seated after a load?** (P2; #2797,
-     save-load.md §3.4, furniture.md.) Ours: a load stands every actor up (the saved
-     furniture use is cleared, GetSitting reads 0) and the NPC's AI seats it again from
-     where it stands if its package still sends it to a seat; the provisional reading of
-     the original is the same, it stands up and re-seats through its AI [hypothesis].
-     In Goodsprings at 09:00, with Easy Pete (`EasyPeteRef`) on his porch chair
-     (0x0010634A, `GetSitting` 3), save, load that save at once and log
-     `EasyPeteRef.GetSitting` every half second from the first frame for 20 s, with
-     `GetPos x/y`. If it reads 3 from the first frame with no getting-on, the original
-     keeps the seat in the save and puts the body straight back on it; if it reads 0
-     then 2, 3 (or he walks first), ours matches. The same with Colonel Hsu on his office
-     chair (0x000FB33A, CampMCTermInt02) gives a second case.
+     save-load.md §3.4, furniture.md.) Answered [observed, base game, 2026-11-25: capture jobs `o31_220a_pete_save`, `o31_220b_pete_load` (outputs in the private capture folder)]:
+     **yes, the original keeps the seat in the save.** Easy Pete (nvftest, GameHour set to
+     9, `GetSitting` 3 on his porch chair at -67968.8, 3450.4, 8387.3) was saved
+     (`save nvfo31pete`); on loading that save his `GetSitting` read 3 at the same position
+     to the tenth of a unit from the first sample (about 2 s after the load, when the
+     capture job could start) through 40 samples over 20 s: no 0, no getting-on (2), no
+     step. Ours stands every actor up on a load and lets the AI seat them again
+     (`Game::stand_everyone_up`): it differs. Not covered: the first 2 s after the load
+     (a re-seat that fast would also have moved him), Colonel Hsu's chair.
 
 ## Added 2026-11-16 (sentry bot missile pause, #2739)
 
+
 221. **How long does a sentry bot wait between two missile shots, and does it switch to its
-     gun between them?** (P1; #2739, combat-rules.md §4.1, combat-ai.md §19.) The owner saw
-     a pause between missiles in the original and none in NVForever [observed: owner
-     playtest]. The launcher `SentryBotMissileLauncher2HL` (0x00057E8F) has Clip Size 1,
-     Reload Animation ReloadB, 1.5789 Attack Shots/Sec and a Semi-Automatic Fire Delay of
-     0.1-0.5 s [documented: fnvtool esm decode, FalloutNV.esm]; the sentry bot's
-     `2hlattackleft.kf` runs 2.0 s with `Hit` at 0.067 s and `a:R` at 0.967 s, and its
-     folder has no reload clip [documented: fnvtool bsa list / nif decode, Fallout -
-     Meshes.bsa]. Ours now: a missile every 0.967 s (the player's rule: the next shot from
-     the `a:` key), no reload, the launcher kept until distance or a crippled limb makes
-     another gun suit [hypothesis]. Place a Hardened Sentry Bot (`CrSentryBotGLHard`
-     0x000E585D, launcher and laser gatling) about 1,500 units from the player in the
-     open, in combat with the player (god mode), and record a video of at least 30 s; then
-     the same with `CrSentryBotMGArmy` (0x000A5C6F, launcher and minigun), and once with
-     its gun arm crippled if the console allows. What to read off: the time from one
-     missile's launch to the next (0.97 s, 2.0 s for the whole clip, or longer); whether
-     anything like a reload plays between them; whether the gun fires between two
-     missiles and for how long; at what distances it uses the launcher at all; and how
-     many missiles it fires in a fight (does it run out: its inventory holds AmmoMissile
-     x1 plus up to four from AmmoMissilelauncher75). Also whether a robot whose folder has
-     no reload clip (Mister Gutsy's plasma gun or flamer) ever pauses as if reloading.
+     gun between them?** (P1; #2739, combat-rules.md §4.1, combat-ai.md §19.) Answered
+     [observed, base game, 2026-11-25: capture jobs `o31_221_sentry_missiles`, `o31_221b_sentry_hits` (outputs in the private capture folder)], no video: nvfairport,
+     player in god mode standing on the runway, each bot placed 1,500 units off with
+     StartCombat, `GetEquippedObject 5` every 2 frames, the hits on the player by weapon
+     from xNVSE's OnHitWith. **It fires one missile, then switches to its gun.**
+     - `CrSentryBotGLHard` (launcher and laser gatling), 40 s: launcher and gatling take
+       turns, 4.4-4.6 s with the launcher (the first turn 6.9 s) and 5.7-5.8 s with the
+       gatling (switches at
+       1.1, 8.0, 13.7, 18.3, 24.0, 28.6, 34.4, 38.8 s). Each launcher turn gives **one**
+       missile hit, 1.6-4.3 s after it was equipped (hits at 5.4, 15.8, 25.7, 36.0 s:
+       a missile every 9.9-10.4 s). Each gatling turn gives two bursts of 5-11 hits about
+       1.1-1.5 s apart.
+     - `CrSentryBotMGArmy` (launcher and minigun), 40 s: launcher 0-6.3 s (no hit seen),
+       minigun 6.3-12.5, launcher 12.5-17.1 (one missile, 14.4 s), minigun 17.1-35.0
+       (bursts every 4.5-5.5 s), launcher 35.0 (one missile, 36.9 s): missiles 22.5 s apart.
+     - Neither bot's `GetItemCount AmmoMissile` (4 and 2), Electron Charge Pack or 5mm count
+       went down: the fight spends none of its inventory, so it does not run out in 40 s.
+     - Both stopped closing in at about 1,110-1,330 units and held there.
+     Ours fires a missile every 0.967 s and keeps the launcher: it differs. Not covered:
+     a crippled gun arm, Mister Gutsy's guns, what plays between the missile and the switch
+     (the video).
 
 ## Answered 2026-11-16 (sky and grade, Capital Wasteland against the Mojave)
 
@@ -3300,8 +3342,8 @@ already talking takes over at once, same topic or another; nothing is queued or 
      MegatonWorld squares (-1, -7) and (1, -6), ParadiseFalls (-9, 15) and (-9, 16),
      GNRroofWorld (flat at about 12,280 over the parent's ground at about 10,700). Stand
      in each and read the player's z on the ground (`player.GetPos Z`): the child's
-     height or the parent's. NVForever keeps the child's own LAND and takes the parent's
-     only where the child has none. Also: per-cell water in ParadiseFalls (Use Water
+     height or the parent's. NVForever takes the parent's LAND on every square where the
+     parent has one, the child's own too (#3755; before, it kept the child's own). Also: per-cell water in ParadiseFalls (Use Water
      Data), which NVForever does not take from the parent's cells.
 226. **What do SetStage and the objective functions do on a quest already completed or
      failed?** (P2; #2958; `crates/fnv-game/src/game.rs` `set_stage`, `set_objective`.)
@@ -3327,39 +3369,42 @@ already talking takes over at once, same topic or another; nothing is queued or 
      and 10 (`player.setav perception`), to confirm Perception plays no part.
 
 
-## Added 2026-11-17 (OK on a message box without buttons, #2925)
+## Answered 2026-11-25 (OK on a message box without buttons, #2925)
+
 
 240. **What does GetButtonPressed give after OK on a message box that has no buttons?**
-     (P2; #2925, scripts.md §7.2 engine API.) The GECK wiki says a message box with no
-     buttons shows a default OK button and that GetButtonPressed gives the pressed
-     button's index from zero once, then -1 [documented: GECK wiki ShowMessage,
-     GetButtonPressed]; it does not say what the default OK gives. Ours: 0, once, then -1,
-     to the script that showed the box; a corner message (no Message Box flag) gives -1
-     [hypothesis: inferred from SCPT 0x000E9483, the Broken Mr. Handy in
-     BlackMountainTreasure, whose GameMode block waits for button 0 after BMRhondaFixMsg,
-     0x000E9551, a box without buttons]. In the Black Mountain treasure room with Science
-     60, activate REFR 0x000E84A4, pick "[Science] Check the robot's circuitry.", press OK
-     on the second box: if the robot gets up (`000E84A4.GetDead` 0, its new name, the
-     prompt no longer "Search"), the original gives 0. For a direct reading, a test
-     plugin's script that shows a buttonless message box and prints GetButtonPressed every
-     frame for a second after the OK (PrintC) gives the value and how many times it comes.
+     (P2; #2925, scripts.md §7.2 engine API.) Answered [observed, base game, 2026-11-25: capture jobs `o31_240_buttonless_ok` (outputs in the private capture folder)]:
+     **0.** In BlackMountainTreasure with Science 100, `RhondaREF.Activate player 1` opened
+     BMRhondaBrokenMsg (MenuMode 1001, two rows); JIP's ClickMenuButton on
+     `MessageMenu/NOGLOW_BRANCH/MM_MainRect/MM_ButtonList/MM_Button:0` (the lower row,
+     `_y` 52: "[Science] Check the robot's circuitry.", button 1) opened BMRhondaFixMsg
+     (one row, the default OK); a click on its OK closed it and Rhonda's GameMode block
+     took button 0: `RhondaREF.GetDead` went from 1 to 0 within a second. Ours gives 0:
+     the same. Two traps for the next run: a scripted `Activate player` skips the
+     OnActivate block (a dead creature's loot menu, 1008, opened); `Activate player 1` runs
+     it. The rows' names count from the bottom: `MM_Button:0` is the last row.
 
-## Added 2026-11-17 (SendAssaultAlarm on a faction with no member present, #2926)
+## Answered 2026-11-25 (SendAssaultAlarm on a faction with no member present, #2926)
+
 
 241. **What does `SendAssaultAlarm Player <faction>` do when no member of the faction is
-     present and alive?** (P3; #2926, crime-karma.md §3.5.) The wiki says only that it picks
-     "an NPC in the … faction" in place of the player [documented: GECK wiki
-     SendAssaultAlarm]. Ours: nobody turns and no crime is counted; the calling actor is
-     never the stand-in [hypothesis]. In Techatticup Mine, kill every raider of
-     `CaesarsLegionTechMineFaction` (0x001400F9) with the console, then free an NCR
-     hostage (`TechMineNCRHostage2REF`, button "Untie him."): log
-     `TechMineNCRHostage2REF.GetAlarmed`, `player.IsInCombat` and the hostage's combat
-     target for 10 s, and whether the second hostage's message box still opens. Then once
-     with the raiders alive: which raider turns (the nearest, the first in some order, or
-     all of them) and whether the guards at the entrance join. Ours picks the first member
-     in FormID order: TecLegionaryRaider5REF (0x0011F654) of 17 present and alive
-     [observed: our headless walkthrough techatticup-hostages-2926, #2926 probe].
-
+     present and alive?** (P3; #2926, crime-karma.md §3.5.) Answered
+     [observed, base game, 2026-11-25: capture jobs `o31_241a_alarm_dead`, `o31_241b_alarm_alive` (outputs in the private capture folder)]: nvftest, god mode, `coc
+     TechatticupMineInterior`, then `TechMineNCRHostage2REF.SendAssaultAlarm player
+     CaesarsLegionTechMineFaction` (the hostage script's line, run from a job).
+     - **All 17 members killed first** (`Kill`, no killer; two runs): nothing. For 10 s no
+       member, the hostage nor the player was in combat; afterwards
+       `TechMineNCRHostage1REF.Activate player 1` opened its message box (MenuMode 1001),
+       so the second hostage can still be freed. Ours: the same.
+     - **Members alive**: not one member but every one within about 1,900 units. 7 of the 17
+       were in combat 0.5 s later (6 on the player), 9 by 1.5 s, and the same 9 for the
+       rest of the 10 s, all with the player as their target: those 145-1,872 units from the
+       player (TecLegionaryRaider5REF 0x0011F654 among them); none of the 8 at 2,038 units
+       and more joined. None had been in combat before the call. Ours turns the first member
+       in FormID order (0x0011F654) and lets the combat-group alarm spread it: whether that
+       gives the same 9 is to be checked in a headless run.
+     Not covered: crime gold (the job's `player.GetCrimeGold` did not compile), the
+     guards at the entrance outside the cell.
 
 ## Added 2026-11-15 (radscorpion spacing and melee cadence, #2535)
 
@@ -3649,6 +3694,9 @@ already talking takes over at once, same topic or another; nothing is queued or 
      square, and whether a dim row can still be selected, dropped or put on a hotkey.
      With a weapon that takes several kinds (12 gauge and its slugs, or the .357 with
      .38 Special), say whether the other kinds it can fire are at full strength.
+     **Answered 2026-11-22** (PR #3466's comments): dim at about half, the weapon's other
+     kinds full, every ammo row dim with the fists, a dim row still selectable; built in
+     pipboy.md §5 ITEMS (#3442).
 
 ## Added 2026-11-21 (placing the custom map marker with the mouse, #3324)
 
@@ -3929,8 +3977,8 @@ capture setup, so every part of a check that needs an interior is still open.
      told from an unmasked term.
 273. **Which way is the cube turned on a shape without the window flag, and on a window?**
      (P3; #2841, nif.md §6.) The GECK wiki says the window flag "simply flips the cubemap
-     orientation" without saying which axis. Ours: both read the game-space reflection
-     (x, y, z) as (x, z, y) [hypothesis]. In Lucky 38, frame a shape that reflects
+     orientation" without saying which axis. Ours until #4392: both read the game-space reflection
+     (x, y, z) as (x, z, y); since then only windows do [hypothesis]. In Lucky 38, frame a shape that reflects
      `textures\effects\nv\nvl38reflect_e.dds` (a distinctive cube; 9 shapes in 6 models
      set it without the window flag) from a level view and from looking down at it, and
      do the same for a window shape (both flags) under any cube, e.g. the observation
@@ -3941,7 +3989,9 @@ capture setup, so every part of a check that needs an interior is still open.
      object or the view [observed, firm: envmap4's pot and held pistol]; whether they are
      the cube or the sun's own highlight cannot be told, so that the cube lookup is
      world-fixed is a hypothesis. Which axis is up and what the window flag flips are
-     open: no cube content could be recognised. Lucky 38 is an interior: not captured.
+     open: no cube content could be recognised. For shapes without the window flag the Goodsprings camper, captured
+     2026-11-25, fits the direction (x, y, z) unchanged and the interpolated normal
+     [hypothesis; nif.md §6, #4392], now the default (`NVF_PLAY_DEBUG_ENV_AXES=swap-yz`, `NVF_PLAY_DEBUG_ENV_NORMAL=vertex`). Windows and Lucky 38 stay open. Lucky 38 is an interior: not captured.
      The wiki also says Lighting30ShaderProperty flips the cube orientation and is "Used
      by the engine for … advanced effect combinations (e.g. parallax + cube mapping)": if
      the engine switches a PPLighting shape with parallax and a cube to it at run time,

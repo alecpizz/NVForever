@@ -68,16 +68,41 @@ impl Game<'_> {
         let Some(cell) = cell.or(here) else { return Vec::new() };
         let loaded: Vec<FormId> = here.map(|h| self.scan_cells(h, 2)).unwrap_or_default();
         let cells = if depth > 0 { self.scan_cells(cell, depth) } else { vec![cell] };
-        cells
-            .into_iter()
-            .flat_map(|c| {
-                let open = loaded.contains(&c);
-                self.refs_in_cell(c, taken).into_iter().filter(move |&r| open || self.persistent(r))
-            })
-            // The player is not in the walk [observed: nvse-eighth, GetFirstRef 200 in the
-            // player's cell skips the player].
-            .filter(|&r| r != FormId::PLAYER_REF && self.ref_of_type(r, code))
-            .collect()
+        if cells.len() == 1 {
+            let c = cells[0];
+            let open = loaded.contains(&c);
+            return self
+                .refs_in_cell(c, taken)
+                .into_iter()
+                .filter(|&r| (open || self.persistent(r)) && r != FormId::PLAYER_REF && self.ref_of_type(r, code))
+                .collect();
+        }
+        // Multi-cell walk: scan `world.changed()` once across all target cells instead of
+        // repeating a full `World::refs` scan for every cell in the grid (`depth = 2` is 25 cells).
+        let cell_set: std::collections::HashSet<FormId> = cells.iter().copied().collect();
+        let mut moved_by_cell: std::collections::HashMap<FormId, Vec<FormId>> = std::collections::HashMap::new();
+        for (r, s) in self.world.changed() {
+            if let Some(c) = s.cell.filter(|c| cell_set.contains(c)) {
+                moved_by_cell.entry(c).or_default().push(r);
+            }
+        }
+        let mut out = Vec::new();
+        for c in cells {
+            let open = loaded.contains(&c);
+            let mut in_cell: Vec<FormId> = self.world.placed.by_cell.get(&c).into_iter().flatten().copied().collect();
+            if let Some(extra) = moved_by_cell.remove(&c) {
+                in_cell.extend(extra);
+            }
+            in_cell.sort();
+            in_cell.dedup();
+            in_cell.retain(|&r| self.cell_of(r) == Some(c) && (taken || !self.world.peek(r).is_some_and(|s| s.deleted())));
+            for r in in_cell {
+                if (open || self.persistent(r)) && r != FormId::PLAYER_REF && self.ref_of_type(r, code) {
+                    out.push(r);
+                }
+            }
+        }
+        out
     }
 
     pub(crate) fn persistent(&self, r: FormId) -> bool {

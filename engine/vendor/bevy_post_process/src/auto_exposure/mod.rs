@@ -2,6 +2,7 @@ use bevy_app::prelude::*;
 use bevy_asset::{embedded_asset, AssetApp, Assets, Handle};
 use bevy_ecs::prelude::*;
 use bevy_render::{
+    camera::ExtractedCamera,
     diagnostic::RecordDiagnostics,
     extract_component::ExtractComponentPlugin,
     globals::GlobalsBuffer,
@@ -102,9 +103,17 @@ fn queue_view_auto_exposure_pipelines(
     pipeline_cache: Res<PipelineCache>,
     mut compute_pipelines: ResMut<SpecializedComputePipelines<AutoExposurePipeline>>,
     pipeline: Res<AutoExposurePipeline>,
-    view_targets: Query<(Entity, &AutoExposure)>,
+    view_targets: Query<
+        (Entity, Option<&AutoExposure>),
+        Or<(With<AutoExposure>, With<ViewAutoExposurePipeline>)>,
+    >,
 ) {
     for (entity, auto_exposure) in view_targets.iter() {
+        // NVForever (#3917): remove stale pipeline component when AutoExposure is removed.
+        let Some(auto_exposure) = auto_exposure else {
+            commands.entity(entity).remove::<ViewAutoExposurePipeline>();
+            continue;
+        };
         let histogram_pipeline =
             compute_pipelines.specialize(&pipeline_cache, &pipeline, AutoExposurePass::Histogram);
         let average_pipeline =
@@ -120,12 +129,16 @@ fn queue_view_auto_exposure_pipelines(
 }
 
 fn auto_exposure(
-    view: ViewQuery<(
-        &ViewUniformOffset,
-        &ViewTarget,
-        &ViewAutoExposurePipeline,
-        &ExtractedView,
-    )>,
+    view: ViewQuery<
+        (
+            &ExtractedCamera,
+            &ViewUniformOffset,
+            &ViewTarget,
+            &ViewAutoExposurePipeline,
+            &ExtractedView,
+        ),
+        With<AutoExposure>,
+    >,
     pipeline_cache: Res<PipelineCache>,
     pipeline: Res<AutoExposurePipeline>,
     resources: Res<AutoExposureResources>,
@@ -138,8 +151,13 @@ fn auto_exposure(
     mut ctx: RenderContext,
 ) {
     let view_entity = view.entity();
-    let (view_uniform_offset, view_target, auto_exposure_pipeline, extracted_view) =
+    let (camera, view_uniform_offset, view_target, auto_exposure_pipeline, extracted_view) =
         view.into_inner();
+
+    // NVForever (#3917): skip auto exposure on non-HDR views (matches bloom & tonemapping).
+    if !camera.hdr {
+        return;
+    }
 
     let Some(auto_exposure_buffer) = auto_exposure_buffers.buffers.get(&view_entity) else {
         return;
@@ -210,4 +228,18 @@ fn auto_exposure(
     }
 
     time_span.end(ctx.command_encoder());
+}
+
+#[cfg(test)]
+mod tests {
+    /// NVForever (#3917): verify the vendored shader uses the bounded exponential step
+    /// instead of unclamped forward Euler.
+    #[test]
+    fn shader_clamps_adaptation_step_to_delta() {
+        let src = include_str!("auto_exposure.wesl");
+        assert!(src.contains("1.0 - exp(-exp_down)"), "missing bounded brighten step");
+        assert!(src.contains("1.0 - exp(-exp_up)"), "missing bounded darken step");
+        assert!(src.contains("min(delta,"), "missing brighten delta clamp");
+        assert!(src.contains("max(delta,"), "missing darken delta clamp");
+    }
 }

@@ -276,19 +276,24 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         }
         // `[numPerks] [title]`: the menu on its perks page alone, no level gained; the
         // level's perks by default (1 at a perk level, else 0, which only browses); 0 when
-        // no perk is left to take [documented: ShowPerkMenu].
+        // no perk is left to take [documented: ShowPerkMenu]. Allowed when no menu is open
+        // or when SkillMenu / LevelUpMenu (`menus::LEVEL_UP`) is already open [observed:
+        // so_36_show_perk_menu_while_open: 1,1,1]; refused while any other menu is open so
+        // `Game::open_menu` does not overwrite another menu without firing its close event
+        // [hypothesis: other menus unprobed; design: preserve open-menu lifecycle]. Same-frame
+        // GetLevelUpMenuPoints 1 0 reads 0 [observed: so_26_levelup_perk_menu_points:
+        // 1,0,0,1,-1].
         "showperkmenu" => {
             let level = g.player_level() as i32;
             let sheet = crate::levelup::PerkSheet::of_player(g, level);
-            if !sheet.available.contains(&true) || g.menu.is_some() {
+            if !sheet.available.contains(&true) || g.menu.is_some_and(|m| m != crate::game::menus::LEVEL_UP) {
                 return Some(Ok(zero));
             }
             let n = num(args, 0, -1.0) as i32;
             let count = if n > -1 { n } else { i32::from(crate::levelup::perk_due(g, level)) * crate::levelup::PERKS_PER_LEVEL as i32 };
             g.showoff.b5.levelup.open_as = Some(LevelUpOpen { perks_only: true, count: Some(count), title: text(args, 1) });
-            // Read at once, before the engine's first frame [hypothesis, as ShowSkillMenu's].
             g.showoff.b5.levelup.page = Some(1);
-            g.showoff.b5.levelup.points = [0, 0, count, 0];
+            g.showoff.b5.levelup.points = [0, 0, 0, 0];
             g.open_menu(crate::game::menus::LEVEL_UP);
             yes(true)
         }
@@ -379,8 +384,8 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         }
         // ---- fast travel ----
         // EnableFastTravel 0's override [documented: GetPCHasScriptedFastTravelOverride,
-        // "can be granted via EnableFastTravel"; hypothesis: the override is the bar it
-        // sets].
+        // "can be granted via EnableFastTravel"; observed: `so_17_fast_travel_override_and_can`
+        // (`wave4a_extenders.json`), see docs/spec-notes/ext-showoff.md §6].
         "getpchasscriptedfasttraveloverride" => yes(g.player.fast_travel.travel_disabled),
         "getpccanfasttravel" => yes(g.can_fast_travel(ctx)),
         // ---- detection ----
@@ -459,14 +464,26 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
             yes(hit && !ignore)
         }
         // The recoil is not played [not built; documented: ForceRecoilAnim, "typically only
-        // works for melee/unarmed weapons"]. 1 for the player [observed 2026-11-08: showoff5.recoil.player, at the airport
-        // test ground; the save's weapon and whether it was out not recorded]: 1 for any
-        // living actor, whatever it holds [hypothesis: the page's "only works" is about
-        // the animation showing].
+        // works for melee/unarmed weapons"]. Returns 1 for a living actor unarmed/melee
+        // (`animation_type <= 2` or no equipped weapon) and 0 with a ranged gun equipped
+        // [observed 2026-11-08: showoff5.recoil.player 1 unarmed; observed: Fallout: New
+        // Vegas 1.4.0.525 + xNVSE 6.4.9 + ShowOffNVSE 184, 2026-11-23/24,
+        // `GSDocMitchellHouse` (`0x00103DF9`), 10 official base masters,
+        // `so_33_force_recoil_unarmed_vs_gun` (unarmed 1, holstered 10mm Pistol 0,
+        // ForceHitReaction 0) and `w4d_38_showoff_perk_stagger_fade`
+        // (`tools/capture/nvse/catalogs/wave4d_extenders.json`, #3679):
+        // `stag(0,0)|rec(1,1,0)` (stagger on Player/Doc Mitchell; recoil unarmed, Baseball
+        // Bat, 10mm Pistol); no DLL or source consulted].
         "forcerecoilanim" => {
             let Some(a) = subject else { return Some(Ok(zero)) };
             let actor = a == FormId::PLAYER_REF || matches!(g.world.placed.get(a).map(|p| &p.sig), Some(b"ACHR" | b"ACRE"));
-            yes(actor && !g.is_dead(a))
+            let melee_or_unarmed = match crate::functions::items::equipped_weapon(g, a) {
+                None => true,
+                Some(w) => crate::nvse::record_value(g, w, "DNAM", "animation_type")
+                    .and_then(|v| v.num().ok())
+                    .is_none_or(|t| t <= 2.0),
+            };
+            yes(actor && !g.is_dead(a) && melee_or_unarmed)
         }
         // `[killer]`: KillActor on every loaded actor hostile to the player [documented:
         // KillAllHostiles; hypothesis: "within range" is the loaded area, as

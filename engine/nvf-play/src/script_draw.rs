@@ -206,7 +206,7 @@ fn follow(sim: Res<SimState>, phys: Res<PhysState>, script: Res<ScriptState>, mu
 
 
 #[allow(clippy::too_many_arguments)]
-fn sync(
+pub(crate) fn sync(
     mut commands: Commands,
     play: Res<PlayWorld>,
     sim: Res<SimState>,
@@ -502,6 +502,7 @@ pub(crate) mod tests {
             external_emittance: false,
             look: nvf_assets::material_anim::Look::stored([0.0; 3], 1.0, 1.0),
             missing_diffuse: None,
+            block: 0,
         };
         let model = PreparedModel {
             nodes: vec![node("Torso", None, Vec3::new(0.0, 0.0, 69.0)), node("Head", Some(0), Vec3::new(45.0, 0.0, 0.0))],

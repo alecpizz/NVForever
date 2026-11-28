@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Original NVForever geometry; Precise line family. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="currentColor" color="#ffffff" fill-rule="evenodd" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+  <title>Reload</title>
+  <path d="M 25 12 C 23 7 19 4 14 5 C 8 6 5 11 5 17 C 5 23 10 27 16 27 C 21 27 25 24 27 20 M 21 12 L 26 13 L 27 8"/>
+</svg>

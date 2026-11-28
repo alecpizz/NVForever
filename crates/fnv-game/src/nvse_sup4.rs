@@ -203,26 +203,24 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
             XVal::Num(f64::from(u8::from(bad)))
         }
         // `array f1 … f10`: the VM writes the variables (`fnv_script::vm` `out_params`):
-        // 0, then the array's numbers in key order [documented: the example, f1 3, f2 8,
-        // f3 5]; an element that is no number gives 0 [hypothesis].
+        // key 0 is the return value 0, and key `i + 1` is written only when the `i`-th
+        // element (in key order) is a number; non-numeric elements and positions past
+        // the array's length leave their output variables unchanged [documented: the
+        // example, f1 3, f2 8, f3 5; observed: 2026-11-24, `w6_t1_13_sup_ar_setfloats`:
+        // `[3.5, "abc", 8.25]` into `(11, 22, 33, 44)` yields `(3.50, 22.00, 8.25, 44.00)`].
         "ar_setfloatsfrom" => {
-            let vals: Vec<XVal> = entries(g, args.first())
-                .unwrap_or_default()
-                .into_iter()
-                .take(10)
-                .map(|(_, v)| {
-                    XVal::Num(match v {
-                        XVal::Num(x) => x,
-                        _ => 0.0,
-                    })
-                })
-                .collect();
-            list(g, std::iter::once(zero).chain(vals).collect())
+            let mut out = vec![(XKey::Num(0.0), zero)];
+            for (i, (_, v)) in entries(g, args.first()).unwrap_or_default().into_iter().take(10).enumerate() {
+                if let XVal::Num(x) = v {
+                    out.push((XKey::Num((i + 1) as f64), XVal::Num(x)));
+                }
+            }
+            XVal::Array(g.ext.new_array(ArrayKind::Map, out))
         }
         // `udf [frames] [removeOnLoad]`: the UDF `frames` frames later (1 to 1000, 1
         // without), on the calling reference; with removeOnLoad 0 it outlasts a load
         // [documented: the page's notes and examples]. A lambda does not outlast a load
-        // [hypothesis: as the extender's other kept callbacks, `Game::take_session`].
+        // (see docs/spec-notes/ext-sup4.md §1; `Game::take_session`).
         "callfunctionnextframe" => {
             let Some(f) = args.first().filter(|f| matches!(f, XVal::Ref(r) if *r != 0)).cloned() else { return Some(Ok(zero)) };
             let frames = num(args, 1, 1.0).clamp(1.0, 1000.0) as u64;

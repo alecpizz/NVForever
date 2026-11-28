@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Original NVForever geometry; Industrial family. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="currentColor" color="#ffffff" fill-rule="evenodd" stroke-width="1.8" stroke-linecap="square" stroke-linejoin="bevel">
+  <title>Fire</title>
+  <path d="M 11 28 L 11 14 L 16 5 L 21 14 L 21 28 Z M 11 23 L 21 23 M 4 10 L 8 14 M 24 14 L 28 10 M 16 3 L 16 4"/>
+</svg>

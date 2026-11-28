@@ -197,12 +197,14 @@ impl Game<'_> {
     }
 
     /// The start handlers of an aux timer that was (re)started: each gets the timer's
-    /// name and its owner [documented: SetOnAuxTimerStartHandler].
+    /// name and its owner with null calling reference (`GetSelfAlt == 0`) [documented:
+    /// SetOnAuxTimerStartHandler; observed: `w6d1p3_28_aux_timer_start_and_clear`,
+    /// `st(n=1,nm=[sNm],s0=1,sP=0)`].
     pub(crate) fn aux_timer_started(&mut self, owner: FormId, name: &str) {
         let hs: Vec<XVal> = self.showoff.timer_starts.iter().filter(|(_, n, o)| n == name && *o == owner).map(|(f, _, _)| f.clone()).collect();
         for f in hs {
-            let ctx = RunCtx { self_ref: Some(owner), ..RunCtx::default() };
-            if let Err(error) = self.run_function(&f, Some(fnv_script::vm::Value::Ref(owner.0)), vec![XVal::Str(name.to_string()), XVal::Ref(owner.0)], None, ctx) {
+            let ctx = RunCtx::default();
+            if let Err(error) = self.run_function(&f, None, vec![XVal::Str(name.to_string()), XVal::Ref(owner.0)], None, ctx) {
                 self.emit(crate::trace::EventKind::ScriptError { unit: "aux timer start handler".into(), error });
             }
         }
@@ -215,11 +217,14 @@ impl Game<'_> {
     pub(crate) fn aux_timer_updates(&mut self) {
         self.showoff5_tick();
         // Handlers set or removed last frame take effect now [observed: showoff3
-        // so3.aux.start.reg, a start in the step that set the handler runs nothing, a
-        // restart one frame later runs it; so3.aux.start.remove, a restart in the step that
-        // removed it still runs it].
-        for (start, set, f, timer, owner) in std::mem::take(&mut self.showoff.pending_handlers) {
-            let hs = if start { &mut self.showoff.timer_starts } else { &mut self.showoff.timer_updates };
+        // so3.aux.start.reg, so3.aux.start.remove; `w6d1p3_27_aux_timer_stop`,
+        // `same=0,noev=0,next=1,remSame=1`].
+        for (kind, set, f, timer, owner) in std::mem::take(&mut self.showoff.pending_handlers) {
+            let hs = match kind {
+                crate::nvse_showoff::AuxTimerHandlerKind::Start => &mut self.showoff.timer_starts,
+                crate::nvse_showoff::AuxTimerHandlerKind::Stop => &mut self.showoff.timer_stops,
+                crate::nvse_showoff::AuxTimerHandlerKind::Update => &mut self.showoff.timer_updates,
+            };
             hs.retain(|(h, n, o)| !(*h == f && *n == timer && *o == owner));
             if set {
                 hs.push((f, timer, owner));
@@ -243,9 +248,10 @@ impl Game<'_> {
         for (owner, name, d) in due {
             let hs: Vec<XVal> = self.showoff.timer_updates.iter().filter(|(_, n, o)| *n == name && *o == owner).map(|(f, _, _)| f.clone()).collect();
             for f in hs {
-                let ctx = RunCtx { self_ref: Some(owner), ..RunCtx::default() };
+                // Null calling reference matching Start/Stop [hypothesis].
+                let ctx = RunCtx::default();
                 let args = vec![XVal::Str(name.clone()), XVal::Ref(owner.0), XVal::Num(d)];
-                if let Err(error) = self.run_function(&f, Some(fnv_script::vm::Value::Ref(owner.0)), args, None, ctx) {
+                if let Err(error) = self.run_function(&f, None, args, None, ctx) {
                     self.emit(crate::trace::EventKind::ScriptError { unit: "aux timer update handler".into(), error });
                 }
             }
@@ -459,7 +465,15 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         // `maxDistance [flags]`: the actors within the distance; flag 1 no dead ones, 2 no
         // invisible ones (Invisibility or Chameleon above 0), 4 only ones in combat the
         // calling reference detects [documented: GetNumActorsInRangeFromRef]. The calling
-        // reference does not count itself [hypothesis].
+        // reference does not count itself [observed 2026-11-23/24: Fallout: New Vegas
+        // 1.4.0.525 + xNVSE 6.4.9 + ShowOffNVSE 184, 10 official base masters,
+        // `GSDocMitchellHouse` (`0x00103DF9`), committed probes
+        // `so_14_actors_in_range_excludes_self` (`wave4a_extenders.json`) and
+        // `w6t2_08_showoff_equipped_weight_and_ally_temp`
+        // (`tools/capture/nvse/catalogs/wave6_t2_observed_matches.json`): `rng(10=0,2k=1)`
+        // (range 10 returns 0 excluding Player; range 2000 returns 1 for Doc Mitchell),
+        // see docs/spec-notes/ext-showoff.md §5; zero DLL, PDB, or third-party source
+        // consulted].
         "getnumactorsinrangefromref" => {
             let Some(me) = subject else { return Some(Ok(zero)) };
             let max = num(args, 0, 0.0);
@@ -564,7 +578,12 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
             let timer = text(args, 2).to_ascii_lowercase();
             let owner = form(args, 3).or_else(|| subject.filter(|_| args.len() < 4)).unwrap_or(FormId::PLAYER_REF);
             // Applied at the next frame (`Game::aux_timer_updates`).
-            g.showoff.pending_handlers.push((name.contains("start"), set, f, timer, owner));
+            let kind = if name.contains("start") {
+                crate::nvse_showoff::AuxTimerHandlerKind::Start
+            } else {
+                crate::nvse_showoff::AuxTimerHandlerKind::Update
+            };
+            g.showoff.pending_handlers.push((kind, set, f, timer, owner));
             XVal::Num(1.0)
         }
         // ---- a reference's radiation ----

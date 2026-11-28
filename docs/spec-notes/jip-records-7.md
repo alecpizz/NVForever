@@ -8,8 +8,13 @@ are kept on the other machine); choices the pages leave open are tagged [hypothe
 Setters change the form for the session and are read by this batch's getters and the
 earlier ones (GetAmmoSpeed, GetAmmoConsumedPercent, GetAmmoCasing, GetNumAmmoEffects,
 GetNthAmmoEffect, GetAmmoEffectTraitNumeric, GetClimateNumWeatherTypes,
-GetClimateNthWeather…). The setters of a trait return 0 [hypothesis: as the record
-setters of batch 5 were observed to, jip-records-5.md].
+GetClimateNthWeather…). The setters of a trait return 0 [observed: jip7 below; Fallout:
+New Vegas 1.4.0.525 + xNVSE 6.4.9 + JIP LN 57.30, 2026-11-23, `GSDocMitchellHouse`
+(`0x00103DF9`), 10 official base masters, read-only `PrintToConsole` probe
+`b3_jip_ex_04_set_ammo_trait_ret` (`tools/capture/nvse/catalogs/wave4b_extenders.json`,
+#3679, calling `SetAmmoTraitNumeric rAm 0 1.5` on 10mm Ammo `0x4241`):
+`PROBE|b3_jip_ex_04_set_ammo_trait_ret|s0=1.00,ret=0,s1=1.50`; no DLL or source
+consulted].
 
 ## 1. Ammunition and ammo effects
 
@@ -84,6 +89,7 @@ transitions take their own time (follow-up: the sky through these changes).
 |---|---|
 | SetArmorClass `armor class` | 1 light, 2 medium, 3 heavy [documented]: BMDT's general flags Medium (bit 3) and Heavy (bit 7), read by `Game::armor_class` |
 | SetArmorRCT `armor path` | BMCT, the ragdoll constraint template |
+| Get/SetBipedModelList `armor [list]` | ARMO BIPL (`nvse_plugins.rs`); validates `ARMO` target and `FLST` list, treats non-`FLST` and explicit null (`0`) as no-ops, and clears only when `list` is omitted [documented: GECK wiki GetBipedModelList, SetBipedModelList; observed: Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 + JIP LN 57.30, 2026-11-25, `GSDocMitchellHouse` (`0x00103DF9`), 10 official base masters, isolated clean-room staging copy (read-only probe; zero writes to game install or Saves), `w6d2p5_04_biped_model_list_omit` (`tools/capture/nvse/catalogs/wave6d2_set_biped_model_list_validate.json`): `PROBE\|w6d2p5_04_biped_model_list_omit\|set=1,badEqFl=1,badZ=0,nullZ=0,omitZ=1`; zero DLL, PDB, or third-party source consulted] |
 | SetArmorConditionPenalty `[multiplier]` | kept; returns the value before the call; left out, unchanged; defaults to Stewie's `Tweaks::armor_condition_penalty` (1.0 by default) until a script sets it [documented; observed: jip7 armor.condpenalty; design: docs/design/tweaks.md]; any finite float is stored raw without clamping (5.0, 3.0, -1.0) [observed: jip7b armor.condpenalty.neg; Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 + JIP LN 57.30 with the 10 official base masters, clean-room script probe jip_19_armor_cond_penalty_clamp (SetArmorConditionPenalty): 1.000,1.000,5.000,5.000,-1.000; no DLL or source consulted] |
 | SetDamageToArmorMaxPercent `[share]` | kept, 0-1 only (2 and -1 set nothing); returns the value before the call; left out, unchanged; 1 until set [observed: jip7 armor.maxpercent, jip7b armor.maxpercent.range] |
 

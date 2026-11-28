@@ -61,6 +61,29 @@ owner, 2026-10-19), 43 screenshots of a game against Ringo taken by the owner
   2026-10-23 NVForever ran none and the player owned 0 cards after Ringo's gift, owner's
   playtest list 7 item 8].
 
+### 2.1 The card's shape (2026-11-12)
+
+- The card pictures are opaque, corners included. The faces and backs are DXT1, 128 by
+  256, with no transparent texel; their corners are pale paper [observed: cardb_s09.dds,
+  cardg_back.dds, cardt_c01.dds, the first level's corner blocks].
+- The original's card models round the corners with their shape. The face of
+  `meshes\terminals\nv_caravan\player_1_01.nif` is a 12-point outline, 2.5 across and 3.5
+  long. Each corner is cut by three points, in the top right quarter (1.107, 1.75),
+  (1.205, 1.705) and (1.25, 1.597), mirrored into the others [observed: its 12-vertex
+  NiTriStripsData; the 24-vertex shapes are the shadow round it].
+- Its picture coordinates lay the whole picture (0 to 1 both ways, the 128 across the
+  card's width) on the full 2.5 by 3.5 rectangle, so each outline point takes the
+  picture at its own place: 0.0572 and 0.0437 at the corner's ends, 0.018 and 0.0129 at
+  its middle point, and one minus those [observed: the same block's UVs]. No part of the
+  picture is inset, and nothing lies past 0 to 1. The picture's corners outside the
+  outline are near white (an `fffaff` texel at 0,0 outside the drawn grey arc) and are
+  never drawn [observed: cardb_s09.dds].
+- NVForever draws a Caravan or poker card as that outline fitted to the card's size, the
+  picture laid on it as on the whole rectangle (`card_shape.rs`) [design]. Before
+  2026-11-12 the card was a full rectangle and its square corners showed past the rounded
+  ones [design]. Blackjack draws the game's own card
+  models, so it already has the outline.
+
 ## 3. The bet (first screen)
 
 From the screenshots [observed] and the in-game help `HelpCaravanBetting` [documented]:
@@ -150,7 +173,9 @@ rulings:
 - **Value and sale.** A caravan's value is the sum of its numbered cards (aces 1, Kings
   doubling). A caravan is sold at 21 to 26 when it is higher than the opponent's on the
   same track, or the opponent's is not in range; tied values sell neither [documented].
-  A value over 26 is shown in red [observed: "36"].
+  A value over 26 is shown in red [observed: "36"]; a value in the sold range, 21 to 26,
+  in white [observed: buckallobill, in game, FNV 1.4.0.525]. The menu file sets no colour for the values
+  (`caravan_game_menu.xml`, `CGM_*TrackNValue`) [observed]: the game's code does.
 - **The end.** The game ends when all three tracks are sold; the side with two or three
   wins the pot [documented]. A side that runs out of cards (no card in the hand and none
   in the deck) loses [owner ruling 2026-10-19]. Cancel forfeits (a loss).
@@ -188,8 +213,19 @@ Misc statistics: Caravan Games Won and Caravan Games Lost are counted (misc-stat
 
 ## 8. Not built
 
-- The original's 3D table, its card models and its dealing sequences (the menu is drawn
-  flat from the same textures).
+- The original's own 3D table layout. Its models are in `meshes\terminals\nv_caravan\`:
+  the table, one model per caravan place of each side (`player_<track>_<n>`,
+  `opponent_<track>_<n>`, seven places a track) holding four cards each (the card and up to
+  three face cards over it, each a quarter card to the right), the decks and the hands; they
+  have no animation sequences, and where the original puts them at run time is not known
+  (the player's places lie off the table model) [observed: the files' nodes]. NVForever's
+  game screen is drawn in 3D its own way instead (nvforever `caravan_view.rs`) [design]:
+  the planks (`nv_caravan-table01.dds` and its normal map) and the cards' own textures as
+  lit, shadowed cards, seen straight down where the flat screen puts them, so the screen's
+  names, values, outlines and buttons lie over them; a warm lamp above the table's left.
+  Moves slide: a card played goes from the hand to its place (the opponent's turns face up
+  on the way), a card drawn comes from the deck, a card thrown away leaves off the left.
+  The bet, deck building and results screens stay flat.
 - The Caravan challenges (NVChallengeCaravanWin, …Lost, …Master).
 - The help messages are shown once each, over the screen they explain (betting, deck
   building, the opening, the contract war) [hypothesis: the original's tutorial timing

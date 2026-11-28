@@ -1,0 +1,88 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6d2_magic_effects_tempclone",
+  "description": "Wave 6D-2 read-only probe for magic-item effect inheritance and AddNewEffect isolation on TempCloneForm.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "jip_ln_nvse": "57.30 (5730)"
+  },
+  "batches": [
+    {
+      "id": "w6d2_magic_effects_clone",
+      "title": "Wave 6D-2: Magic effects on TempCloneForm",
+      "extender": "JIP LN NVSE 57.30",
+      "required_plugins": [
+        "jip_nvse.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6d2_06_magic_effects_tempclone_isolation",
+          "bucket": "A",
+          "extender": "JIP LN 57.30",
+          "required_plugins": [
+            "jip_nvse.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/jip-records-8.md",
+          "spec_line": 50,
+          "functions_tested": [
+            "TempCloneForm",
+            "GetNumEffects",
+            "GetNthEffectBase",
+            "GetNthEffectTraitNumeric",
+            "AddNewEffect",
+            "GetBaseEffectFlag",
+            "SetBaseEffectFlag",
+            "GetEffectFlag",
+            "SetEffectFlag"
+          ],
+          "claim": "Verify TempCloneForm ALCH/MGEF isolation (static audit SD-03; jip-records-8.md:50): GetNumEffects, GetNthEffectBase, GetNthEffectTraitNumeric, AddNewEffect on cloned Stimpak, plus pre-clone inheritance and post-clone isolation of SetEffectFlag and SetBaseEffectFlag.",
+          "expected": "NVForever effect_indices/effect_list/addneweffect currently omit unclone() so cloned ALCH reads 0 effects; probe establishes exact JIP LN 57.30 TempCloneForm ALCH/MGEF behavior.",
+          "script_lines": [
+            "ref rStim = GetFormFromMod \"FalloutNV.esm\" \"15169\"",
+            "ref rRest = GetFormFromMod \"FalloutNV.esm\" \"14E\"",
+            "ref rDmg = GetFormFromMod \"FalloutNV.esm\" \"33595\"",
+            "ref rCl = TempCloneForm rStim",
+            "int nOrig = GetNumEffects rStim",
+            "int nCl = GetNumEffects rCl",
+            "ref e0Cl = GetNthEffectBase rCl 0",
+            "float m0Cl = GetNthEffectTraitNumeric rCl 0 0",
+            "int addCl = AddNewEffect rCl rDmg 5 10 0 0 1",
+            "int nClAft = GetNumEffects rCl",
+            "int nOrigAft = GetNumEffects rStim",
+            "int ef0 = GetEffectFlag rStim 3",
+            "SetEffectFlag rStim 3 1",
+            "ref rCl2 = TempCloneForm rStim",
+            "int efCl2Pre = GetEffectFlag rCl2 3",
+            "SetEffectFlag rStim 3 ef0",
+            "int efCl2Post = GetEffectFlag rCl2 3",
+            "int bf0 = GetBaseEffectFlag rRest 11",
+            "SetBaseEffectFlag rRest 11 1",
+            "ref rMCl = TempCloneForm rRest",
+            "int bfClPre = GetBaseEffectFlag rMCl 11",
+            "SetBaseEffectFlag rRest 11 bf0",
+            "int bfClPost = GetBaseEffectFlag rMCl 11",
+            "PrintToConsole \"PROBE|w6d2_06_magic_effects_tempclone_isolation|n=%g/%g,e0Ok=%g,m0=%.1f|add=%g,nAft=%g/%g|ef(pre=%g,post=%g)|bf(pre=%g,post=%g)\" nOrig nCl (e0Cl == rRest) m0Cl addCl nClAft nOrigAft efCl2Pre efCl2Post bfClPre bfClPost"
+          ]
+        }
+      ]
+    }
+  ]
+}

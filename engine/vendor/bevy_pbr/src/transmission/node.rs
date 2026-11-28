@@ -96,12 +96,29 @@ pub fn main_transmissive_pass_3d(
     if !transmissive_phase.items.is_empty() {
         let steps = transmission_settings.steps;
         if steps > 0 {
+            // Bed decals blend onto the opaque receiver before refraction samples it.
+            // These items keep their own back-to-front order at the start of the phase.
+            let first_reader = transmissive_phase.items.values().take_while(|item| item.before_copy).count();
+            if first_reader > 0 {
+                let mut pass = ctx.begin_tracked_render_pass(render_pass_descriptor.clone());
+                if let Some(viewport) =
+                    Viewport::from_viewport_and_override(camera.viewport.as_ref(), resolution_override)
+                {
+                    pass.set_camera_viewport(&viewport);
+                }
+                if let Err(err) = transmissive_phase.render_range(&mut pass, world, view_entity, 0..first_reader) {
+                    error!("Error rendering the scene before transmission {err:?}");
+                }
+                if first_reader == transmissive_phase.items.len() {
+                    return;
+                }
+            }
             let transmission =
                 transmission.expect("`ViewTransmissionTexture` should exist at this point");
 
             // `transmissive_phase.items` are depth sorted, so we split them into N = `steps`
             // ranges, rendering them back-to-front in multiple steps, allowing multiple levels of transparency.
-            for range in split_range(0..transmissive_phase.items.len(), steps) {
+            for range in split_range(first_reader..transmissive_phase.items.len(), steps) {
                 if target.resolve_deferred() {
                     // NVForever one resolve: the main texture's samples have not been
                     // resolved (`begin_deferred_resolve`); a pass that draws nothing

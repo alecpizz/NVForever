@@ -596,9 +596,9 @@ pub fn session_now(fsr_supported: bool) -> Session {
 /// Keeps [`UpscalerStatus`] with the request (`Graphics::upscaler`) and the session's facts,
 /// before `graphics::apply` puts the effective choice on the camera. Made on the first frame
 /// (after the INI is applied at `PostStartup`).
-pub fn follow_request(mut commands: Commands, graphics: Res<crate::graphics::Graphics>, fsr: Option<Res<crate::fsr::FsrSupport>>, status: Option<ResMut<UpscalerStatus>>) {
-    let session = session_now(fsr.is_some_and(|s| s.0));
-    let requested = graphics.upscaler;
+pub fn follow_request(mut commands: Commands, graphics: Res<crate::graphics::Graphics>, fsr: Option<Res<crate::fsr::FsrSupport>>, status: Option<ResMut<UpscalerStatus>>, thermal: Option<Res<crate::mobile_performance::ThermalRuntime>>) {
+    let session = session_now(fsr.as_deref().is_some_and(|s| s.0));
+    let requested = thermal.as_deref().map_or(graphics.upscaler, |t| t.render_request(graphics.upscaler, fsr.as_deref().is_some_and(|s| s.0)));
     match status {
         None => {
             let mut made = UpscalerStatus::new(session);

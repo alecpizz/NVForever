@@ -1,9 +1,9 @@
 //! Clean-room end-to-end qualification tests for Stewie's Tweaks version gates
-//! #3179 (941 -> 945, promoted), #3183 (945 -> 960, held), and #3184 (960 -> 970, held).
+//! #3179 (941 -> 945, promoted), #3183 (945 -> 960, promoted), and #3184 (960 -> 970, held).
 //!
 //! Independently authored synthetic records, XML fixtures, and NVSE scripts only
 //! (no game data and no copied mod script text; `GetPluginVersion "lStewieAl's Tweaks"`
-//! reports `945` while `960` and `970` remain unpromoted).
+//! reports `960` while `970` remains unpromoted).
 
 use crate::common::*;
 use fnv_esm::{LoadOrder, Plugin, Schema};
@@ -312,8 +312,8 @@ fn gate_945_casino_menu_close_decimal_info_dialog_topic_and_no_casino_bans() {
     let f = fixture();
     let mut g = new_game(&f);
 
-    // Version promoted from 941 -> 945 after #3179 qualification; 960/970 remain held.
-    assert_eq!(num(&mut g, r#"GetPluginVersion "lStewieAl's Tweaks""#), 945.0);
+    // Version promoted from 945 -> 960 after #3183 qualification; 970 remains held.
+    assert_eq!(num(&mut g, r#"GetPluginVersion "lStewieAl's Tweaks""#), 960.0);
 
     // Register SetOnMenuCloseEventHandler for documented casino menu codes 1080/1081/1082
     // and SetOnDialogTopicEventHandler using an 8-digit ALL-DECIMAL bare hex FormID (`00163183`).
@@ -394,7 +394,7 @@ fn gate_945_casino_rewards_fix_contract_end_to_end() {
     let f = fixture();
     let mut g = new_game(&f);
 
-    // 1. Version guard contract: 945 passes while 960 stays blocked.
+    // 1. Version guard contract: 945 and 960 pass while 970 stays blocked.
     let guard_945 = run(
         &mut g,
         r#"
@@ -424,7 +424,18 @@ fn gate_945_casino_rewards_fix_contract_end_to_end() {
         SetFunctionValue 1
         "#,
     );
-    assert_eq!(guard_960, XVal::Num(0.0), "960 gate must remain blocked until #3183");
+    assert_eq!(guard_960, XVal::Num(1.0), "960 gate must pass after #3183 promotion");
+    let guard_970 = run(
+        &mut g,
+        r#"
+        if GetPluginVersion "lStewieAl's Tweaks" < 970
+            SetFunctionValue 0
+            return
+        endif
+        SetFunctionValue 1
+        "#,
+    );
+    assert_eq!(guard_970, XVal::Num(0.0), "970 gate must remain blocked until #3184");
 
     // 2. Register menu-close (1080/1081/1082) and dialog-topic handlers (8-digit all-decimal
     //    INFO FormID, DIAL topic, FLST INFO list, FLST DIAL list, and empty-FLST wildcard).
@@ -516,7 +527,40 @@ fn gate_945_casino_rewards_fix_contract_end_to_end() {
 fn gate_960_live_stewval_pipboy_mode_and_menu_search_bar_offsets() {
     let f = fixture();
     let mut g = new_game(&f);
-    assert_eq!(num(&mut g, r#"GetPluginVersion "lStewieAl's Tweaks""#), 945.0);
+    assert_eq!(num(&mut g, r#"GetPluginVersion "lStewieAl's Tweaks""#), 960.0);
+
+    // 1. Clean-room Pip-Boy UI Tweaks & Quality of Life ESPless `< 960` startup gates pass
+    //    while `< 970` remains blocked (#3183 promoted; #3184 still held).
+    let pipboy_ui_tweaks_guard = run(
+        &mut g,
+        r#"
+        if GetNVSEVersionFull < 6.30
+            SetFunctionValue 0
+            return
+        endif
+        if GetPluginVersion "lStewieAl's Tweaks" < 960
+            SetFunctionValue 0
+            return
+        endif
+        SetFunctionValue 1
+        "#,
+    );
+    assert_eq!(pipboy_ui_tweaks_guard, XVal::Num(1.0), "Pip-Boy UI Tweaks >= 960 gate must pass");
+    let qol_espless_guard = run(
+        &mut g,
+        r#"
+        if GetPluginVersion "lStewieAl's Tweaks" < 960
+            SetFunctionValue 0
+            return
+        endif
+        if GetPluginVersion "lStewieAl's Tweaks" < 970
+            SetFunctionValue 2
+            return
+        endif
+        SetFunctionValue 3
+        "#,
+    );
+    assert_eq!(qol_espless_guard, XVal::Num(2.0), "960 passes while 970 stays blocked");
 
     // Seed a conflicting INI file to prove live bound engine settings override stale INI
     // for mapped keys (including bArmorConditionLabel) while unrepresented keys
@@ -598,10 +642,56 @@ fn gate_960_live_stewval_pipboy_mode_and_menu_search_bar_offsets() {
 }
 
 #[test]
+fn gate_960_quality_of_life_espless_pipboy_light_and_menu_close_contract() {
+    let f = fixture();
+    let mut g = new_game(&f);
+
+    // 1. Quality of Life ESPless `< 960` guard passes; `< 970` remains blocked.
+    let guard = run(
+        &mut g,
+        r#"
+        if GetPluginVersion "lStewieAl's Tweaks" < 960
+            SetFunctionValue 0
+            return
+        endif
+        SetFunctionValue 1
+        "#,
+    );
+    assert_eq!(guard, XVal::Num(1.0));
+
+    // 2. Even with no `nvse_stewie_tweaks.ini` file on disk, bound NVForever settings
+    //    report `bKeepPipboyLightOnCellChange:Tweaks == 1` via StewieGetValue/StewVal.
+    g.bind_stewie_stat_settings(&Tweaks::default());
+    assert_eq!(num(&mut g, r#"StewieGetValue "bKeepPipboyLightOnCellChange:Tweaks""#), 1.0);
+    assert_eq!(num(&mut g, r#"StewVal "bKeepPipboyLightOnCellChange:Tweaks""#), 1.0);
+
+    // 3. Register a menu-close handler for InventoryMenu (1002) that checks GetPipBoyMode
+    //    and calls TogglePipBoyLight cleanly (matching Quality of Life ESPless's consumers).
+    run(
+        &mut g,
+        r#"
+        SetOnMenuCloseEventHandler (begin function {int iMenu}
+            PlayerREF.AuxVarSetFlt "*qol_closed_menu" iMenu
+            PlayerREF.AuxVarSetFlt "*qol_pb_mode_at_close" (GetPipBoyMode)
+            TogglePipBoyLight
+        end) 1 1002
+        "#,
+    );
+
+    assert_eq!(num(&mut g, "GetPipBoyMode"), 0.0);
+    g.open_menu(menus::INVENTORY);
+    assert_eq!(num(&mut g, "GetPipBoyMode"), 3.0);
+    assert!(g.engine_menu_closed(menus::INVENTORY));
+    assert_eq!(num(&mut g, "GetPipBoyMode"), 0.0);
+    assert_eq!(num(&mut g, r#"PlayerREF.AuxVarGetFlt "*qol_closed_menu""#), f64::from(menus::INVENTORY));
+    assert_eq!(num(&mut g, r#"PlayerREF.AuxVarGetFlt "*qol_pb_mode_at_close""#), 0.0);
+}
+
+#[test]
 fn gate_970_barter_container_open_click_wildcards_and_key_button_events() {
     let f = fixture();
     let mut g = new_game(&f);
-    assert_eq!(num(&mut g, r#"GetPluginVersion "lStewieAl's Tweaks""#), 945.0);
+    assert_eq!(num(&mut g, r#"GetPluginVersion "lStewieAl's Tweaks""#), 960.0);
 
     let src = pipboy_and_trade_ui();
     let barter = g.ui_tree.load_menu(&src, "menus\\barter_menu.xml").unwrap();
@@ -689,7 +779,7 @@ fn gate_970_barter_container_open_click_wildcards_and_key_button_events() {
     assert_eq!(glob(&g, G_BTN_SUM), 12.0);
 
     // Live StewVal/StewieGetValue for Barter Categories Icons' synchronized-category keys
-    // and 9.65-9.70 settings while keeping reported version at main's 945.
+    // and 9.65-9.70 settings while keeping reported version at main's 960 (#3810).
     let bound = Tweaks {
         sync_categories: true,
         prevent_switch_when_emptying_category: true,
@@ -697,7 +787,7 @@ fn gate_970_barter_container_open_click_wildcards_and_key_button_events() {
         ..Default::default()
     };
     g.bind_stewie_stat_settings(&bound);
-    assert_eq!(num(&mut g, r#"GetPluginVersion "lStewieAl's Tweaks""#), 945.0);
+    assert_eq!(num(&mut g, r#"GetPluginVersion "lStewieAl's Tweaks""#), 960.0);
     for fn_name in ["StewVal", "StewieGetValue"] {
         assert_eq!(num(&mut g, &format!(r#"{fn_name} "bSynchronizeContainerCategories:Tweaks""#)), 1.0);
         assert_eq!(num(&mut g, &format!(r#"{fn_name} "bPreventSwitchWhenEmptyingCategory:Synchronized Container Categories""#)), 1.0);

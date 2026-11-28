@@ -5,9 +5,10 @@
 //! - **The box**: when a reputation's title changes (its fame or infamy reaches another
 //!   level, from a script's AddReputation or a crime, `crate::crime`) the game opens a
 //!   message box for it: the reputation's name as the title, the new title and its
-//!   description, a Vault Boy face at the left and "Ok" [observed: the owner's two
-//!   screenshots in C:\fnv-private\Faction Reputation, "Goodsprings / Liked" and "Powder
-//!   Gangers / Vilified"]. It waits in the game's queue of boxes (`Game::show_box` with
+//!   description, a Vault Boy face at the left and the `sOk` button [observed: the
+//!   owner's two screenshots in C:\fnv-private\Faction Reputation, Goodsprings at fame
+//!   level 2 and the Powder Gangers at infamy level 3; the words shown are NVForever's
+//!   own, [`TITLES`]]. It waits in the game's queue of boxes (`Game::show_box` with
 //!   the REPU's FormID), so it stops the game as a message box does; `crate::script_hud`
 //!   draws it with [`panel`].
 //! - **Sound**: `UIRepGood` when fame reached a new level, else `UIRepBad` [observed: the
@@ -34,51 +35,50 @@ use fnv_game::functions as gf;
 use fnv_sim::FormId;
 use std::collections::BTreeMap;
 
-/// The titles of the fame and infamy levels (0–3 each), by fame then infamy
-/// [documented: GECK wiki GetReputationThreshold, the names; Fallout wiki "Reputation
-/// (Fallout: New Vegas)", the table of ranges (owner's copy in C:\fnv-private\fallout
-/// fandom); observed: FalloutNV.esm's `sRepTitlePosTwoNegThreeDesc` is the Soft-Hearted
-/// Devil's description, so fame 2 and infamy 3 is that title, as the table has it].
+/// The titles of the fame and infamy levels (0–3 each), by fame then infamy: NVForever's
+/// own words [design, #2982]. The load order holds no title setting [observed:
+/// FalloutNV.esm and the DLC masters, `fnvtool esm inventory`], and the original's
+/// built-in titles are not in the data, so they are not copied (LEGAL.md).
 pub const TITLES: [[&str; 4]; 4] = [
-    ["Neutral", "Shunned", "Hated", "Vilified"],
-    ["Accepted", "Mixed", "Sneering Punk", "Merciful Thug"],
-    ["Liked", "Smiling Troublemaker", "Unpredictable", "Soft-Hearted Devil"],
-    ["Idolized", "Good-Natured Rascal", "Dark Hero", "Wild Child"],
+    ["Neutral", "Distrusted", "Despised", "Reviled"],
+    ["Welcomed", "Uncertain", "Rough Helper", "Kind Brute"],
+    ["Trusted", "Lovable Rogue", "Puzzle", "Feared Benefactor"],
+    ["Celebrated", "Cheerful Scoundrel", "Grim Champion", "Enigma"],
 ];
 
-/// The titles' descriptions, as [`TITLES`] [documented: the same Fallout wiki table; the
-/// game's own come from settings `sRepTitlePos…Neg…Desc` where a plugin has them,
-/// [`description`]].
+/// The titles' descriptions, as [`TITLES`]: NVForever's own words [design, #2982], used
+/// where the load order has no setting `sRepTitlePos…Neg…Desc` ([`description`]).
 const DESCRIPTIONS: [[&str; 4]; 4] = [
     [
-        "People don't know enough about you to form an opinion.",
-        "You've left a poor impression on the community and may be shunned as a result.",
-        "Now that folks know you're bad, most people outright hate you.",
-        "For your overwhelmingly monstrous behavior, you have become vilified by the community.",
+        "Too little is known of you here for anyone to have made up their mind.",
+        "Word of your misdeeds has spread, and people here keep you at arm's length.",
+        "Your deeds have turned most people here against you.",
+        "Your cruelty is so well known here that people want you gone.",
     ],
     [
-        "Folks have come to accept you for your helpful nature.",
-        "A little bit good mixed with a little bit bad, people haven't figured you out yet.",
-        "Even though you've done some good for the community, people still think you're a punk.",
-        "Despite your reputation as a thug, you are known to occasionally show a charitable side.",
+        "Your help has been noticed, and people here are glad to see you.",
+        "You have done some good here and some harm, and people cannot decide about you yet.",
+        "You have lent a hand here now and then, but your harm is what people remember.",
+        "People here fear your violence, yet some recall a kindness of yours.",
     ],
     [
-        "Enough news of your good works has been passed around that people like you.",
-        "People know you're good at heart even though you're occasionally a troublemaker.",
-        "No one's sure what to make of your unpredictable nature, but you've left a strong impression.",
-        "Most people say you're the devil himself, but most admit you've also done a world of good.",
+        "Your good deeds are known here, and people count you as a friend.",
+        "People here think well of you, though you are known to stir up trouble.",
+        "Your deeds here have been both generous and harsh, and nobody knows what to expect from you.",
+        "People here dread you, though they cannot deny the good you have done.",
     ],
     [
-        "Renowned for your extensive support and goodwill, you are idolized by the community.",
-        "Your reputation as a good-natured friend of the community manages to outshine your dark side.",
-        "Folks still think you're some kind of hero, but you sure can be nasty sometimes.",
-        "Your wild, seemingly capricious behavior leaves people scratching their heads in confusion and avoiding close contact.",
+        "Your generosity is a byword here, and people hold you in the highest regard.",
+        "People here adore you, and forgive the mischief you get up to.",
+        "People here see you as a champion, if a frightening one.",
+        "Your deeds here have been so great and so terrible that people hardly know whether to cheer or run.",
     ],
 ];
 
 /// The faces at the box's left: more fame than infamy, more infamy, as much of each
-/// [observed: the owner's screenshots show `glow_message_vaultboy_very_happy` for
-/// "Liked" and `glow_message_vaultboy_sad` for "Vilified"; hypothesis: the rule, and the
+/// [observed: the owner's screenshots show `glow_message_vaultboy_very_happy` for fame
+/// level 2 without infamy and `glow_message_vaultboy_sad` for infamy level 3 without
+/// fame; hypothesis: the rule, and the
 /// neutral face for mixed titles].
 const GOOD_FACE: &str = "textures\\interface\\icons\\message icons\\glow_message_vaultboy_very_happy.dds";
 const BAD_FACE: &str = "textures\\interface\\icons\\message icons\\glow_message_vaultboy_sad.dds";
@@ -96,7 +96,7 @@ pub fn title(fame: usize, infamy: usize) -> &'static str {
 
 /// The description of a title: the game setting `sRepTitlePos<fame>Neg<infamy>Desc`
 /// (numbers in words) when the load order has it [hypothesis: the pattern of the one
-/// FalloutNV.esm overrides], else [`DESCRIPTIONS`].
+/// FalloutNV.esm holds, `sRepTitlePosTwoNegThreeDesc`], else [`DESCRIPTIONS`].
 pub fn description(fame: usize, infamy: usize, setting: impl Fn(&str) -> Option<String>) -> String {
     let (f, i) = (fame.min(3), infamy.min(3));
     setting(&format!("sRepTitlePos{}Neg{}Desc", NUMBERS[f], NUMBERS[i])).filter(|s| !s.trim().is_empty()).unwrap_or_else(|| DESCRIPTIONS[f][i].to_string())
@@ -228,11 +228,12 @@ mod tests {
 
     #[test]
     fn titles_and_faces_follow_fame_and_infamy() {
-        assert_eq!(title(2, 0), "Liked");
-        assert_eq!(title(0, 3), "Vilified");
-        assert_eq!(title(2, 3), "Soft-Hearted Devil");
-        assert_eq!(title(3, 2), "Dark Hero");
-        assert_eq!(title(9, 9), "Wild Child");
+        assert_eq!(title(0, 0), "Neutral");
+        assert_eq!(title(2, 0), "Trusted");
+        assert_eq!(title(0, 3), "Reviled");
+        assert_eq!(title(2, 3), "Feared Benefactor");
+        assert_eq!(title(3, 2), "Grim Champion");
+        assert_eq!(title(9, 9), "Enigma");
         assert_eq!(face(2, 0), GOOD_FACE);
         assert_eq!(face(0, 3), BAD_FACE);
         assert_eq!(face(1, 1), MIXED_FACE);
@@ -241,9 +242,9 @@ mod tests {
     #[test]
     fn a_plugins_description_wins() {
         let none = |_: &str| None;
-        assert!(description(2, 0, none).starts_with("Enough news"));
+        assert!(description(2, 0, none).starts_with("Your good deeds"));
         let one = |n: &str| (n == "sRepTitlePosTwoNegThreeDesc").then(|| "Theirs.".to_string());
         assert_eq!(description(2, 3, one), "Theirs.");
-        assert!(description(3, 2, one).starts_with("Folks still think"));
+        assert!(description(3, 2, one).starts_with("People here see you"));
     }
 }

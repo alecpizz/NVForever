@@ -220,7 +220,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
             zero
         }
         // `quest index n ref`: the n-th target becomes the reference; past the end
-        // nothing [hypothesis].
+        // nothing (see docs/spec-notes/jip-scripts-10.md §1).
         "setobjectiventhtarget" => {
             let (Some(q), Some(i), Some(n), Some(t)) = (quest_at(g, 0), num(args, 1), num(args, 2), form(args, 3)) else { return Some(Ok(zero)) };
             let i = i as i32;
@@ -252,8 +252,8 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
             }
             zero
         }
-        // The active quest's objectives shown and not done, by index [hypothesis: the
-        // page says "active quest objectives"; the elements are the objective indices].
+        // The active quest's objectives shown and not done, by index (see
+        // docs/spec-notes/jip-scripts-10.md §1).
         "getactiveobjectives" => {
             let open: Vec<XVal> = g.ui.active_quest.and_then(|q| g.quests.get(&q)).map(|s| s.objectives.iter().filter(|(_, o)| o.displayed && !o.completed).map(|(&i, _)| XVal::Num(f64::from(i))).collect()).unwrap_or_default();
             list(g, open)
@@ -407,7 +407,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
             zero
         }
         // `scriptVars linkedRefs auxVars refMaps` [documented]. NVForever does not keep
-        // which mod added a variable or a link: every one goes [hypothesis]; the aux
+        // which mod added a variable or a link: every one goes (see docs/spec-notes/jip-scripts-10.md §3); the aux
         // variables and RefMaps by the calling mod (1) or the public ones (2) [documented].
         "clearjipsaveddata" => {
             if num(args, 0).is_some_and(|x| x != 0.0) {
@@ -531,7 +531,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
             let v = match (slot, args.get(1)) {
                 (0..=17, Some(v @ (XVal::Num(_) | XVal::Ref(_)))) => Some(v.clone()),
                 (18 | 19, Some(v @ XVal::Str(_))) => Some(v.clone()),
-                // No value clears the slot [hypothesis].
+                // No value clears the slot (see docs/spec-notes/jip-scripts-10.md §4).
                 (0..=19, None) => None,
                 _ => return Some(Ok(zero)),
             };
@@ -608,8 +608,8 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
             yes(g.mod_files.write_root_text(&path, body))
         }
         // `indent "text"` (formatted by the VM): a line in `Mod Logs\<mod>.log` under the
-        // game's folder, a tab per indent level [documented: the folder and name;
-        // hypothesis: the indent]. A script of no mod writes nothing [hypothesis].
+        // game's folder, a tab per indent level [documented: the folder and name];
+        // a script of no mod writes nothing (see docs/spec-notes/jip-scripts-10.md §5).
         "modlogprint" => {
             let plugin = g.other.plugin.clone();
             let Some(t) = text(args, 1).filter(|_| !plugin.is_empty()) else { return Some(Ok(zero)) };

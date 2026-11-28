@@ -723,6 +723,11 @@ def run_launch(launch: Launch, env: Env, locks: Locks | None) -> tuple[int | Non
                 except subprocess.TimeoutExpired:
                     code, err = None, "timed out"
                     break
+                except OSError as e:
+                    # No fnvtool built (or not runnable): this launch fails with the reason, and
+                    # the run goes on to the rest and its summary (#4740).
+                    code, err = None, f"cannot start fnvtool at {env.fnvtool}: {e}"
+                    break
                 if r.returncode != 0:
                     code = r.returncode
                     break
@@ -736,7 +741,22 @@ def run_launch(launch: Launch, env: Env, locks: Locks | None) -> tuple[int | Non
 
 
 def missing_requirements(s: Scenario) -> list[str]:
-    return [r for r in s.requires if not os.environ.get(r)]
+    """The `requires` entries not met: a variable that is unset or empty, or a `!variable`
+    that is set."""
+    return [r for r in s.requires if bool(os.environ.get(r.removeprefix("!"))) == r.startswith("!")]
+
+
+def missing_data_files(s: Scenario, data: str | Path | None) -> list[str]:
+    """The `data_files` the Data folder does not hold: a mod's plugin the scenario loads
+    that the repository cannot ship. Names are compared without case, as Windows finds
+    them. With no Data folder given none are missing (nothing is launched then)."""
+    if not s.data_files or not data:
+        return []
+    try:
+        here = {n.lower() for n in os.listdir(data)}
+    except OSError:
+        here = set()
+    return [f for f in s.data_files if f.lower() not in here]
 
 
 def platform_name() -> str:

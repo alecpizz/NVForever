@@ -5,7 +5,7 @@
 //!   something under it the player can use, `glow_crosshair_filled.dds`, the same arrows
 //!   in a box [documented: the HUD's template names the two; observed: the owner's
 //!   screenshots, §2, §3].
-//! - Under it, the key and the action ("E) Take"), the target's name, and for an item a
+//! - Under it, the key and the action ("[E] Take"), the target's name, and for an item a
 //!   line across with its weight and value either side of a stem (§3). [`layout`] sets
 //!   them out (pure, tested) from the measurements of §3, in the HUD's font 7.
 //! - **Spread**: while a weapon with a firing cycle is drawn the plain crosshair's two
@@ -99,21 +99,34 @@ const KEY_GAP: f32 = 11.0;
 const DIVIDER_BELOW: f32 = 8.5;
 const STEM_X: f32 = -4.0;
 /// The item's figures: their line under the divider picture's top; from the stem, where
-/// "WG" starts and the weight ends (left of it) and where "VAL" starts and the value ends
-/// (right of it).
+/// the weight's word starts and the weight ends (left of it) and where the value's word
+/// starts and the value ends (right of it).
 const FIGURES_BELOW: f32 = 50.5;
 const WG_X: f32 = -145.0;
 const WEIGHT_END: f32 = -21.0;
 const VAL_X: f32 = 9.5;
 const VALUE_END: f32 = 135.0;
 
-/// The key that activates when no binding says [hypothesis: the key's name and ")", as
-/// the screenshots show for E, the Activate control's default (bindings.rs)]. The prompt
-/// names the Activate control's own key, or its controller button while a controller
-/// works the controls (`crate::bindings::Bindings::prompt`: "A)").
-const KEY: &str = "E)";
-const WG: &str = "WG";
-const VAL: &str = "VAL";
+/// The key that activates when no binding says: E, the Activate control's default
+/// (bindings.rs), in brackets as every hint is [design, #4495]. The prompt names the
+/// Activate control's own key, or its controller button while a controller works the
+/// controls (`crate::bindings::Bindings::prompt`: "[A]").
+const KEY: &str = "[E]";
+/// The least room between a figure's word and the figure, when a long word or figure
+/// would otherwise meet it [design].
+const FIGURE_GAP: f32 = 8.0;
+
+/// The figures' words: the settings the item stats display's weight and value cards show
+/// (`sInventoryWeightUpper`, `sInventoryValue`), as the Pip-Boy's cards read them: the load
+/// order's text, else NVForever's own label (`fnv_ui::strings::BUILT_IN`) [design, #4495:
+/// in place of the abbreviations read from the original's screen].
+fn weight_word() -> &'static str {
+    crate::pipboy::labels::built_in_label("sInventoryWeightUpper")
+}
+
+fn value_word() -> &'static str {
+    crate::pipboy::labels::built_in_label("sInventoryValue")
+}
 
 /// What is written under the crosshair.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -124,14 +137,20 @@ pub struct Prompt {
     pub figures: Option<[String; 2]>,
     /// Drawn in the crime colour: someone else owns the target (`crate::crime`).
     pub crime: bool,
-    /// The Activate control's key or button and ")"; empty: [`KEY`].
+    /// The Activate control's key or button in brackets; empty: [`KEY`].
     pub key: String,
     /// A line under the name: [`EMPTY`] for a container or body with nothing in it.
     pub note: Option<String>,
+    /// Drawn greyed: E would do nothing (a co-op revive with nothing to revive with).
+    pub grey: bool,
 }
 
 /// Under the name of an empty container or body [owner 2026-10-27].
 const EMPTY: &str = "[Empty]";
+/// Under the name of a downed co-op player one has nothing to revive with [design].
+const NOTHING_TO_REVIVE_WITH: &str = "[No Stimpak]";
+/// A greyed prompt's strength [design].
+const GREY: f32 = 0.45;
 
 /// The player's tweak: a stack's weight and value are the whole stack's [design: docs/design/tweaks.md].
 static STACK_FIGURES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -176,7 +195,7 @@ impl Prompt {
         // An Activation Prompt (XATO) of the reference, else of its activator base, in
         // place of the action word; not over a lock or an inaccessible door
         // (docs/spec-notes/cells-refs.md §3) [hypothesis: which states it replaces].
-        if !matches!(t.action, Action::Locked { .. } | Action::UsePassword | Action::Unlock | Action::Name | Action::Hostile | Action::Inaccessible) {
+        if !matches!(t.action, Action::Locked { .. } | Action::UsePassword | Action::Unlock | Action::Name | Action::Hostile | Action::Inaccessible | Action::Revive { .. }) {
             if let Some(p) = activation_prompt(sim, t.form_id) {
                 action = p;
             }
@@ -193,8 +212,14 @@ impl Prompt {
             BaseData::Item(i) => Some([weight_text(i.weight.map(|w| w * n as f32)), value_text(i.worth().map(|v| v.saturating_mul(n)))]),
             _ => None,
         });
-        let note = t.empty.then(|| EMPTY.to_string());
-        Prompt { action, name, figures, crime: t.crime, key: String::new(), note }
+        let mut note = t.empty.then(|| EMPTY.to_string());
+        // A co-op revive with nothing to revive with says so, greyed [design: as the game
+        // shows a missing key].
+        let grey = matches!(t.action, Action::Revive { with: None });
+        if grey {
+            note = Some(NOTHING_TO_REVIVE_WITH.into());
+        }
+        Prompt { action, name, figures, crime: t.crime, key: String::new(), note, grey }
     }
 }
 
@@ -224,8 +249,9 @@ pub fn value_text(v: Option<i32>) -> String {
 pub struct Layout {
     pub texts: Vec<Set>,
     pub divider: Option<Vec2>,
-    /// A PlayStation face button's glyph in the key's place ("Cross)" drawn as the cross
-    /// and ")"): the glyph, its top left corner and its side [design, #1452].
+    /// A PlayStation face button's glyph in the key's place ("[Cross]" drawn as "[", the
+    /// cross and "]"): the glyph, its top left corner and its side [design, #1452]. The
+    /// "[" is the last of [`Layout::texts`].
     pub glyph: Option<(crate::pad::Glyph, Vec2, f32)>,
 }
 
@@ -233,10 +259,10 @@ pub fn layout(p: &Prompt, font: &Font) -> Layout {
     let line = |s: &str| font.lines(s, None).into_iter().next().unwrap_or_default();
     let set = |line: Line, x: f32, base: f32| Set { line, x, base };
     let action = line(&p.action);
-    // A face button under the PlayStation names: its glyph, then ")" [design, #1452]. The
+    // A face button under the PlayStation names: "[", its glyph, "]" [design, #1452]. The
     // labelled buttons (L1, Select…) are drawn by the menu hints, not the crosshair.
-    let glyph = p.key_text().strip_suffix(')').and_then(crate::pad::Glyph::named).filter(|g| g.is_face()).filter(|_| !p.action.is_empty());
-    let key = line(if glyph.is_some() { ")" } else { p.key_text() });
+    let glyph = p.key_text().strip_prefix('[').and_then(|k| k.strip_suffix(']')).and_then(crate::pad::Glyph::named).filter(|g| g.is_face()).filter(|_| !p.action.is_empty());
+    let key = line(if glyph.is_some() { "]" } else { p.key_text() });
     let name = line(&p.name);
     let action_x = ACTION_X - action.width / 2.0;
     let name_base = ACTION_BASE + LINE_PITCH;
@@ -258,23 +284,31 @@ pub fn layout(p: &Prompt, font: &Font) -> Layout {
     let divider = p.figures.as_ref().map(|[weight, value]| {
         let top = name_base + DIVIDER_BELOW;
         let base = top + FIGURES_BELOW;
-        let (weight, value) = (line(weight), line(value));
-        texts.push(set(line(WG), STEM_X + WG_X, base));
-        texts.push(set(weight.clone(), STEM_X + WEIGHT_END - weight.width, base));
-        texts.push(set(line(VAL), STEM_X + VAL_X, base));
-        texts.push(set(value.clone(), STEM_X + VALUE_END - value.width, base));
+        let (weight, value, wg, val) = (line(weight), line(value), line(weight_word()), line(value_word()));
+        // The weight ends against the stem; its word starts at its place, or further left
+        // when the two would meet. The value's word starts by the stem; the value ends at
+        // its place, or further right after its word.
+        let weight_x = STEM_X + WEIGHT_END - weight.width;
+        let wg_x = (STEM_X + WG_X).min(weight_x - FIGURE_GAP - wg.width);
+        let value_x = (STEM_X + VALUE_END - value.width).max(STEM_X + VAL_X + val.width + FIGURE_GAP);
+        texts.push(set(wg, wg_x, base));
+        texts.push(set(weight.clone(), weight_x, base));
+        texts.push(set(val, STEM_X + VAL_X, base));
+        texts.push(set(value.clone(), value_x, base));
         Vec2::new(STEM_X - STEM_IN_PICTURE, top)
     });
     let glyph = glyph.map(|g| {
         let side = font.size * GLYPH_SHARE;
         let x = action_x - KEY_GAP - key.width - GLYPH_GAP - side;
+        let open = line("[");
+        texts.push(set(open.clone(), x - GLYPH_GAP - open.width, ACTION_BASE));
         (g, Vec2::new(x, ACTION_BASE - side * GLYPH_RISE), side)
     });
     Layout { texts, divider, glyph }
 }
 
 /// A glyph's side as a share of the font's size, how much of it stands above the line
-/// and the room between it and its ")" [design, #1452].
+/// and the room between it and its brackets [design, #1452].
 const GLYPH_SHARE: f32 = 0.7;
 const GLYPH_RISE: f32 = 0.92;
 const GLYPH_GAP: f32 = 0.5;
@@ -517,6 +551,7 @@ fn spawn(commands: &mut Commands, kit: &Kit) {
 
 fn spawn_texts(p: &mut ChildSpawnerCommands, kit: &Kit, prompt: &Prompt) {
     let color = if prompt.crime { crime_colour() } else { amber(255.0) };
+    let color = if prompt.grey { color.with_alpha(GREY) } else { color };
     let l = layout(prompt, &kit.face.font);
     if let (Some(corner), Some(picture)) = (l.divider, kit.divider.clone()) {
         p.spawn((at(corner.x, corner.y, DIVIDER_SIZE.x, DIVIDER_SIZE.y), picture_node(picture, color)));
@@ -541,7 +576,7 @@ fn draw(
     (combat, hostile, bar, camera, time, dynamic, control): (Option<Res<crate::combat::Combat>>, Option<Res<crate::hud_target::AimHostile>>, Option<Res<crate::hud_target::HudTarget>>, Query<&Projection, With<crate::PlayerCamera>>, Res<Time>, Option<Res<DynamicCrosshair>>, Option<Res<crate::control::PlayerControl>>),
     mut spread: Local<f32>,
     mut logged: Local<(bool, i32, bool, Option<String>, Option<bool>, Option<bool>, Option<CrosshairStyle>)>,
-    (locks, bindings, creator, sights, scope, driven, kill_cam, tweaks, anim, vats): (
+    (locks, bindings, creator, sights, scope, driven, kill_cam, tweaks, vats): (
         Option<Res<ControlLocks>>,
         Option<Res<crate::bindings::Bindings>>,
         Option<Res<crate::creator::CreatorMenu>>,
@@ -550,7 +585,6 @@ fn draw(
         Option<Res<crate::player::ViewDriven>>,
         Option<Res<crate::kill_cam::KillCam>>,
         Option<Res<crate::tweaks::TweakSettings>>,
-        Option<Res<crate::combat::WeaponAnim>>,
         Option<Res<crate::vats_mode::VatsMode>>,
     ),
     data: Option<Res<GameData>>,
@@ -607,13 +641,16 @@ fn draw(
     // (docs/spec-notes/weapon-scopes.md §2): no crosshair.
     let scoped = scope.is_some_and(|s| s.on);
     // The player's tweak hides it while reloading too [design: docs/design/tweaks.md].
-    let reloading = tweaks.as_ref().is_some_and(|t| t.hide_crosshair_reloading) && anim.as_ref().is_some_and(|a| a.reload.is_some());
+    // Reloading now (a reload or a jam's clearing), not `WeaponAnim::reload`, which names the
+    // weapon's reload clip and is set for every weapon held: read as "reloading" it hid the
+    // crosshair and every prompt for good with this tweak on (#4611).
+    let reloading = tweaks.as_ref().is_some_and(|t| t.hide_crosshair_reloading) && combat.as_deref().is_some_and(crate::combat::Combat::player_reloading);
     // The player's tweak keeps it down the iron sights (a scope still hides it) [design: docs/design/tweaks.md].
     let keep = tweaks.as_ref().is_some_and(|t| t.crosshair_when_aiming);
     let sights = (sights.is_some_and(|s| s.0) && !keep) || scoped || reloading;
     if sights != logged.2 {
         logged.2 = sights;
-        info!("crosshair: {}", if !sights { "shown again" } else if scoped { "hidden by the scope" } else { "hidden down the true iron sights" });
+        info!("crosshair: {}", if !sights { "shown again" } else if scoped { "hidden by the scope" } else if reloading { "hidden while reloading" } else { "hidden down the true iron sights" });
     }
     for mut v in &mut root {
         // The Tweaks tab's crosshair key hides it [design: docs/design/tweaks.md].
@@ -723,7 +760,7 @@ mod tests {
     }
 
     fn prompt(action: &str, name: &str, figures: Option<[&str; 2]>) -> Prompt {
-        Prompt { action: action.into(), name: name.into(), figures: figures.map(|f| f.map(String::from)), crime: false, key: String::new(), note: None }
+        Prompt { action: action.into(), name: name.into(), figures: figures.map(|f| f.map(String::from)), crime: false, key: String::new(), note: None, grey: false }
     }
 
     #[test]
@@ -744,15 +781,18 @@ mod tests {
         assert_eq!((note.x + note.line.width / 2.0, note.base), (NAME_X, name.base + LINE_PITCH));
         assert_eq!(layout(&prompt("Open", "Footlocker", None), &font()).texts.len(), 3);
         assert_eq!(layout(&prompt("Open", "Footlocker", None), &font()).glyph, None);
-        // A PlayStation face button: its glyph left of a lone ")" (#1452).
-        let ps = Prompt { key: "Cross)".into(), ..prompt("Open", "Footlocker", None) };
+        // A PlayStation face button: its glyph between a "[" and a "]" (#1452).
+        let ps = Prompt { key: "[Cross]".into(), ..prompt("Open", "Footlocker", None) };
         let l = layout(&ps, &font());
         let (g, corner, side) = l.glyph.expect("a glyph");
         assert_eq!(g, crate::pad::Glyph::Cross);
-        assert_eq!(l.texts[0].line.text(), ")");
+        assert_eq!(l.texts[0].line.text(), "]");
         assert!(corner.x + side <= l.texts[0].x && side > 0.0);
-        // "L2)" has no glyph: written as it is.
-        let l2 = Prompt { key: "L2)".into(), ..prompt("Open", "Footlocker", None) };
+        let open = l.texts.last().unwrap();
+        assert_eq!(open.line.text(), "[");
+        assert!(open.x + open.line.width <= corner.x);
+        // "[L2]" has no glyph: written as it is.
+        let l2 = Prompt { key: "[L2]".into(), ..prompt("Open", "Footlocker", None) };
         assert_eq!(layout(&l2, &font()).glyph, None);
     }
 
@@ -779,10 +819,23 @@ mod tests {
         assert_eq!(figures.len(), 4);
         assert!(figures.iter().all(|s| s.base == corner.y + FIGURES_BELOW));
         let [wg, weight, val, value] = figures else { unreachable!() };
-        assert_eq!(wg.x, STEM_X + WG_X);
+        // The weight's word starts at its place, or further left when it would meet the weight.
+        assert!(wg.x <= STEM_X + WG_X && wg.x + wg.line.width + FIGURE_GAP <= weight.x + 1e-3, "{wg:?} before {weight:?}");
         assert_eq!(weight.x + weight.line.width, STEM_X + WEIGHT_END);
         assert_eq!(val.x, STEM_X + VAL_X);
         assert_eq!(value.x + value.line.width, STEM_X + VALUE_END);
+        // The words are the item stats display's settings: NVForever's labels with no plugin's.
+        let width = |s: &str| font().lines(s, None)[0].width;
+        assert_eq!((wg.line.width, val.line.width), (width("WEIGHT"), width("Value")));
+    }
+
+    #[test]
+    fn a_long_figure_and_its_word_never_meet() {
+        let l = layout(&prompt("Take", "Anvil", Some(["123456789.5", "123456789012"])), &font());
+        let [wg, weight, val, value] = &l.texts[3..] else { panic!("{:?}", l.texts) };
+        assert_eq!(weight.x + weight.line.width, STEM_X + WEIGHT_END, "the weight stays against the stem");
+        assert!(weight.x >= wg.x + wg.line.width + FIGURE_GAP - 1e-3, "{weight:?} after {wg:?}");
+        assert!(value.x >= val.x + val.line.width + FIGURE_GAP, "{value:?} after {val:?}");
     }
 
     #[test]

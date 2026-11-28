@@ -31,12 +31,19 @@ use crate::game::Game;
 use fnv_sim::FormId;
 use std::collections::BTreeSet;
 
-/// Only authored placements are immutable for the life of a reference table. Enable
-/// state, current cell, script-created actors and effects are read again each tick.
+/// Incremental cache for [`Game::effects_actors`]: authored placements in loaded cells,
+/// placed actors whose `RefState.cell` differs from their placement, live created actors,
+/// and actors with dispelled abilities. Kept in sync with `World::take_touched_refs` and
+/// [`Game::note_dispelled_ability`] so each frame stays proportional to loaded/relocated
+/// actors instead of scanning every `RefExtra` and created reference in a long save [design].
 pub(crate) struct PlacedEffectActors<'a> {
     placed: &'a fnv_sim::RefTable,
+    world_id: u64,
     cells: BTreeSet<FormId>,
     actors: BTreeSet<FormId>,
+    relocated_actors: BTreeSet<FormId>,
+    created_actors: BTreeSet<FormId>,
+    dispelled_actors: BTreeSet<FormId>,
 }
 
 /// SPEL SPIT type "Ability" [documented: schema `combat.json` SPIT].
@@ -156,7 +163,12 @@ impl Game<'_> {
     /// same way, and a dispelled one comes back when the actor is loaded again].
     pub fn sync_abilities(&mut self, r: FormId) {
         if !self.effects_loaded(r) {
-            let ids: Vec<u32> = self.effects.iter().filter(|e| e.target == r && self.is_ability_effect(e)).map(|e| e.id).collect();
+            let mut ids: Vec<u32> = Vec::new();
+            for e in &self.effects {
+                if e.target == r && self.is_ability_effect(e) {
+                    ids.push(e.id);
+                }
+            }
             if !ids.is_empty() {
                 self.dispel(r, None, |e| ids.contains(&e.id));
             }
@@ -166,27 +178,38 @@ impl Game<'_> {
             return;
         }
         let Some(x) = self.extra.get(&r) else { return };
-        let missing: Vec<FormId> = x
-            .spells
-            .iter()
-            .copied()
-            .filter(|&s| self.spell_type(s) == Some(SPELL_ABILITY) && !x.dispelled.contains(&s))
-            .filter(|s| !self.effects.iter().any(|e| e.target == r && e.source == *s && e.permanent && e.worn.is_none()))
-            .collect();
+        let mut missing: Vec<FormId> = Vec::new();
+        for &s in &x.spells {
+            if self.spell_type(s) == Some(SPELL_ABILITY)
+                && !x.dispelled.contains(&s)
+                && !self.effects.iter().any(|e| e.target == r && e.source == s && e.permanent && e.worn.is_none())
+            {
+                missing.push(s);
+            }
+        }
         for spell in missing {
             self.apply_magic_item(r, spell, None, true);
         }
     }
 
-    /// Session `SetObjectEffect` override for `form` (or its `TempCloneForm` original):
-    /// `None` when untouched this session, `Some(None)` when explicitly cleared to 0,
-    /// `Some(Some(ench))` when overridden to an enchantment FormID.
-    pub fn object_effect_override(&self, form: FormId) -> Option<Option<FormId>> {
-        let key = "EITM/";
-        let val = self
-            .field_overrides
-            .get(&(form, key.to_string()))
-            .or_else(|| self.field_overrides.get(&(self.unclone(form), key.to_string())))?;
+    /// Record that `r` has at least one dispelled ability in `RefExtra::dispelled` so the
+    /// incremental [`Game::effects_actors`] cache tracks it until unloaded.
+    pub(crate) fn note_dispelled_ability(&mut self, r: FormId) {
+        if let Some(cache) = self.placed_effect_actors.as_mut() {
+            cache.dispelled_actors.insert(r);
+        }
+    }
+
+    /// Session `SetObjectEffect` override for `form` (or its already-uncloned `orig`),
+    /// avoiding heap allocation when `field_overrides` is empty and skipping a duplicate
+    /// lookup when `form` is not a clone.
+    fn object_effect_override_with_orig(&self, form: FormId, orig: FormId) -> Option<Option<FormId>> {
+        if self.field_overrides.is_empty() {
+            return None;
+        }
+        let val = self.field_overrides.get(&(form, "EITM/".to_string())).or_else(|| {
+            (orig != form).then(|| self.field_overrides.get(&(orig, "EITM/".to_string()))).flatten()
+        })?;
         match val {
             fnv_script::vm::XVal::Ref(0) => Some(None),
             fnv_script::vm::XVal::Ref(id) => Some(Some(FormId(*id))),
@@ -194,17 +217,29 @@ impl Game<'_> {
         }
     }
 
+    /// Session `SetObjectEffect` override for `form` (or its `TempCloneForm` original):
+    /// `None` when untouched this session, `Some(None)` when explicitly cleared to 0,
+    /// `Some(Some(ench))` when overridden to an enchantment FormID.
+    pub fn object_effect_override(&self, form: FormId) -> Option<Option<FormId>> {
+        self.object_effect_override_with_orig(form, self.unclone(form))
+    }
+
     /// Effective object effect (`EITM`) of a form (`ARMO`, `WEAP`, `EXPL`, …), preferring
     /// a live `SetObjectEffect` session override on the form or its `TempCloneForm`
     /// original before falling back to authored record data. Returns `None` when cleared
     /// to 0 by `SetObjectEffect`.
     pub fn object_effect(&self, form: FormId) -> Option<FormId> {
-        if let Some(override_effect) = self.object_effect_override(form) {
+        let orig = self.unclone(form);
+        if let Some(override_effect) = self.object_effect_override_with_orig(form, orig) {
             return override_effect;
         }
-        let orig = self.unclone(form);
         if let Some(&ench) = self.data.armor_enchantments.get(&orig) {
             return Some(ench);
+        }
+        // `GameData::build` indexes every authored `ARMO` `EITM` into `armor_enchantments`,
+        // so a miss on an `ARMO` needs no `record_field` lookup.
+        if self.data.sig(orig) == Some(*b"ARMO") {
+            return None;
         }
         match self.data.record_field(orig, "EITM", "") {
             Some(serde_json::Value::String(s)) if s.starts_with("0x") => {
@@ -263,17 +298,20 @@ impl Game<'_> {
     /// inventory as it is; one not yet made (an actor never loaded) wears nothing.
     pub fn worn_enchantments(&self, r: FormId) -> Vec<(FormId, FormId)> {
         let Some(inv) = self.world.peek(r).and_then(|s| s.inventory.as_ref()) else { return Vec::new() };
-        let mut out: Vec<(FormId, FormId)> = inv
-            .equipped()
-            .into_iter()
-            .filter_map(|item| {
-                if self.data.sig(self.unclone(item)) != Some(*b"ARMO") {
-                    return None;
-                }
-                let ench = self.object_effect(item)?;
-                (self.data.enchantment_types.get(&ench) == Some(&ENCHANTMENT_APPAREL) && self.data.effect_items.contains_key(&ench)).then_some((item, ench))
-            })
-            .collect();
+        let mut out: Vec<(FormId, FormId)> = Vec::new();
+        for item in inv.equipped() {
+            let orig = self.unclone(item);
+            if self.data.sig(orig) != Some(*b"ARMO") {
+                continue;
+            }
+            let ench = match self.object_effect_override_with_orig(item, orig) {
+                Some(override_effect) => override_effect,
+                None => self.data.armor_enchantments.get(&orig).copied(),
+            };
+            if let Some(ench) = ench.filter(|e| self.data.enchantment_types.get(e) == Some(&ENCHANTMENT_APPAREL) && self.data.effect_items.contains_key(e)) {
+                out.push((item, ench));
+            }
+        }
         out.sort();
         out.dedup();
         out
@@ -290,12 +328,26 @@ impl Game<'_> {
     /// [hypothesis: as abilities].
     pub fn sync_worn(&mut self, r: FormId) {
         let worn = self.worn_enchantments(r);
-        if let Some(x) = self.extra.get_mut(&r) {
-            x.worn_dispelled.retain(|i| worn.iter().any(|w| w.0 == *i));
+        let has_dispelled = if let Some(x) = self.extra.get_mut(&r) {
+            if !x.worn_dispelled.is_empty() {
+                x.worn_dispelled.retain(|i| worn.iter().any(|w| w.0 == *i));
+            }
+            !x.worn_dispelled.is_empty()
+        } else {
+            false
+        };
+        if worn.is_empty() && !self.effects.iter().any(|e| e.target == r && e.worn.is_some()) {
+            return;
         }
-        let off = self.extra.get(&r).map(|x| x.worn_dispelled.clone()).unwrap_or_default();
         let loaded = self.effects_loaded(r);
-        let wanted: Vec<(FormId, FormId)> = worn.into_iter().filter(|w| loaded && !off.contains(&w.0)).collect();
+        let wanted: Vec<(FormId, FormId)> = if !loaded {
+            Vec::new()
+        } else if !has_dispelled {
+            worn
+        } else {
+            let off = self.extra.get(&r).map(|x| x.worn_dispelled.as_slice()).unwrap_or(&[]);
+            worn.into_iter().filter(|w| !off.contains(&w.0)).collect()
+        };
         let mut have: Vec<(FormId, FormId)> = self.effects.iter().filter(|e| e.target == r).filter_map(|e| Some((e.worn?, e.source))).collect();
         have.sort();
         have.dedup();
@@ -350,26 +402,71 @@ impl Game<'_> {
     /// those for the periodic choice, so a long playthrough synced thousands of actors
     /// out of the loaded area every frame, each a no-op once its effects had ended.
     pub(crate) fn effects_actors(&mut self) -> BTreeSet<FormId> {
-        // The loaded part of `package_actors`, built without its every-package-actor set:
-        // the loaded cells' actors and those moved or created into them, and the package
-        // actors that walked into one.
+        // The loaded part of `package_actors`, built without scanning every `RefExtra` or
+        // created reference each frame: authored actors in loaded cells, placed actors
+        // whose `RefState.cell` differs from their placement, moved/created actors, active
+        // effect targets, and actors with dispelled abilities.
         let placed = self.world.placed;
+        let forms = self.world.forms;
+        let world_id = self.world.instance_id();
         let is_actor = |r: &FormId| placed.get(*r).is_some_and(|p| matches!(&p.sig, b"ACHR" | b"ACRE"));
-        let placements = match &mut self.placed_effect_actors {
-            Some(saved) if std::ptr::eq(saved.placed, placed) && saved.cells == self.loaded_cells => saved,
-            slot => {
+        let mut cache = match self.placed_effect_actors.take() {
+            Some(mut saved) if std::ptr::eq(saved.placed, placed) && saved.world_id == world_id => {
+                if saved.cells != self.loaded_cells {
+                    saved.cells = self.loaded_cells.clone();
+                    saved.actors = self.loaded_cells.iter().filter_map(|c| placed.by_cell.get(c)).flatten().copied().filter(is_actor).collect();
+                }
+                for r in self.world.take_touched_refs() {
+                    if r >= FormId::FIRST_DYNAMIC {
+                        if self.world.peek(r).is_some_and(|s| !s.deleted() && crate::ai::is_actor_base(forms, s.base)) {
+                            saved.created_actors.insert(r);
+                        } else {
+                            saved.created_actors.remove(&r);
+                        }
+                    } else if let Some(p) = placed.get(r).filter(|p| matches!(&p.sig, b"ACHR" | b"ACRE")) {
+                        if self.world.peek(r).is_some_and(|s| s.cell != p.cell) {
+                            saved.relocated_actors.insert(r);
+                        } else {
+                            saved.relocated_actors.remove(&r);
+                        }
+                    }
+                }
+                saved
+            }
+            _ => {
+                let _ = self.world.take_touched_refs();
                 let actors = self.loaded_cells.iter().filter_map(|c| placed.by_cell.get(c)).flatten().copied().filter(is_actor).collect();
-                slot.insert(PlacedEffectActors { placed, cells: self.loaded_cells.clone(), actors })
+                let mut relocated_actors = BTreeSet::new();
+                let mut created_actors = BTreeSet::new();
+                for (r, s) in self.world.changed() {
+                    if r >= FormId::FIRST_DYNAMIC {
+                        if !s.deleted() && crate::ai::is_actor_base(forms, s.base) {
+                            created_actors.insert(r);
+                        }
+                    } else if let Some(p) = placed.get(r).filter(|p| matches!(&p.sig, b"ACHR" | b"ACRE")) {
+                        if s.cell != p.cell {
+                            relocated_actors.insert(r);
+                        }
+                    }
+                }
+                let dispelled_actors = self.extra.iter().filter(|(_, x)| !x.dispelled.is_empty()).map(|(&r, _)| r).collect();
+                PlacedEffectActors { placed, world_id, cells: self.loaded_cells.clone(), actors, relocated_actors, created_actors, dispelled_actors }
             }
         };
-        let mut actors = placements.actors.clone();
+        let mut actors = cache.actors.clone();
         actors.extend(self.moved.iter().filter(|r| is_actor(r)));
-        actors.extend(self.created_actors());
-        actors.extend(self.extra.iter().filter(|(r, e)| e.current_package.is_some() && is_actor(r)).map(|(r, _)| *r).filter(|r| self.cell_of(*r).is_some_and(|c| self.loaded_cells.contains(&c))));
+        actors.extend(cache.created_actors.iter().copied());
+        for &r in &cache.relocated_actors {
+            if self.extra.get(&r).is_some_and(|e| e.current_package.is_some()) && self.cell_of(r).is_some_and(|c| self.loaded_cells.contains(&c)) {
+                actors.insert(r);
+            }
+        }
         actors.retain(|r| self.effects_loaded(*r));
         actors.insert(FormId::PLAYER_REF);
         actors.extend(self.effects.iter().filter(|e| e.worn.is_some() || self.is_ability_effect(e)).map(|e| e.target));
-        actors.extend(self.extra.iter().filter(|(_, x)| !x.dispelled.is_empty()).map(|(r, _)| *r));
+        cache.dispelled_actors.retain(|r| self.extra.get(r).is_some_and(|x| !x.dispelled.is_empty()));
+        actors.extend(cache.dispelled_actors.iter().copied());
+        self.placed_effect_actors = Some(cache);
         actors
     }
 
@@ -496,3 +593,7 @@ mod effects_sync_cost {
         assert!(after.contains(&FormId::PLAYER_REF));
     }
 }
+
+#[cfg(test)]
+#[path = "abilities_fast_path_tests.rs"]
+mod fast_path_tests;

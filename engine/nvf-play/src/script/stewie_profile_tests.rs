@@ -177,9 +177,11 @@ fn application_defaults_ignore_original_ini_at_startup_and_live_choices_reach_re
     assert_eq!(with_profile.crit_chance, ordinary.crit_chance);
     assert_eq!(with_profile.crit_bonus, ordinary.crit_bonus);
     assert_eq!(with_profile.dealt, ordinary.dealt);
-    // Preserve the original dependency predicate and a real message branch. This
-    // bounded behavior repair is not a version-based popup bypass.
-    assert_eq!(source(&mut rt, "if eval (GetPluginVersion \"lStewieAl's Tweaks\") < 960\nMessageBoxEx \"Unsupported compatibility level\"\nSetFunctionValue 0\nreturn\nendif\nSetFunctionValue 1"), XVal::Num(0.0));
+    // Preserve the dependency predicate and real message branch: `< 960` passes now that
+    // #3183 is promoted, while unpromoted `< 970` (#3184) still queues the real guard warning.
+    assert_eq!(source(&mut rt, "if eval (GetPluginVersion \"lStewieAl's Tweaks\") < 960\nMessageBoxEx \"Unsupported compatibility level\"\nSetFunctionValue 0\nreturn\nendif\nSetFunctionValue 1"), XVal::Num(1.0));
+    assert!(rt.game.front_box().is_none(), "promoted 960 gate must not trigger warning");
+    assert_eq!(source(&mut rt, "if eval (GetPluginVersion \"lStewieAl's Tweaks\") < 970\nMessageBoxEx \"Unsupported compatibility level\"\nSetFunctionValue 0\nreturn\nendif\nSetFunctionValue 1"), XVal::Num(0.0));
     assert!(
         rt.game.front_box().is_some(),
         "the real guard warning stays queued; it is never suppressed or dismissed"
@@ -189,7 +191,7 @@ fn application_defaults_ignore_original_ini_at_startup_and_live_choices_reach_re
             &mut rt,
             "SetFunctionValue (GetPluginVersion \"lStewieAl's Tweaks\")"
         ),
-        XVal::Num(945.0)
+        XVal::Num(960.0)
     );
     let saved = with_world(&mut rt, &mut sim, |rt| rt.game.snapshot());
     let bytes = serde_json::to_vec(&saved).unwrap();

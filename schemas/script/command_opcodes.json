@@ -1,6 +1,6 @@
 {
  "format": "fnv.script.opcodes/1",
- "source": "observed: GetCommandOpcode run on every catalogue name and alias in the original game (xNVSE 6.4.9, JIP LN 57.30, JohnnyGuitar 528), 2026-10-27; it agrees with every vanilla opcode the catalogue records (455 of 455). Names that gave 0 (functions of plugins not installed, or no such command) are left out. The commands with no wiki page the catalogue gained in #2318 and #2326 are added from the original's nvse.log RegisterCommand lines (2026-11-13: xNVSE 6.4.9, JIP LN 57.30, JohnnyGuitar 528, ShowOff 184, SUP 855, kNVSE 37, One111 120, ITR 20203, by the log's plugin load lines).",
+ "source": "observed: GetCommandOpcode run on every catalogue name and alias in the original game (xNVSE 6.4.9, JIP LN 57.30, JohnnyGuitar 528), 2026-10-27; it agrees with every vanilla opcode the catalogue records (455 of 455). Names that gave 0 (functions of plugins not installed, or no such command) are left out. The commands with no wiki page the catalogue gained in #2318 and #2326 are added from the original's nvse.log RegisterCommand lines (2026-11-13: xNVSE 6.4.9, JIP LN 57.30, JohnnyGuitar 528, ShowOff 184, SUP 855, kNVSE 37, One111 120, ITR 20203, by the log's plugin load lines). Added 2026-11-27 (#3617, #1408) from the original's nvse.log RegisterCommand lines with ShowOff 184 and ttw_nvse 333 installed: ShowOff's 0x3C9C, 0x3C9D, 0x3CAE, 0x3CC7, 0x3CCC, 0x3CE0 (ActorHasBaseFlag its alias) and ttw_nvse's 0x3800, 0x3805-0x3808 (0x3801-0x3804 register EmptyCommand and are left out).",
  "opcodes": {
   "Abs": 4641,
   "Activate": 4109,
@@ -3199,6 +3199,18 @@
   "while": 5435,
   "WorldToScreen": 12704,
   "WriteArrayToFile": 9788,
-  "WriteStringToFile": 9789
+  "WriteStringToFile": 9789,
+  "GetNumCombatActorsFromActor": 15516,
+  "IsWeaponMelee": 15517,
+  "IsAnimPlayingExCond": 15534,
+  "IsLimbCrippled": 15559,
+  "GetEquippedWeaponType": 15564,
+  "GetActorHasBaseFlag": 15584,
+  "ActorHasBaseFlag": 15584,
+  "TTW_ShowGeneProjector": 14336,
+  "TTW_CRC32": 14341,
+  "TTW_GetPlugins": 14342,
+  "TTW_GetEquippedWeaponSkill": 14343,
+  "TTW_EnableRadioFix": 14344
  }
 }

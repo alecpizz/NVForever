@@ -1154,13 +1154,78 @@ fn compiled_projection_source_command_reaches_typed_state_without_writing_ui_tra
 }
 
 #[test]
-fn projection_source_route_requires_reference_and_real_tree_reset_clears_requests() {
+fn projection_source_route_ignores_missing_reference_and_real_tree_reset_clears_requests() {
     let f=fixture();let mut g=game(&f);let args=[s("TestMenu/Box"),s("screen"),x(0.),x(0.),x(80.),x(40.)];
-    assert!(fnv_game::nvse::call(&mut g,&Default::default(),"projectuitile",None,&args).unwrap().is_err());
+    assert_eq!(fnv_game::nvse::call(&mut g,&Default::default(),"projectuitile",None,&args).unwrap(),Ok(x(0.)));
     assert_eq!(g.ui_extra.projections.source_requests(&g.ui_tree).count(),0);
-    assert!(fnv_game::nvse::call(&mut g,&Default::default(),"projectuitile",Some(FormId(REFERENCE)),&args).unwrap().is_ok());
+    assert_eq!(fnv_game::nvse::call(&mut g,&Default::default(),"projectuitile",Some(FormId(REFERENCE)),&args).unwrap(),Ok(x(0.)));
     assert_eq!(g.ui_extra.projections.source_requests(&g.ui_tree).count(),1);
     fnv_game::ui_more::tree_rebuilt(&mut g);assert_eq!(g.ui_extra.projections.source_requests(&g.ui_tree).count(),0);
+}
+
+#[test]
+fn project_ui_tile_returns_zero_and_continues_across_all_seven_observed_cases() {
+    let f = fixture();
+    let mut g = game(&f);
+    let ctx = fnv_game::game::RunCtx { self_ref: Some(FormId(REFERENCE)), ..Default::default() };
+
+    // Helper: runs ProjectUITile under strict GameConfig and returns (ret, ok_sentinel).
+    // If ProjectUITile aborted the script, run_query would return Err and unwrap would panic.
+    let run_case = |g: &mut Game<'_>, call_line: &str, run_ctx: fnv_game::game::RunCtx| -> (XVal, XVal) {
+        let script = format!(
+            "ref rNull\nfloat fRet\nint ok\nBegin Function {{ }}\nlet rNull := 0\nlet fRet := -9\nlet ok := 0\n{call_line}\nlet ok := 1\nSetFunctionValue (fRet * 10 + ok)\nEnd\n"
+        );
+        let encoded = g.run_query(&script, run_ctx).unwrap();
+        let ret = g.run_query(
+            &format!("ref rNull\nfloat fRet\nBegin Function {{ }}\nlet rNull := 0\nlet fRet := -9\n{call_line}\nSetFunctionValue fRet\nEnd\n"),
+            run_ctx,
+        ).unwrap();
+        (ret, encoded)
+    };
+
+    // 1. valid (64x64) -> returns 0.0, continues (ok=1), enqueues 64x64 request.
+    let (r, enc) = run_case(&mut g, "let fRet := ProjectUITile \"TestMenu/Box\" \"screen\" 0 0 64 64", ctx);
+    assert_eq!((r, enc), (x(0.), x(1.)));
+    assert_eq!(g.ui_extra.projections.source_requests(&g.ui_tree).count(), 1);
+
+    // 2. 1x1 withdrawal -> returns 0.0, continues (ok=1), withdraws active request.
+    let (r, enc) = run_case(&mut g, "let fRet := ProjectUITile \"TestMenu/Box\" \"screen\" 0 0 1 1", ctx);
+    assert_eq!((r, enc), (x(0.), x(1.)));
+    assert_eq!(g.ui_extra.projections.source_requests(&g.ui_tree).count(), 0);
+
+    // 3. missing tile path -> returns 0.0, continues (ok=1), enqueues nothing.
+    let (r, enc) = run_case(&mut g, "let fRet := ProjectUITile \"NoSuchMenu/NoSuchTile\" \"screen\" 0 0 64 64", ctx);
+    assert_eq!((r, enc), (x(0.), x(1.)));
+    assert_eq!(g.ui_extra.projections.source_requests(&g.ui_tree).count(), 0);
+
+    // 4. 0x0 viewport -> returns 0.0, continues (ok=1), enqueues nothing.
+    let (r, enc) = run_case(&mut g, "let fRet := ProjectUITile \"TestMenu/Box\" \"screen\" 0 0 0 0", ctx);
+    assert_eq!((r, enc), (x(0.), x(1.)));
+    assert_eq!(g.ui_extra.projections.source_requests(&g.ui_tree).count(), 0);
+
+    // 5. negative -10x-10 viewport -> returns 0.0, continues (ok=1), enqueues nothing.
+    let (r, enc) = run_case(&mut g, "let fRet := ProjectUITile \"TestMenu/Box\" \"screen\" 0 0 -10 -10", ctx);
+    assert_eq!((r, enc), (x(0.), x(1.)));
+    assert_eq!(g.ui_extra.projections.source_requests(&g.ui_tree).count(), 0);
+
+    // 6. fractional 64.7x64.7 viewport -> returns 0.0, continues (ok=1), enqueues rounded 65x65 request.
+    let (r, enc) = run_case(&mut g, "let fRet := ProjectUITile \"TestMenu/Box\" \"screen\" 0 0 64.7 64.7", ctx);
+    assert_eq!((r, enc), (x(0.), x(1.)));
+    {
+        let reqs: Vec<_> = g.ui_extra.projections.source_requests(&g.ui_tree).collect();
+        assert_eq!(reqs.len(), 1);
+        assert_eq!((reqs[0].1.viewport.width, reqs[0].1.viewport.height), (65, 65));
+    }
+
+    // 7. null ref (rNull = 0): returns 0.0, continues (ok=1), does NOT enqueue or fall back to self_ref,
+    //    and leaves the existing valid projection untouched.
+    let (r, enc) = run_case(&mut g, "let fRet := rNull.ProjectUITile \"TestMenu/Box\" \"other\" 0 0 64 64", ctx);
+    assert_eq!((r, enc), (x(0.), x(1.)));
+    let (r_no_self, enc_no_self) = run_case(&mut g, "let fRet := rNull.ProjectUITile \"TestMenu/Box\" \"other\" 0 0 64 64", fnv_game::game::RunCtx::default());
+    assert_eq!((r_no_self, enc_no_self), (x(0.), x(1.)));
+    let reqs: Vec<_> = g.ui_extra.projections.source_requests(&g.ui_tree).collect();
+    assert_eq!(reqs.len(), 1, "null-ref call must neither enqueue on null nor fall back to self_ref");
+    assert_eq!(reqs[0].0.block, "screen");
 }
 
 #[test]

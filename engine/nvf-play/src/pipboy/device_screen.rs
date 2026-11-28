@@ -320,12 +320,64 @@ impl ScreenFx {
         }
         self.baked = true;
         self.beam = beam_image().map(|i| images.add(i));
-        let Some(band) = data.and_then(|d| d.read(SCANLINES)).and_then(|b| scanline_column(&b)).filter(|b| !b.is_empty()) else { return };
-        let column = baked_column(&band_at_depth(&band, SCANLINE_DEPTH), CANVAS.y as usize, SCANLINE_PITCH);
-        let (rgba, kept) = scanline_pixels(&column);
-        let Some(image) = column_image(rgba, SCANLINES) else { return };
+        let Some((image, kept)) = scanline_image(data) else { return };
         self.scanlines = Some(images.add(image));
         self.kept = kept;
+    }
+}
+
+/// The same decoded column used by the device, before any owner adds its image.
+fn scanline_image(data: Option<&GameData>) -> Option<(Image, f32)> {
+    let band = data.and_then(|d| d.read(SCANLINES)).and_then(|b| scanline_column(&b))
+        .filter(|b| !b.is_empty())?;
+    let column = baked_column(&band_at_depth(&band, SCANLINE_DEPTH), CANVAS.y as usize, SCANLINE_PITCH);
+    let (rgba, kept) = scanline_pixels(&column);
+    Some((column_image(rgba, SCANLINES)?, kept))
+}
+
+/// Independent dialogue art from the actual Pip-Boy picture/scanline pipeline.
+/// These handles are newly loaded here, never the gameplay ScreenFx resources.
+pub struct DialogueScreenArt {
+    background: Handle<Image>,
+    rect: Option<Rect>,
+    scanlines: Option<Handle<Image>>,
+    kept: f32,
+}
+
+impl DialogueScreenArt {
+    pub fn load(data: &GameData, images: &mut Assets<Image>, bc: bool) -> Option<Self> {
+        let mut pictures = crate::interface::Pictures::load(Some(data));
+        let (background, rect) = pictures.picture(BACKGROUND, Some(data), images, bc)?;
+        let (scanlines, kept) = scanline_image(Some(data))
+            .map_or((None, 1.0), |(image, kept)| (Some(images.add(image)), kept));
+        Some(Self { background, rect, scanlines, kept })
+    }
+
+    /// Parent supplies the actual dialogue content camera. Art never claims input.
+    pub fn spawn(&self, parent: &mut ChildSpawnerCommands, canvas: Rect) {
+        let node = || Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(canvas.min.x), top: Val::Px(canvas.min.y),
+            width: Val::Px(canvas.width()), height: Val::Px(canvas.height()),
+            ..default()
+        };
+        parent.spawn((ScreenFxNode, node(), ImageNode { rect: self.rect,
+            color: picture_tint(pipboy_rgb(), self.kept), image_mode: NodeImageMode::Stretch,
+            ..ImageNode::new(self.background.clone()) }, ZIndex(-1),
+            bevy::picking::Pickable::IGNORE, bevy::ui::FocusPolicy::Pass,
+            Name::new("Dialogue Pip-Boy actual background")));
+        if let Some(image) = &self.scanlines {
+            parent.spawn((ScreenFxNode, node(), ImageNode { image_mode: NodeImageMode::Stretch,
+                ..ImageNode::new(image.clone()) }, ZIndex(10),
+                bevy::picking::Pickable::IGNORE, bevy::ui::FocusPolicy::Pass,
+                Name::new("Dialogue Pip-Boy actual scanlines")));
+        }
+    }
+
+    /// Call after retiring this owner's nodes. Neither image came from a shared cache.
+    pub fn remove_images(self, images: &mut Assets<Image>) {
+        images.remove(self.background.id());
+        if let Some(image) = self.scanlines { images.remove(image.id()); }
     }
 }
 

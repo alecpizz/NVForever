@@ -299,9 +299,9 @@ fn call_after_frames_call_for_seconds_and_call_while_per_seconds_respect_pause()
 }
 
 #[test]
-fn stewie_plugin_version_stays_at_945_gate() {
+fn stewie_plugin_version_stays_at_960_gate() {
     let f = fixture();
     let mut g = new_game(&f);
     run(&mut g, r#"set StewieVer to GetPluginVersion "lStewieAl's Tweaks""#);
-    assert_eq!(glob(&g, G_STEWIE_VER), 945.0);
+    assert_eq!(glob(&g, G_STEWIE_VER), 960.0);
 }

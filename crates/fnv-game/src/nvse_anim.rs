@@ -29,9 +29,21 @@ pub struct AnimPaths {
     /// Explicit script sequences for the renderer, independently of locomotion.
     /// The boolean selects the player's first-person rig (NPCs always use false).
     pub sequences: HashMap<(FormId, bool, String), ScriptSequence>,
+    /// Per-sequence integrated clock state tracking pre-first-tick `-f32::MAX`
+    /// (`PlayAnimationPath`) and frequency-scaled `GetAnimCurrentTime` deltas while
+    /// `ScriptSequence::clock_offset` stays fixed for unscaled `lastTime`
+    /// [observed: `w4e_08_knvse_legacy_anim_time`, #3803].
+    pub(crate) sequence_clocks: HashMap<(FormId, bool, String), SequenceClock>,
     /// Paused time and weight, retained with the session's existing sequence clocks.
     pub sequence_resume: HashMap<(FormId, bool, String), (f64, f32)>,
     pub next_sequence: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SequenceClock {
+    pub initialized: bool,
+    pub current_time: f64,
+    pub last_clock: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -110,12 +122,45 @@ pub fn kf_files(path: &str) -> Vec<String> {
 }
 
 impl Game<'_> {
+    /// Integrate active script sequence clocks (honoring `SetAnimSequenceFrequency` on
+    /// both `sLegacyAnimTimePaths` and normal paths while keeping `clock_offset` fixed),
+    /// initialize freshly started `PlayAnimationPath` sequences on their first tick, and
+    /// stop one-shot sequences that reached their end [observed: `w4e_08_knvse_legacy_anim_time`, #3803].
     pub(crate) fn script_sequences_tick(&mut self) {
+        let updates: Vec<_> = self
+            .anim_paths
+            .sequences
+            .iter()
+            .map(|(k, seq)| {
+                let clock = self.script_sequence_clock(k.0, k.1);
+                let freq = f64::from(self.anim_frequency(k.0, &seq.path).unwrap_or(1.0));
+                (k.clone(), clock, freq)
+            })
+            .collect();
+        for (k, clock, freq) in updates {
+            let sc = self.anim_paths.sequence_clocks.entry(k.clone()).or_insert(SequenceClock {
+                initialized: true,
+                current_time: 0.0,
+                last_clock: clock,
+            });
+            if !sc.initialized {
+                sc.initialized = true;
+                sc.current_time = 0.0;
+                sc.last_clock = clock;
+                if let Some(seq) = self.anim_paths.sequences.get_mut(&k) {
+                    seq.clock_offset = -clock;
+                }
+            } else {
+                sc.current_time += (clock - sc.last_clock) * freq;
+                sc.last_clock = clock;
+            }
+        }
         let mut stop = Vec::new();
         for (key, sequence) in &self.anim_paths.sequences {
             if sequence.auto_finish && sequence.stopped.is_none() {
                 if let Some(info) = self.knvse.sequences.get(&key.2) {
-                    if info.cycle == 2 && self.script_sequence_time_for(key.0, &sequence.path, key.1) * info.frequency >= info.end - info.begin {
+                    let t = self.script_sequence_time_for(key.0, &sequence.path, key.1);
+                    if t.is_finite() && info.cycle == 2 && t * info.frequency >= info.end - info.begin {
                         stop.push(key.clone());
                     }
                 }
@@ -139,6 +184,33 @@ impl Game<'_> {
             let now = if actor == FormId::PLAYER_REF && first { first_now } else { world_now };
             sequence.stopped.is_none_or(|at| now - at < f64::from(sequence.ease_out))
         });
+        let sequences = &self.anim_paths.sequences;
+        self.anim_paths.sequence_clocks.retain(|k, _| sequences.contains_key(k));
+    }
+
+    /// Flush active sequence clocks on `actor` using their current frequency before
+    /// `SetAnimSequenceFrequency` changes the rate so earlier elapsed time is not
+    /// retroactively rescaled [observed: `w4e_08_knvse_legacy_anim_time`, #3803].
+    pub(crate) fn flush_script_sequence_clocks(&mut self, actor: FormId) {
+        let updates: Vec<_> = self
+            .anim_paths
+            .sequences
+            .iter()
+            .filter(|((a, _, _), _)| *a == actor)
+            .map(|(k, seq)| {
+                let clock = self.script_sequence_clock(k.0, k.1);
+                let freq = f64::from(self.anim_frequency(k.0, &seq.path).unwrap_or(1.0));
+                (k.clone(), clock, freq)
+            })
+            .collect();
+        for (k, clock, freq) in updates {
+            if let Some(sc) = self.anim_paths.sequence_clocks.get_mut(&k) {
+                if sc.initialized {
+                    sc.current_time += (clock - sc.last_clock) * freq;
+                    sc.last_clock = clock;
+                }
+            }
+        }
     }
 
     /// Read the same established animation clock/offset as GetAnimCurrentTime,
@@ -157,12 +229,32 @@ impl Game<'_> {
             |&(value, at)| value + now - at)
     }
 
+    /// Active sequence time for `GetAnimCurrentTime`: returns `-f32::MAX` (`-3.40282e+38`)
+    /// on a freshly started `PlayAnimationPath` before its first tick, and thereafter
+    /// integrates frequency-scaled deltas (`t + dg * freq`, honoring `SetAnimSequenceFrequency`)
+    /// identically on both `kNVSE.ini` `[Anim Fixes] sLegacyAnimTimePaths` and normal paths
+    /// while `ScriptSequence::clock_offset` stays fixed and `lastTime` tracks unscaled
+    /// `clock + offset` [observed: Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 + kNVSE 37,
+    /// 2026-11-24, `GSDocMitchellHouse` (`0x00103DF9`), 10 official base masters, isolated
+    /// clean-room staging copy, `w4e_08_knvse_legacy_anim_time`
+    /// (`tools/capture/nvse/catalogs/wave4e_mods.json`, #3803); `docs/spec-notes/ext-knvse.md` §5].
     pub fn script_sequence_time_for(&self, actor: FormId, path: &str, first: bool) -> f64 {
         let key = path.replace('/', "\\").to_ascii_lowercase();
-        if let Some(sequence) = self.anim_paths.sequences.get(&(actor,first,key.clone())) {
-            self.script_sequence_clock(actor,first) + sequence.clock_offset
+        let seq_key = (actor, first, key.clone());
+        if let Some(sequence) = self.anim_paths.sequences.get(&seq_key) {
+            if let Some(sc) = self.anim_paths.sequence_clocks.get(&seq_key) {
+                if !sc.initialized {
+                    return f64::from(-f32::MAX);
+                }
+                let clock = self.script_sequence_clock(actor, first);
+                let dg = clock - sc.last_clock;
+                let freq = f64::from(self.anim_frequency(actor, &sequence.path).unwrap_or(1.0));
+                sc.current_time + dg * freq
+            } else {
+                self.script_sequence_clock(actor, first) + sequence.clock_offset
+            }
         } else {
-            self.script_sequence_clock(actor,false) + self.knvse.offsets.get(&(actor,key)).copied().unwrap_or(0.0)
+            self.script_sequence_clock(actor, false) + self.knvse.offsets.get(&(actor, key)).copied().unwrap_or(0.0)
         }
     }
 
@@ -189,7 +281,12 @@ pub(crate) fn deactivate_anim_for(g: &mut Game, a: FormId, first: bool, path: &s
     }
     let norm = path.replace('/', "\\").to_ascii_lowercase();
     let key = (a, first, norm.clone());
-    let resume = g.script_sequence_time_for(a, path, first);
+    let raw_resume = g.script_sequence_time_for(a, path, first);
+    let resume = if g.anim_paths.sequence_clocks.get(&key).is_some_and(|sc| !sc.initialized) {
+        0.0
+    } else {
+        raw_resume
+    };
     let stopped = g.script_sequence_now(a, first);
     let weight = g.anim_paths.sequences.get(&key).map_or(1.0, |s| s.weight);
     g.anim_paths.sequence_resume.insert(key.clone(), (resume, weight));
@@ -277,7 +374,16 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
                 g.knvse_started(a, &path);
                 if let Some(offset) = g.knvse.offsets.get_mut(&(a, key.2.clone())) { *offset += resume; }
                 g.knvse.weights.insert((a,key.2.clone()), weight.clamp(0.0,1.0));
-                let clock_offset = resume - g.script_sequence_clock(a,first);
+                let start_clock = g.script_sequence_clock(a, first);
+                let clock_offset = resume - start_clock;
+                g.anim_paths.sequence_clocks.insert(
+                    key.clone(),
+                    SequenceClock {
+                        initialized: name != "playanimationpath",
+                        current_time: resume,
+                        last_clock: start_clock,
+                    },
+                );
                 g.anim_paths.sequences.insert(key, ScriptSequence {
                     path:path.clone(), first, serial, priority:priority as i32,
                     weight:weight.clamp(0.0, 1.0) as f32, ease_in:ease.map(|v| v as f32),

@@ -318,10 +318,26 @@ fn force_weapon_jam_anim_checks_weapon_jam_capability_overrides_and_cap() {
     assert_eq!(num(&mut g, "PlayerREF.ForceJamAnim"), 0.0);
     assert!(g.take_force_jam_requests().is_empty());
 
-    // Drawn jam-capable pistol -> 1; repeated call deduplicates actor in the queue.
+    // Drawn jam-capable pistol -> 1; repeated call deduplicates actor in the queue,
+    // immediately enters AnimAction::Jam, reports GetSequenceAnimGroup 4 == 200 (JamA),
+    // and fires SetOnReloadWeaponEventHandler once with slot 4 == 200 inside callback
+    // [observed 2026-11-24: w6t2_14_jip_on_reload_and_seq_anim_group].
+    q(
+        &mut g,
+        "SetOnReloadWeaponEventHandler (Begin Function {ref rW}\n\
+           PlayerREF.AuxVarSetFlt \"*jam_rl\" ((PlayerREF.AuxVarGetFlt \"*jam_rl\") + 1)\n\
+           PlayerREF.AuxVarSetFlt \"*jam_s4cb\" (PlayerREF.GetSequenceAnimGroup 4)\n\
+         End) 1",
+    );
+    assert_eq!(num(&mut g, "PlayerREF.GetSequenceAnimGroup 4"), -1.0, "holstered slot 4 is -1");
     g.set_weapon_out(FormId::PLAYER_REF, true);
+    assert_eq!(num(&mut g, "PlayerREF.GetSequenceAnimGroup 4"), 24.0, "drawn weapon slot 4 is 24 (Equip)");
     assert_eq!(num(&mut g, "PlayerREF.ForceWeaponJamAnim"), 1.0);
+    assert_eq!(num(&mut g, "PlayerREF.GetSequenceAnimGroup 4"), 200.0, "jammed pistol slot 4 is 200 (JamA)");
+    assert_eq!(num(&mut g, "PlayerREF.AuxVarGetFlt \"*jam_rl\""), 1.0, "ForceWeaponJamAnim fires SetOnReloadWeaponEventHandler once");
+    assert_eq!(num(&mut g, "PlayerREF.AuxVarGetFlt \"*jam_s4cb\""), 200.0, "callback sees GetSequenceAnimGroup 4 == 200");
     assert_eq!(num(&mut g, "PlayerREF.ForceJamAnim"), 1.0);
+    assert_eq!(num(&mut g, "PlayerREF.AuxVarGetFlt \"*jam_rl\""), 1.0, "repeat ForceJamAnim while jamming does not double-fire");
     assert_eq!(g.take_force_jam_requests(), vec![FormId::PLAYER_REF]);
     assert!(g.take_force_jam_requests().is_empty());
 

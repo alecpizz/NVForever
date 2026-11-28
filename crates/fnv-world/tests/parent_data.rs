@@ -94,10 +94,10 @@ fn a_cell_without_land_takes_the_parents_on_the_same_square() {
     let cell = |id: u32| (ix.cells[&id].land, ix.cells[&id].land_of_parent);
     // The parent's own cells are its own.
     assert_eq!((cell(0x101), cell(0x102), cell(0x103)), ((Some(0x111), false), (Some(0x112), false), (None, false)));
-    // Use Land Data: the square without LAND has the parent's; its own LAND stays; where
-    // the parent has no LAND, or no cell, there is none.
+    // Use Land Data: the square without LAND has the parent's; so does the one with its
+    // own LAND (#3755); where the parent has no LAND, or no cell, there is none.
     assert_eq!(cell(0x201), (Some(0x111), true));
-    assert_eq!(cell(0x202), (Some(0x212), false));
+    assert_eq!(cell(0x202), (Some(0x112), true));
     assert_eq!(cell(0x203), (None, false));
     assert_eq!(cell(0x204), (None, false));
     assert_eq!(cell(0x301), (Some(0x111), true));

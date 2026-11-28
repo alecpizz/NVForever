@@ -104,6 +104,15 @@
 //!   blocks plays `{prefix}blockhit.kf`, and the attacker whose blow was blocked plays
 //!   `{prefix}recoil.kf` [observed: the base meshes archive has them for `1hm`, `2hm`
 //!   and the unarmed `mt`/`h2h`].
+//! - **kNVSE replacements** (#1461, docs/spec-notes/knvse-anim-folders.md §4): an actor
+//!   whose AnimGroupOverride folders or SetActorAnimationPath give it third-person files
+//!   (`anim_paths::ActorAnimFiles`) plays the attack, reload, block and aim-form clips
+//!   above from the file of the same name where one loads (the later file of two), and
+//!   the folder's own clip otherwise; a replaced attack's up and down forms are the
+//!   replacement's where it has them [hypothesis: as the idles', `idles::clip_path_for`,
+//!   a replacement shares the replaced file's name]. A weapon's timing clips are looked
+//!   up once per weapon drawn, so a replacement that comes later is used for its clips
+//!   but not its timing [design].
 
 use crate::actors::ActorWorld;
 use crate::limbs::ActorRig;
@@ -643,6 +652,9 @@ struct AttackClips {
     /// A body weapon's attack clips by (skeleton folder, stance prefix) ([`body_attack_names`]).
     body: HashMap<(String, String), Vec<String>>,
     turn: HashMap<u32, usize>,
+    /// Each actor's kNVSE replacement files (`anim_paths::ActorAnimFiles`): its clips are
+    /// taken from them where one has the clip's file name (module notes).
+    files: HashMap<u32, Vec<String>>,
     stats: Stats,
 }
 
@@ -680,7 +692,20 @@ impl AttackClips {
             .clone()
     }
 
-    fn bind(&mut self, ctx: &mut ActorCtx, skeleton: &str, skel: &PreparedSkeleton, path: &str) -> Option<Arc<BoundClip>> {
+    fn bind(&mut self, ctx: &mut ActorCtx, actor: u32, skeleton: &str, skel: &PreparedSkeleton, path: &str) -> Option<Arc<BoundClip>> {
+        self.resolve(ctx, actor, skeleton, skel, path).map(|(_, c)| c)
+    }
+
+    /// The clip at `path` for `actor` and the path it was read from: a kNVSE replacement
+    /// of the same file name where the actor has one that loads (module notes), else the
+    /// clip itself.
+    fn resolve(&mut self, ctx: &mut ActorCtx, actor: u32, skeleton: &str, skel: &PreparedSkeleton, path: &str) -> Option<(String, Arc<BoundClip>)> {
+        if let Some(file) = self.files.get(&actor).and_then(|f| crate::anim_paths::replaced(f, path)) {
+            let key = (skeleton.to_string(), fnv_vfs::normalize(&file));
+            if let Some(c) = self.bound.entry(key).or_insert_with(|| ctx.clip(&file).map(|c| Arc::new(bind_clip(skel, c)))).clone() {
+                return Some((file, c));
+            }
+        }
         let key = (skeleton.to_string(), fnv_vfs::normalize(path));
         // A creature's clips may be in its `specialanims` folder (Mister Handy and Gutsy,
         // protectrons: `fnv_actor::anims::special_anims_path`).
@@ -688,14 +713,13 @@ impl AttackClips {
             .entry(key)
             .or_insert_with(|| ctx.clip(path).or_else(|| fnv_actor::anims::special_anims_path(path).and_then(|p| ctx.clip(&p))).map(|c| Arc::new(bind_clip(skel, c))))
             .clone()
+            .map(|c| (path.to_string(), c))
     }
 
-    /// The first of `paths` (file names in `folder`) that loads.
-    fn first(&mut self, ctx: &mut ActorCtx, skeleton: &str, skel: &PreparedSkeleton, folder: &str, names: &[String]) -> Option<(String, Arc<BoundClip>)> {
-        names.iter().find_map(|n| {
-            let path = format!("{folder}\\{n}");
-            self.bind(ctx, skeleton, skel, &path).map(|c| (path, c))
-        })
+    /// The first of `paths` (file names in `folder`) that loads, and the path it was read
+    /// from.
+    fn first(&mut self, ctx: &mut ActorCtx, actor: u32, skeleton: &str, skel: &PreparedSkeleton, folder: &str, names: &[String]) -> Option<(String, Arc<BoundClip>)> {
+        names.iter().find_map(|n| self.resolve(ctx, actor, skeleton, skel, &format!("{folder}\\{n}")))
     }
 }
 
@@ -749,7 +773,11 @@ fn start(
     mut models: ModelCtx,
     mut rigs: Query<Rigs>,
     blocks: Option<ResMut<nvf_play::blocking::ActorBlocks>>,
+    files: Option<Res<crate::anim_paths::ActorAnimFiles>>,
 ) {
+    if let Some(f) = files.filter(|f| f.is_changed()) {
+        clips.files.clone_from(&f.0);
+    }
     // Who is in an attack now: their body blocks hold still (module notes).
     if let Some(mut b) = blocks {
         let now: std::collections::HashSet<u32> = rigs.iter().filter(|r| r.3.is_some_and(|p| p.attack.as_ref().is_some_and(|a| !a.reload))).map(|r| r.1.reference).collect();
@@ -793,29 +821,29 @@ fn start(
         if hold.is_some() && new_pose.aim_up.is_none() && new_pose.aim_down.is_none() {
             let w = fighters.weapon(id);
             let level = format!("{folder}\\{}aim.kf", weapon_prefix(w));
-            new_pose.aim_up = clips.bind(&mut ctx, &rig.skeleton, &skel, &aim_variant(&level, Aim::Up));
-            new_pose.aim_down = clips.bind(&mut ctx, &rig.skeleton, &skel, &aim_variant(&level, Aim::Down));
+            new_pose.aim_up = clips.bind(&mut ctx, id, &rig.skeleton, &skel, &aim_variant(&level, Aim::Up));
+            new_pose.aim_down = clips.bind(&mut ctx, id, &rig.skeleton, &skel, &aim_variant(&level, Aim::Down));
             // The iron-sights aim, where the stance has one (rifles, pistols, automatics).
             let is = format!("{folder}\\{}aimis.kf", weapon_prefix(w));
-            new_pose.aim_is = clips.bind(&mut ctx, &rig.skeleton, &skel, &is);
+            new_pose.aim_is = clips.bind(&mut ctx, id, &rig.skeleton, &skel, &is);
             if new_pose.aim_is.is_some() {
-                new_pose.aim_is_up = clips.bind(&mut ctx, &rig.skeleton, &skel, &aim_variant(&is, Aim::Up));
-                new_pose.aim_is_down = clips.bind(&mut ctx, &rig.skeleton, &skel, &aim_variant(&is, Aim::Down));
+                new_pose.aim_is_up = clips.bind(&mut ctx, id, &rig.skeleton, &skel, &aim_variant(&is, Aim::Up));
+                new_pose.aim_is_down = clips.bind(&mut ctx, id, &rig.skeleton, &skel, &aim_variant(&is, Aim::Down));
             }
             // Crouched (`sneak2hraim.kf` …) and the block idle (docs/design/combat-ai.md §14).
             let prefix = weapon_prefix(w);
             let sneak = format!("{folder}\\sneak{prefix}aim.kf");
-            new_pose.sneak_aim = clips.bind(&mut ctx, &rig.skeleton, &skel, &sneak);
-            new_pose.sneak_aim_up = clips.bind(&mut ctx, &rig.skeleton, &skel, &aim_variant(&sneak, Aim::Up));
-            new_pose.sneak_aim_down = clips.bind(&mut ctx, &rig.skeleton, &skel, &aim_variant(&sneak, Aim::Down));
+            new_pose.sneak_aim = clips.bind(&mut ctx, id, &rig.skeleton, &skel, &sneak);
+            new_pose.sneak_aim_up = clips.bind(&mut ctx, id, &rig.skeleton, &skel, &aim_variant(&sneak, Aim::Up));
+            new_pose.sneak_aim_down = clips.bind(&mut ctx, id, &rig.skeleton, &skel, &aim_variant(&sneak, Aim::Down));
             let sneak_is = format!("{folder}\\sneak{prefix}aimis.kf");
-            new_pose.sneak_aim_is = clips.bind(&mut ctx, &rig.skeleton, &skel, &sneak_is);
+            new_pose.sneak_aim_is = clips.bind(&mut ctx, id, &rig.skeleton, &skel, &sneak_is);
             if new_pose.sneak_aim_is.is_some() {
-                new_pose.sneak_aim_is_up = clips.bind(&mut ctx, &rig.skeleton, &skel, &aim_variant(&sneak_is, Aim::Up));
-                new_pose.sneak_aim_is_down = clips.bind(&mut ctx, &rig.skeleton, &skel, &aim_variant(&sneak_is, Aim::Down));
+                new_pose.sneak_aim_is_up = clips.bind(&mut ctx, id, &rig.skeleton, &skel, &aim_variant(&sneak_is, Aim::Up));
+                new_pose.sneak_aim_is_down = clips.bind(&mut ctx, id, &rig.skeleton, &skel, &aim_variant(&sneak_is, Aim::Down));
             }
             if fnv_actor::player_clips::blocks(prefix) {
-                new_pose.block_idle = clips.first(&mut ctx, &rig.skeleton, &skel, &folder, &block_clips(Stance::Stand, prefix)).map(|(_, c)| c);
+                new_pose.block_idle = clips.first(&mut ctx, id, &rig.skeleton, &skel, &folder, &block_clips(Stance::Stand, prefix)).map(|(_, c)| c);
             }
         }
         // The reload clips of the weapon drawn on it, once per weapon (module notes).
@@ -825,18 +853,18 @@ fn start(
             let prefix = weapon_prefix(Some(w));
             let mut timing = fnv_combat::attack::ClipTiming::default();
             if let Some(r) = reload {
-                if let Some((_, c)) = clips.first(&mut ctx, &rig.skeleton, &skel, &folder, &reload_clips(Stance::Stand, prefix, &r)) {
+                if let Some((_, c)) = clips.first(&mut ctx, id, &rig.skeleton, &skel, &folder, &reload_clips(Stance::Stand, prefix, &r)) {
                     timing.reload_len = Some(c.clip.length()).filter(|l| *l > 0.0);
                     timing.reload_hit = hit_time(&c);
                 }
-                timing.reload_open_len = clips.first(&mut ctx, &rig.skeleton, &skel, &folder, &reload_open_clips(Stance::Stand, prefix, &r)).map(|(_, c)| c.clip.length());
+                timing.reload_open_len = clips.first(&mut ctx, id, &rig.skeleton, &skel, &folder, &reload_open_clips(Stance::Stand, prefix, &r)).map(|(_, c)| c.clip.length());
             }
             // A semi-automatic gun's standing attack clip: its length and `a:` key time
             // the next shot as the player's (`fnv_combat::attack::Timing::of`, #2739).
             let semi = combat.as_deref().and_then(|c| c.forms.weapons.get(&w)).filter(|ws| !ws.automatic);
             if let Some(ws) = semi {
                 let stem = attack_stem(ws.attack_anim.as_deref());
-                if let Some((_, c)) = clips.first(&mut ctx, &rig.skeleton, &skel, &folder, &attack_clips(Stance::Stand, prefix, &stem, false)) {
+                if let Some((_, c)) = clips.first(&mut ctx, id, &rig.skeleton, &skel, &folder, &attack_clips(Stance::Stand, prefix, &stem, false)) {
                     (timing.attack_len, timing.next_attack) = attack_keys(c.clip.length(), c.clip.start, &c.clip.text_keys);
                 }
             }
@@ -847,7 +875,7 @@ fn start(
         if creature_rig && !times.powers.contains_key(&id) {
             let found: Vec<(Power, f32)> = Power::CREATURE
                 .into_iter()
-                .filter_map(|p| clips.bind(&mut ctx, &rig.skeleton, &skel, &format!("{folder}\\{}", p.clip())).map(|c| (p, hit_time(&c).unwrap_or(DEFAULT_HIT).min(c.clip.length().max(0.05)))))
+                .filter_map(|p| clips.bind(&mut ctx, id, &rig.skeleton, &skel, &format!("{folder}\\{}", p.clip())).map(|c| (p, hit_time(&c).unwrap_or(DEFAULT_HIT).min(c.clip.length().max(0.05)))))
                 .collect();
             times.powers.insert(id, found);
         }
@@ -865,8 +893,8 @@ fn start(
                     Power::ALL
                         .into_iter()
                         .filter_map(|p| {
-                            let custom = over.as_deref().filter(|_| p == Power::Normal).and_then(|o| clips.bind(&mut ctx, &rig.skeleton, &skel, &format!("{folder}\\{prefix}{o}.kf")));
-                            let c = custom.or_else(|| clips.bind(&mut ctx, &rig.skeleton, &skel, &format!("{folder}\\{prefix}{}.kf", p.dir().stem())))?;
+                            let custom = over.as_deref().filter(|_| p == Power::Normal).and_then(|o| clips.bind(&mut ctx, id, &rig.skeleton, &skel, &format!("{folder}\\{prefix}{o}.kf")));
+                            let c = custom.or_else(|| clips.bind(&mut ctx, id, &rig.skeleton, &skel, &format!("{folder}\\{prefix}{}.kf", p.dir().stem())))?;
                             let len = c.clip.length().max(0.05);
                             Some(PowerClip { power: p, hit: hit_time(&c).unwrap_or(DEFAULT_HIT).min(len), len })
                         })
@@ -913,7 +941,7 @@ fn start(
                         put_chained_first(&mut names, p);
                     }
                 }
-                clips.first(&mut ctx, &rig.skeleton, &skel, &folder, &names)
+                clips.first(&mut ctx, id, &rig.skeleton, &skel, &folder, &names)
             } else {
                 let prefix = weapon_prefix(a.weapon);
                 let stance = if new_pose.crouched { Stance::Sneak } else { Stance::Stand };
@@ -941,7 +969,7 @@ fn start(
                     }
                 };
                 let body = hold.is_some_and(|h| h.body) && a.kind == Move::Attack;
-                clips.first(&mut ctx, &rig.skeleton, &skel, &folder, &names).or_else(|| {
+                clips.first(&mut ctx, id, &rig.skeleton, &skel, &folder, &names).or_else(|| {
                     // A creature's body weapon without the people's clip names (Mister
                     // Handy's buzzsaw: `1hmattackright_chop.kf`, `…_stab`, `…_uppercut`):
                     // its stance's attack clips in its folder, in turn (module notes).
@@ -953,7 +981,7 @@ fn start(
                     let n = list.len().max(1);
                     let names: Vec<String> = (0..list.len()).map(|i| list[(*k + i) % n].clone()).collect();
                     *k = (*k + 1) % n;
-                    clips.first(&mut ctx, &rig.skeleton, &skel, &folder, &names)
+                    clips.first(&mut ctx, id, &rig.skeleton, &skel, &folder, &names)
                 })
             };
             let Some((path, clip)) = found else {
@@ -968,8 +996,14 @@ fn start(
             }
             // A reload has no up or down forms: it plays over the level aim.
             let reloads = a.kind.reloads();
-            let up = if reloads { None } else { clips.bind(&mut ctx, &rig.skeleton, &skel, &aim_variant(&path, Aim::Up)) };
-            let down = if reloads { None } else { clips.bind(&mut ctx, &rig.skeleton, &skel, &aim_variant(&path, Aim::Down)) };
+            // A replacement's own up and down forms where it has them, else the folder's.
+            let mut form = |aim: Aim| {
+                let variant = aim_variant(&path, aim);
+                let own = variant.rsplit('\\').next().map(|n| format!("{folder}\\{n}")).filter(|p| *p != variant);
+                clips.bind(&mut ctx, id, &rig.skeleton, &skel, &variant).or_else(|| clips.bind(&mut ctx, id, &rig.skeleton, &skel, own.as_deref()?))
+            };
+            let up = if reloads { None } else { form(Aim::Up) };
+            let down = if reloads { None } else { form(Aim::Down) };
             let len = clip.clip.length().max(0.05);
             if a.melee {
                 times.hit.insert(id, hit_time(&clip).unwrap_or(DEFAULT_HIT).min(len));

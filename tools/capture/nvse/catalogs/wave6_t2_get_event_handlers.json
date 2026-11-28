@@ -1,0 +1,88 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6_t2_get_event_handlers",
+  "description": "Wave 6 Tier 2 strictly read-only console-only probe verifying GetEventHandlers returns an empty Map (0) for ShowOff:OnAdd, ar_Null (-1) for OnCrosshairOn, and filter StringMap keys first/second vs 0/1.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)",
+    "ShowOffNVSE Plugin": "184"
+  },
+  "batches": [
+    {
+      "id": "w6_t2_get_event_handlers",
+      "title": "Wave 6 Tier 2 - GetEventHandlers Known Events & Filter Keys",
+      "extender": "xNVSE 6.4.9 + ShowOff 184 + JIP LN 57.30",
+      "required_plugins": [
+        "jip_nvse.dll",
+        "ShowOffNVSE.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6t2_16_xnvse_get_event_handlers_filter_keys",
+          "bucket": "B",
+          "extender": "xNVSE 6.4.9 + ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": false,
+          "mutates_state": false,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-events.md",
+          "spec_line": 177,
+          "functions_tested": [
+            "GetEventHandlers",
+            "SetEventHandler",
+            "SetEventHandlerAlt",
+            "RemoveEventHandler"
+          ],
+          "claim": "Verify GetEventHandlers returns empty Map (0) for ShowOff:OnAdd and ar_Null (-1) for OnCrosshairOn, plus filter StringMap keys first/second vs 0/1.",
+          "expected": "empty(cross=-1,soAdd=0)|std(first,second)|alt(0,1)",
+          "script_lines": [
+            "ref cb = CompileScript \"nvseprobe_s_w6t2_16_cb.gek\"",
+            "ref rStim = GetFormFromMod \"FalloutNV.esm\" \"15169\"",
+            "array_var aCross = GetEventHandlers \"OnCrosshairOn\"",
+            "int szCross = ar_Size aCross",
+            "array_var aSoAdd = GetEventHandlers \"ShowOff:OnAdd\"",
+            "int szSoAdd = ar_Size aSoAdd",
+            "SetEventHandler \"OnActivate\" cb \"first\"::Player \"second\"::rStim",
+            "array_var aAct = GetEventHandlers \"OnActivate\" cb 1",
+            "array_var aF1 = aAct[0][1]",
+            "array_var aK1 = ar_Keys aF1",
+            "string_var sK1a = aK1[0]",
+            "string_var sK1b = aK1[1]",
+            "RemoveEventHandler \"OnActivate\" cb",
+            "SetEventHandlerAlt \"OnActivate\" cb 0::Player 1::rStim",
+            "array_var aAlt = GetEventHandlers \"OnActivate\" cb 1",
+            "array_var aF2 = aAlt[0][1]",
+            "array_var aK2 = ar_Keys aF2",
+            "string_var sK2a = aK2[0]",
+            "string_var sK2b = aK2[1]",
+            "RemoveEventHandler \"OnActivate\" cb",
+            "PrintToConsole \"PROBE|w6t2_16_xnvse_get_event_handlers_filter_keys|empty(cross=%g,soAdd=%g)|std(%z,%z)|alt(%z,%z)\" szCross szSoAdd sK1a sK1b sK2a sK2b"
+          ],
+          "helper_scripts": {
+            "nvseprobe_s_w6t2_16_cb.gek": [
+              "begin Function { ref rA, ref rB }"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

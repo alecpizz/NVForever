@@ -26,6 +26,7 @@ pub const SEND_AFTER: Duration = Duration::from_secs(6);
 /// The largest minidump sent (the server's cap, §5.1).
 pub const MAX_DUMP_BYTES: usize = 4 * 1024 * 1024;
 /// One request's limit (§8).
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub const TIMEOUT: Duration = Duration::from_secs(10);
 /// The project's server, used when `[Reports] Endpoint` is empty.
 pub const DEFAULT_ENDPOINT: &str = "https://reports-api.nv-forever.com";
@@ -336,9 +337,11 @@ fn send_all(active: &super::Active, pending: &Path, sent: &Path, pid: u32) {
 }
 
 /// HTTP through the system's TLS and certificates (Windows: SChannel; elsewhere the
-/// system's OpenSSL), on every platform the game is built for (#3144: off Windows this was
-/// four stubs that never answered, so Report a bug, Send reports and Delete my reports
-/// told a Linux player their network was at fault).
+/// system's OpenSSL), on every desktop platform the game is built for (#3144: off Windows
+/// this was four stubs that never answered, so Report a bug, Send reports and Delete my
+/// reports told a Linux player their network was at fault). Android suppresses player
+/// reports (`NVF_REPORTS=0`) and does not link system OpenSSL.
+#[cfg(not(target_os = "android"))]
 pub(crate) mod http {
     use super::TIMEOUT;
 
@@ -380,6 +383,26 @@ pub(crate) mod http {
             .send(body)
             .ok()
             .map(|r| r.status().as_u16())
+    }
+}
+
+/// Android suppresses player reports (`NVF_REPORTS=0`) and does not link system OpenSSL.
+#[cfg(target_os = "android")]
+pub(crate) mod http {
+    pub fn get(_url: &str) -> Option<(u16, Vec<u8>)> {
+        None
+    }
+
+    pub fn delete(_url: &str, _delete_token: &str) -> Option<u16> {
+        None
+    }
+
+    pub fn post_for(_url: &str, _body: &[u8], _content_type: &str, _delete_token: Option<&str>) -> Option<(u16, Vec<u8>)> {
+        None
+    }
+
+    pub fn post(_url: &str, _body: &[u8], _content_type: &str, _delete_token: &str) -> Option<u16> {
+        None
     }
 }
 

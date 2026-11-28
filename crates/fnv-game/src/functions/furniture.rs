@@ -31,10 +31,27 @@ impl Game<'_> {
     /// in use are not saved (docs/design/save-load.md §3.3, §3.4), and a load starts a new
     /// run, so no body is on furniture as the game's state is restored [design, #2797;
     /// the player's half #1573]. Called by [`Game::restore`].
+    ///
+    /// Each NPC the save had on its seat (state 3, not getting on or off) is noted in
+    /// [`Game::saved_seats`], for the engine to put back on that furniture at once, with
+    /// no walk and no getting-on clip, when its body is drawn and its package still wants
+    /// it there [observed: observer check 220, base game 2026-11-25: Easy Pete saved on
+    /// his porch chair read GetSitting 3 at the saved spot from the first sample after the
+    /// load, about 2 s, through 20 s; #3991]. The player stands up as before (#1573).
     pub(crate) fn stand_everyone_up(&mut self) {
-        for e in self.extra.values_mut() {
-            e.furniture = None;
+        self.saved_seats.clear();
+        for (actor, e) in self.extra.iter_mut() {
+            if let Some(u) = e.furniture.take() {
+                if *actor != FormId::PLAYER_REF && u.state == SEATED {
+                    self.saved_seats.insert(*actor, u.reference);
+                }
+            }
         }
+    }
+
+    /// The seats a load found NPCs on ([`Game::stand_everyone_up`]), once.
+    pub fn take_saved_seats(&mut self) -> std::collections::BTreeMap<FormId, FormId> {
+        std::mem::take(&mut self.saved_seats)
     }
 
     pub fn furniture_use(&self, actor: FormId) -> Option<FurnitureUse> {

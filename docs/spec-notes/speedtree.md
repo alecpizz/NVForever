@@ -172,7 +172,11 @@ the linear renderer). Branch dimming does the same for bark, by vertex height. T
 cube root is fitted: the square root gave a WastelandShrub01 render 0.36 bottom ÷ top
 against the billboard's 0.47, the cube root 0.42 (the rest of the gradient there comes
 from the sun). Leaf normals point horizontally out of the crown, tilted up 45°, so the
-top-to-bottom darkening is not counted twice.
+top-to-bottom darkening is not counted twice. Under NVForever's Physical lighting row only
+(graphics-enhanced.md §3.25), a dome around the crown's lowered core replaces that rule:
+out from the core, with an upward part of three quarters of the leaf's height above it plus a
+quarter of the crown's reach (`canopy_normals`) [design, chosen by eye]; the default look keeps
+the rule above.
 
 ### Wind [hypothesis; amplitudes and speeds chosen by eye]
 

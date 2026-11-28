@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Original NVForever geometry; Bold filled family. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="currentColor" stroke="none" color="#ffffff" fill-rule="evenodd" stroke-width="0" stroke-linecap="round" stroke-linejoin="round">
+  <title>Help</title>
+  <path d="M 30 16 C 30 23.732 23.732 30 16 30 C 8.268 30 2 23.732 2 16 C 2 8.268 8.268 2 16 2 C 23.732 2 30 8.268 30 16 Z M 26 16 C 26 21.5228 21.5228 26 16 26 C 10.4772 26 6 21.5228 6 16 C 6 10.4772 10.4772 6 16 6 C 21.5228 6 26 10.4772 26 16 Z M 11 10 Q 11 6 16 6 Q 22 6 22 12 Q 22 15 18 17 L 18 20 L 14 20 L 14 15 Q 18 13 18 11 Q 18 9 16 9 Q 14 9 14 11 Z"/><circle cx="16" cy="24" r="2"/>
+</svg>

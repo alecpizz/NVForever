@@ -304,19 +304,19 @@ fn fight_centre(fighters: &[(FormId, Place)], actor: FormId, at: Place) -> [f32;
     }
 }
 
-/// Whether an actor is in the world and alive.
-/// Whether the player's foe is within [`OBSERVE_DISTANCE`] of the player at `p`: a
-/// resident by where it walks (in the same space); another by `seen`, its place when it
-/// is present and alive. A foe with no place is near no one (#3223: a hunter left in a
-/// cell no longer loaded, its Combat against the player kept, had townsfolk comment on a
-/// fight from anywhere).
-fn foe_near(resident: Option<Place>, seen: Option<[f32; 3]>, p: Place) -> bool {
-    match resident {
-        Some(r) => r.space == p.space && dist(r.pos, p.pos) <= OBSERVE_DISTANCE,
-        None => seen.is_some_and(|at| dist(at, p.pos) <= OBSERVE_DISTANCE),
-    }
+/// Whether the player's foe is within [`OBSERVE_DISTANCE`] of the player at `p`, in the
+/// same space: a resident by where it walks; another by `seen`, its place (cell and
+/// position) when it is present and alive. A foe with no place is near no one (#3223: a
+/// hunter left in a cell no longer loaded, its Combat against the player kept, had
+/// townsfolk comment on a fight from anywhere), and one in another space is not near
+/// however close its coordinates (#4891: two Powder Gangers left in Combat in Cell Block
+/// A of the NCR Correctional Facility, whose interiors overlap in x and y, kept the
+/// player "in a fight" in the visitor center, and Meyers ran from it and would not talk).
+fn foe_near(resident: Option<Place>, seen: Option<Place>, p: Place) -> bool {
+    resident.or(seen).is_some_and(|f| f.space == p.space && dist(f.pos, p.pos) <= OBSERVE_DISTANCE)
 }
 
+/// Whether an actor is in the world and alive.
 fn here(game: &Game, actor: FormId) -> bool {
     game.present(actor) && !game.extra.get(&actor).is_some_and(|e| e.dead)
 }
@@ -556,8 +556,8 @@ impl Ai {
 
     /// The fighters now: residents in Combat, and the player while someone in Combat (not
     /// Alert or Lost: a search is no fight) fights it within [`OBSERVE_DISTANCE`] of it
-    /// (its foe may be no resident: then where the world has it while present and alive,
-    /// else where it last measured from; a foe with no place is near no one: [`foe_near`]).
+    /// (its foe may be no resident: then where the world has it while present and alive;
+    /// a foe with no place, or in another space, is near no one: [`foe_near`]).
     fn fighters(&self, game: &Game, player: Option<Place>) -> Vec<(FormId, Place)> {
         use fnv_game::awareness::State;
         let mut fighters: Vec<(FormId, Place)> = self
@@ -569,12 +569,8 @@ impl Ai {
         let fought = |p: Place| {
             game.awareness.actors.iter().any(|(id, w)| {
                 let resident = self.agents.get(id).map(|a| Place { space: a.walker.space, pos: a.walker.feet });
-                // Where the world has it, while present and alive; a foe the world does not
-                // know of: where it last measured from.
-                let seen = match game.world.peek(*id).map(|s| s.pos).or_else(|| game.world.placed.get(*id).map(|r| r.pos)) {
-                    Some(pos) => here(game, *id).then_some(pos),
-                    None => w.at,
-                };
+                // Where the world has it (its cell and position), while present and alive.
+                let seen = goal::place_of_ref(game, *id).filter(|_| here(game, *id));
                 let near = foe_near(resident, seen, p);
                 w.state == State::Combat && w.targets.contains_key(&FormId::PLAYER_REF) && near
             })
@@ -936,8 +932,14 @@ mod tests {
         // #3223: a hunter in a cell no longer loaded: no resident, no place.
         assert!(!foe_near(None, None, p));
         // Where the world has it: near or far.
-        assert!(foe_near(None, Some([1000.0, 0.0, 0.0]), p));
-        assert!(!foe_near(None, Some([9200.0, 0.0, 0.0]), p));
+        assert!(foe_near(None, Some(Place { space, pos: [1000.0, 0.0, 0.0] }), p));
+        assert!(!foe_near(None, Some(Place { space, pos: [9200.0, 0.0, 0.0] }), p));
+        // #4891: no resident, in another interior at overlapping coordinates (the report's
+        // Cell Block A ganger and visitor-center player): not near.
+        let block_a = Place { space: Space::Interior(1), pos: [3902.0, -100.0, 14464.0] };
+        let visitors = Place { space: Space::Interior(2), pos: [4136.0, -326.0, 14465.0] };
+        assert!(!foe_near(None, Some(block_a), visitors));
+        assert!(foe_near(None, Some(Place { space: visitors.space, ..block_a }), visitors));
         // A resident: by where it walks, in the same space only.
         assert!(foe_near(Some(Place { space, pos: [0.0, 1400.0, 0.0] }), None, p));
         assert!(!foe_near(Some(Place { space: Space::Interior(0x103DF9), pos: [0.0, 10.0, 0.0] }), None, p));

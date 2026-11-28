@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Original NVForever geometry; Industrial family. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="currentColor" color="#ffffff" fill-rule="evenodd" stroke-width="1.8" stroke-linecap="square" stroke-linejoin="bevel">
+  <title>Quickwheel</title>
+  <path d="M 28.873 17.809 L 24.004 26.244 L 20.925 22.304 L 23.922 17.113 Z M 20.870 28.053 L 11.130 28.053 L 13.003 23.417 L 18.997 23.417 Z M 7.996 26.244 L 3.127 17.809 L 8.078 17.113 L 11.075 22.304 Z M 3.127 14.191 L 7.996 5.756 L 11.075 9.696 L 8.078 14.887 Z M 11.130 3.947 L 20.870 3.947 L 18.997 8.583 L 13.003 8.583 Z M 24.004 5.756 L 28.873 14.191 L 23.922 14.887 L 20.925 9.696 Z"/>
+</svg>

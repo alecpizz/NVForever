@@ -1197,6 +1197,33 @@ quaternions [documented: nif.xml hkQuaternion vs Quaternion].
   1,173 vertices, about −3e38 on 476, denormals on 129 and 1.0 on 464; drawn with them its trim boards came out flat
   pale blue (owner's fly-cam screenshot). The renderers use vertex alpha only with the
   flag, clamp colours to 0..1 and replace non-finite values by 1 [hypothesis].
+  One kind of shape takes its vertex alpha without the flag: a **baked shadow patch**, the
+  dark polygon a piece of furniture carries on the floor under it. `CardTable01:1` of
+  `meshes\clutter\casino\cardtable01.nif` [observed, decoded with `fnvtool nif decode`]:
+  a BSShaderNoLightingProperty with no texture and shader flags 0x82000000 (no
+  Vertex_Alpha), NiAlphaProperty 0x10ED (blending, SRC_ALPHA / INV_SRC_ALPHA), 20 vertices
+  1.09 units above the floor, every colour 0 0 0, alpha 0 along the outline and 0.7 inside.
+  With the alpha taken as 1 it was an opaque black octagon with a hard outline; the stored
+  alpha is the picture of a shadow, which only shows if it is drawn [hypothesis: the
+  original draws it; no frame of the original was compared, playtest 2026-11-25]. The
+  renderers take the vertex alpha of an unlit shape with no texture, that blend, and
+  vertex colours all black with an alpha that varies (nvf-assets nif_spawn.rs
+  `baked_shadow_patch`) and do not fade it where
+  it meets the floor (§6 "Soft intersections": the fade's test that a shape lies along the
+  surface behind it failed from a few metres away, so the patch came and went as the
+  camera moved).
+  Census [observed 2026-11-25, `crates/fnv-nif/examples/baked_shadow_survey.rs` over the
+  base game's and the add-ons' mesh archives]: 1,314 visible shapes meet the rule, 1,125 of
+  them with Vertex_Alpha set and 189 without. 812 lie flat (nine tenths or more of their
+  area faces up or down: floors under furniture, ceilings round recessed lights), 502 do
+  not (the shade painted behind posters, paintings and signs, in doorways and stairwells,
+  on walls). 196 reach an alpha of 0.95 or more somewhere: recessed ceiling lights, the
+  dark of tunnel mouths, doorways and wall holes, the shading of whole buildings
+  (`novac_motel.nif`, 1,208 vertices): darkness rather than a shadow, which is why the
+  patches are drawn as stored and not by a strength of their own (tried for a day,
+  2026-11-25: at 75% a tunnel mouth's black let a quarter of what lies behind it through).
+  37 more shapes are black with a varying alpha but have no such blend (9 flat, 28 not; 14
+  with Vertex_Alpha, drawn by "Unlit shapes faded by vertex alpha alone" below).
 - **Normal maps** use DirectX-style green: +G points *down* the image (towards
   increasing v), +R to the right [observed]. Seven texture sets in `Fallout -
   Textures.bsa` ship a parallax height map (`_p`) beside the normal map (`_n`): McCarran
@@ -1490,7 +1517,7 @@ quaternions [documented: nif.xml hkQuaternion vs Quaternion].
     observer-checks.md 249].
     The reflection does not depend on the lights, so the pane shows from its dark side
     too.
-  - Cube axes: the game is Z-up; a cube map's faces are laid out for a Y-up lookup (+Y
+  - Cube axes (window shapes; the others since #4392: next entry): the game is Z-up; a cube map's faces are laid out for a Y-up lookup (+Y
     the third face). The lookup direction is the game-space reflection (x, y, z) taken as
     (x, z, y) [hypothesis: unverified against the original; on a blurry 32-texel cube it
     only places the streaks].
@@ -1498,7 +1525,8 @@ quaternions [documented: nif.xml hkQuaternion vs Quaternion].
     7 in all) were left as they were by #2462 [design: its scope]; since #2841 they reflect
     too (next bullet), and the distance fade described there applies to window shapes as
     well.
-- **Environment maps on other shapes** (#2841). What is documented about the effect:
+- **Environment maps on other shapes** (#2841; the lookup changed by #4392, last bullets of this
+  entry). What is documented about the effect:
   - "Environment Mapping: Enables environment mapping on the object"; the texture set's
     "Texture 5: Environment Map (Cubemap) (Needs "Environment Mapping" shader flag set)"
     and "Texture 6: Environment Mask (Needs "Environment Mapping" shader flag set)"
@@ -1599,9 +1627,20 @@ quaternions [documented: nif.xml hkQuaternion vs Quaternion].
   1.4-1.7× NVForever main's by day and 3.3-3.8× at night at the same cameras, while the
   ground is 0.86-0.91× and 0.63-0.66× [observed: envmap against NVForever main].
 
+  The lookup (#4392; the Goodsprings camper `mobilehomeasnv.nif`, `chrome_e.dds` behind the
+  mask `car05_m.dds`, the original captured at hours 8, 13.1 and 17, the pictures private):
+  - In the original the body reflects in soft, broad areas cut out by the mask; they do not
+    follow the dents of the normal map `car03_n.dds`, the curved rear has no streak, and the
+    inner wall seen through the rear window is bright [observed].
+  - So, for shapes without the window flag, the reflection is taken at the interpolated
+    normal, and the cube is looked up by the game-space direction (x, y, z) as it is, not as
+    (x, z, y) [hypothesis: the pair comes closest of the variants tried, judged by eye, at one
+    model; the strength was not compared, as the sun and sky differ there].
+  - Window shapes keep the lookup of #2669 [design: not captured again].
+
   What the renderers draw (nvf_assets `env_map.rs`, `nif_spawn::shape_env`): a lit shape
   with Environment_Mapping, a slot-4 file that loads as a cube map and a scale above 0
-  reflects that cube the way window shapes do (previous bullet), whether or not the
+  reflects that cube (its lookup above; windows keep theirs), whether or not the
   window flag is set [design, #2841]. Shapes with the flag but no usable cube are drawn as
   before, as are unlit shapes [design: the wiki gives the scale to the lit shaders only],
   and so is object LOD block geometry (LOD_Building) without the window flag, which
@@ -1620,9 +1659,9 @@ quaternions [documented: nif.xml hkQuaternion vs Quaternion].
   has none), but the engine may switch PPLighting shapes with parallax and a cube to it
   at run time, flipping their cube [hypothesis]; one more reading for observer
   check 273. Choices, each tagged, with the observer check that would settle it:
-  - Strength and view: the cube read along the view reflected about the normal-mapped
-    normal (world-fixed, which fits the bright patches observed), × the scale × the mask,
-    added to the lit colour, as for windows [hypothesis for the lookup, the strength and
+  - Strength and view: the cube read along the view reflected about the interpolated
+    normal (#4392, "The lookup" above; the normal-mapped one before; world-fixed, which fits the bright patches observed), × the scale × the mask,
+    added to the lit colour [hypothesis for the lookup, the strength and
     the scale; observer check 271]. By day L (next bullet) is at most 1, so the default
     can only dim the strength-1 term, while the fit asks for up to 8.5 times the term on
     some objects (a Sarsaparilla bottle): the day strength is **open** and deliberately left at 1.
@@ -1641,8 +1680,9 @@ quaternions [documented: nif.xml hkQuaternion vs Quaternion].
     (`NVF_PLAY_DEBUG_ENV_LIGHT_WINDOW=scene` scales them too). Views without the world
     view's display-value lights (the minigame views) keep the term unscaled.
   - No slot-5 mask: full strength [hypothesis; observer check 272].
-  - Cube orientation: the same lookup as window shapes, (x, z, y) of the game-space
-    reflection [hypothesis: the wiki says the two differ by a flip; observer check 273].
+  - Cube orientation: the game-space reflection (x, y, z) as it is; window shapes take it as
+    (x, z, y) [hypothesis: #4392, "The lookup" above; the wiki says the two differ by a flip;
+    observer check 273].
   - A blended shape without the window flag keeps its blend, so its reflection is
     weighted by its alpha like the rest of its colour; window shapes stay premultiplied
     (#2462) [hypothesis, the conservative choice: hair, cell fades, blended cut-outs and
@@ -1671,7 +1711,7 @@ quaternions [documented: nif.xml hkQuaternion vs Quaternion].
 
   Debug switches `NVF_PLAY_DEBUG_ENV_*` vary each of these from the same build, for
   comparing frames with the original's (`env_map.rs` module docs: strength, no-mask rule,
-  orientation per set, blend per set, light per set (scene light, none, or a
+  orientation per set, normal per set, blend per set, light per set (scene light, none, or a
   received-light stand-in), the distance fade (off unless set), and
   `NVF_PLAY_DEBUG_ENV_NON_WINDOW=0` for
   #2462's set alone). The model log names each model's reflecting shapes without the

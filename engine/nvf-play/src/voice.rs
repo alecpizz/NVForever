@@ -370,9 +370,15 @@ struct Said {
 }
 
 /// Every response being said: the SayTo and Say lines, and the conversation's line.
+///
+/// A co-op guest's speaker saying a line of the host's (`Speech::remote`) is heard saying
+/// that one only: a line of the guest's own by the same speaker (a hello at this player)
+/// would take turns with it, each starting the sound over. No line is remote outside
+/// co-op.
 fn said_now(g: &Game, sim: &SimState) -> Vec<Said> {
+    let hosts: Vec<FormId> = g.speech.iter().filter(|s| s.remote).map(|s| s.speaker).collect();
     let mut out: Vec<Said> =
-        g.speech.iter().map(|s| Said { speaker: s.speaker, place: s.place(), through: s.through.is_some(), info: s.info, response: speech_response(g, sim, s), remaining: s.remaining, conversation: false, two_d: s.two_d }).collect();
+        g.speech.iter().filter(|s| s.remote || !hosts.contains(&s.speaker)).map(|s| Said { speaker: s.speaker, place: s.place(), through: s.through.is_some(), info: s.info, response: speech_response(g, sim, s), remaining: s.remaining, conversation: false, two_d: s.two_d }).collect();
     if let Some((c, line)) = g.dialogue.as_ref().and_then(|c| Some((c, c.line.as_ref()?))) {
         let order = g.data.infos.get(&line.info).map(|d| d.response_order()).unwrap_or_default();
         if let Some(&r) = order.get(line.response) {

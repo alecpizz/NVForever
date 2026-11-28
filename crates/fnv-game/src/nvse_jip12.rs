@@ -191,8 +191,8 @@ fn formatted(args: &[XVal], k: usize) -> String {
 
 /// The light at a point from the engine's field: the base light, plus each light within
 /// its reach, `strength × (1 − (d / reach)²)`, as 0 to 100 (`nvforever::detection`'s
-/// rule); a point outdoors counts as in the sun when the sun is up [hypothesis: no ray
-/// to the sun is cast for a point].
+/// rule); a point outdoors counts as in the sun when the sun is up (see
+/// docs/spec-notes/jip-world-12.md §2).
 pub fn light_at(field: &LightField, at: [f32; 3]) -> f64 {
     let mut l = f64::from(match field.outdoors {
         Some((sun, _)) => sun,
@@ -560,8 +560,7 @@ impl Game<'_> {
 
     /// Whether a base form is not drawn: SetInternalMarker's, else a marker's model; a
     /// form whose record fields the game does not keep (statics) by its Editor ID, one
-    /// naming a marker [hypothesis: FalloutNV.esm's marker statics, XMarker,
-    /// XMarkerHeading, NorthMarker and the like, are named so].
+    /// naming a marker (see docs/spec-notes/jip-world-12.md §2).
     pub fn internal_marker(&self, base: FormId) -> bool {
         if let Some(&b) = self.other.jip12.internal.get(&base) {
             return b;
@@ -681,15 +680,15 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
             }
             zero
         }
-        // The climate for now, unlocked; the page's return is the climate [documented:
-        // "climate:ref"; hypothesis: the one set]. It holds while the player stays in
-        // the worldspace [decision: the page's "Bugs" note, the climate going back after
-        // about 7 seconds, is not followed].
+        // The climate for now, unlocked; does not return the climate set (`retSet != rCl2`,
+        // `setRet=0`) [observed: `w6d2_18_force_set_current_climate_and_isnight`]; returns 0
+        // [hypothesis]. It holds while the player stays in the worldspace [decision: the
+        // page's "Bugs" note, the climate going back after about 7 seconds, is not followed].
         "setcurrentclimate" => {
             let c = form(args, 0).filter(|&c| g.data.sig(g.unclone(c)) == Some(*b"CLMT"));
             g.other.jip12.forced_climate = None;
             g.other.jip12.set_climate = c.zip(g.player_world());
-            reff(c)
+            zero
         }
         // Degrees, 0 north, 90 east, -90 west, ±180 south [documented]; -1 radian in
         // degrees when no script set one [observed: jip12 wind]; the set angle read back
@@ -750,8 +749,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
             yes(c.is_some_and(|c| g.buffered_cells().contains(&c)))
         }
         // The north marker's rotation: a NorthMarker reference in the cell, its Z angle
-        // in degrees; 0 without one [documented]. [hypothesis: the marker is the one
-        // FalloutNV.esm names NorthMarker.]
+        // in degrees; 0 without one [documented] (see docs/spec-notes/jip-world-12.md §2).
         "getcellnorthrotation" => {
             let Some(c) = form(args, 0) else { return Some(Ok(zero)) };
             let refs = g.world.placed.by_cell.get(&c).cloned().unwrap_or_default();
@@ -771,7 +769,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         }
         "getworldspacepersistentcell" => reff(form(args, 0).and_then(|w| g.world.placed.world_persistent.get(&w).copied())),
         // 0 dark to 100 lit [documented], from the lights the engine last measured with;
-        // 0 before it has [hypothesis].
+        // 0 before it has (see docs/spec-notes/jip-world-12.md §2).
         "getlightamountatpoint" => {
             let (Some(x), Some(y), Some(z)) = (num(args, 0), num(args, 1), num(args, 2)) else { return Some(Ok(zero)) };
             match &g.other.jip12.light {
@@ -780,7 +778,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
             }
         }
         // Since the calling script last asked [documented]; a script's first ask counts
-        // the travels since the game started [hypothesis].
+        // the travels since the game started (see docs/spec-notes/jip-world-12.md §2).
         "getpcfasttravelled" => {
             let key = (ctx.self_ref, ctx.quest);
             let now = g.other.jip12.fast_travels;
@@ -817,10 +815,11 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         // original and gives -439019037 [observed: jip12 hash], no common 32-bit string
         // hash we tried (FNV-1/1a, djb2, sdbm, ×31, ×131, CRC-32, Adler-32) on the text as written, lower or upper case.
         "getstringhash" => zero,
-        // Created references (FF) only [documented]; the toggle's state, or the state
-        // without an argument.
+        // Created references (FF) only [documented]; returns the previous toggle state
+        // before applying any supplied argument [observed: `w6d2_23_world_state_internal_marker_and_light`].
         "togglepurgeonunload" => {
             let Some(r) = subject.filter(|r| r.is_dynamic()) else { return Some(Ok(zero)) };
+            let was = g.other.jip12.purge.contains(&r);
             if let Some(t) = num(args, 0) {
                 if t != 0.0 {
                     g.other.jip12.purge.insert(r);
@@ -828,16 +827,19 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
                     g.other.jip12.purge.remove(&r);
                 }
             }
-            yes(g.other.jip12.purge.contains(&r))
+            yes(was)
         }
-        // The form's marker state, changed when a toggle is given [documented]; the
+        // The form's marker state: 1-arg returns current state, 2-arg updates the state
+        // and returns 0 [documented; observed: `w6d2p4_53_micro_precision_bounds`]; the
         // engine draws the change for references placed from then on (`nvforever::world`).
         "setinternalmarker" => {
             let Some(f) = form(args, 0) else { return Some(Ok(zero)) };
             if let Some(t) = num(args, 1) {
                 g.other.jip12.internal.insert(f, t != 0.0);
+                zero
+            } else {
+                yes(g.internal_marker(f))
             }
-            yes(g.internal_marker(f))
         }
         // ---- the barter menu ----
         "getbartergoldalt" => XVal::Num(g.other.jip12.barter.as_ref().map_or(0.0, |b| f64::from(b.merchant_caps))),
@@ -850,7 +852,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
             let refs: Vec<XVal> = items.into_iter().map(|i| XVal::Ref(g.temp_ref(owner, i).0)).collect();
             list(g, refs)
         }
-        // Bought (0) or sold (1); 0 without a trade [hypothesis].
+        // Bought (0) or sold (1); 0 without a trade (see docs/spec-notes/jip-world-12.md §3).
         "getbarterpricemult" => {
             let k = usize::from(num(args, 0).unwrap_or(0.0) != 0.0);
             match &g.other.jip12.barter {
@@ -859,7 +861,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
             }
         }
         // Bought at least 1, sold at most 1 [documented]; for the trade open
-        // [hypothesis: a new trade starts from the rules].
+        // (see docs/spec-notes/jip-world-12.md §3).
         "setbarterpricemult" => {
             if let (Some(b), Some(m)) = (num(args, 0), num(args, 1)) {
                 if g.other.jip12.barter.is_some() {
@@ -876,7 +878,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         "getmenuitemfilter" => {
             let code = num(args, 0).unwrap_or(0.0) as u16;
             let side = usize::from(num(args, 1).unwrap_or(0.0) != 0.0);
-            // The menu's filter, kept after it closes [hypothesis]; before it was ever
+            // The menu's filter, kept after it closes (see docs/spec-notes/jip-world-12.md §4); before it was ever
             // open, 1 (weapons) for the inventory (1002) and -1 for container (1008) /
             // barter (1053) / other menus [observed: jip12 filter.inventory; Fallout:
             // New Vegas 1.4.0.525 + xNVSE 6.4.9 + JIP LN 57.30, `jip_40_barter_and_filter_defaults`:
@@ -912,8 +914,8 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         "getrecipemenuselection" => reff(g.other.jip12.recipe_menu.and_then(|m| m.1)),
         // A condition on the recipe for the session: function `func` (its index, an
         // opcode less 0x1000), parameter `param`, comparison `comp` against `value`
-        // [hypothesis: the page is marked "TO DOCUMENT"; `comp` read as the CTDA's
-        // operator code, 0 == 1 != 2 > 3 >= 4 < 5 <=], run on the player and joined
+        // (`comp` read as the CTDA operator code, 0 == 1 != 2 > 3 >= 4 < 5 <=; see
+        // docs/spec-notes/jip-world-12.md §4), run on the player and joined
         // with AND to the record's.
         "addrecipecondition" => {
             let (Some(r), Some(f), Some(c), Some(v)) = (form(args, 0), num(args, 1), num(args, 3), num(args, 4)) else { return Some(Ok(zero)) };
@@ -946,7 +948,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         // ---- the quantity and text input menus ----
         // The callback gets the amount, -1 for Cancel [documented]; drawn as the item
         // menus' "How many?" prompt (`nvf_play::script_quantity`). Not while another
-        // menu is open, its own included, as ShowTextInputMenu [hypothesis; #2018].
+        // menu is open, its own included, as ShowTextInputMenu (see docs/spec-notes/jip-world-12.md §5; #2018).
         "showquantitymenu" => {
             let (Some(cb), Some(max)) = (args.first().cloned().filter(|v| !matches!(v, XVal::Num(_))), num(args, 1)) else { return Some(Ok(zero)) };
             if g.menu.is_some() {

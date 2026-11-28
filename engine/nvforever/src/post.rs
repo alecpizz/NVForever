@@ -57,9 +57,23 @@ pub struct PostEffects {
 }
 
 impl PostEffects {
+    #[allow(dead_code)]
     pub fn new(bloom: bool, sharpen: bool) -> Self {
-        PostEffects { params: Vec4::new(BLOOM_THRESHOLD, BLOOM_KNEE, if bloom { BLOOM_INTENSITY } else { 0.0 }, if sharpen { SHARPENING } else { 0.0 }) }
+        Self::new_with_hdr_glow(bloom, sharpen, false)
     }
+
+    pub fn new_with_hdr_glow(bloom: bool, sharpen: bool, physical_hdr_glow: bool) -> Self {
+        let (threshold, knee, intensity) = if physical_hdr_glow {
+            (0.94, 0.08, 0.25)
+        } else {
+            (BLOOM_THRESHOLD, BLOOM_KNEE, BLOOM_INTENSITY)
+        };
+        PostEffects { params: Vec4::new(threshold, knee, if bloom { intensity } else { 0.0 }, if sharpen { SHARPENING } else { 0.0 }) }
+    }
+}
+
+fn effective_glow_intensity(base: f32, physical: bool, interior: bool) -> f32 {
+    if physical && interior { base * 0.60 } else { base }
 }
 
 /// A camera whose bloom is the light glow ([`glow_bloom`], strength from the image space).
@@ -204,7 +218,13 @@ fn image_space_glow(
     let Some(sky) = sky else { return };
     let ratio = |i: usize| screen.as_deref().map_or(1.0, |s| s.hdr_ratio(i));
     let hdr = &sky.cinematic().hdr;
-    let intensity = modified_glow(glow_intensity(hdr), ratio(fnv_world::imagespace::HDR_BRIGHT_SCALE));
+    let physical = nvf_assets::authored::physical_pbr();
+    let interior = sky.interior.is_some();
+    let intensity = effective_glow_intensity(
+        modified_glow(glow_intensity(hdr), ratio(fnv_world::imagespace::HDR_BRIGHT_SCALE)),
+        physical,
+        interior,
+    );
     let pass = modified_bright_pass(hdr.v[fnv_world::imagespace::HDR_BRIGHT_SCALE], ratio(fnv_world::imagespace::HDR_BRIGHT_SCALE), ratio(fnv_world::imagespace::HDR_BRIGHT_CLAMP));
     if (pass.strength - *told).abs() > 0.05 {
         info!("light glow: bright pass {:.2} (Bright Scale {:.1})", pass.strength, hdr.v[fnv_world::imagespace::HDR_BRIGHT_SCALE]);
@@ -494,5 +514,15 @@ mod tests {
         // No modifier: as the image space has it.
         assert_eq!(modified_glow(base, 1.0), base);
         assert_eq!(modified_bright_pass(7.0, 1.0, 1.0), PassShape { strength: bright_pass(7.0), threshold: BRIGHT_PASS_THRESHOLD, step: BRIGHT_PASS_STEP });
+    }
+
+    #[test]
+    fn physical_interiors_restrain_double_bloom_and_glow() {
+        let std_fx = PostEffects::new_with_hdr_glow(true, true, false);
+        let phys_fx = PostEffects::new_with_hdr_glow(true, true, true);
+        assert!(phys_fx.params.x > std_fx.params.x && phys_fx.params.z < std_fx.params.z);
+        assert!((effective_glow_intensity(0.10, true, true) - 0.06).abs() < 1e-6);
+        assert_eq!(effective_glow_intensity(0.10, true, false), 0.10);
+        assert_eq!(effective_glow_intensity(0.10, false, true), 0.10);
     }
 }

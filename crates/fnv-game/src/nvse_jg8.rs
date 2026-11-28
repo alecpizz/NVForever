@@ -133,9 +133,11 @@ impl Game<'_> {
         use crate::trace::EventKind as K;
         match *kind {
             K::QuestFailed { quest } if self.jg8_listening(Ev::FailQuest) => Some((Ev::FailQuest, vec![XVal::Ref(quest.0)], vec![XVal::Ref(quest.0)])),
-            // [hypothesis: the arguments; the page gives none]
-            K::ReputationChanged { reputation, axis, value } if self.jg8_listening(Ev::Reputation) => {
-                Some((Ev::Reputation, vec![XVal::Ref(reputation.0)], vec![XVal::Ref(reputation.0), XVal::Num(axis as f64), XVal::Num(value)]))
+            // [observed 2026-11-24: w6t2p3_12_rep_fame_infamy, FNV 1.4.0.525 + JG 528:
+            // callback receives (reputation, fame, infamy)]
+            K::ReputationChanged { reputation, .. } if self.jg8_listening(Ev::Reputation) => {
+                let [infamy, fame] = self.player.reputation.get(&reputation).copied().unwrap_or([0.0; 2]);
+                Some((Ev::Reputation, vec![XVal::Ref(reputation.0)], vec![XVal::Ref(reputation.0), XVal::Num(fame), XVal::Num(infamy)]))
             }
             _ => None,
         }
@@ -169,14 +171,14 @@ impl Game<'_> {
     }
 
     /// The crosshair came onto `r` (the engine's activation reach, `nvf-play`
-    /// activate.rs): filters the form and the base's form type [documented:
-    /// SetJohnnyOnCrosshairEventHandler].
+    /// activate.rs): filters the form and the base's form type code (e.g. `ACTI = 21`)
+    /// [documented: SetJohnnyOnCrosshairEventHandler, Form Type IDs].
     pub fn jg8_crosshair(&mut self, r: FormId) {
         if !self.jg8_listening(Ev::Crosshair) {
             return;
         }
         let base = crate::functions::base_of(self, r).unwrap_or(r);
-        let ty = self.data.sig(base).and_then(|s| crate::functions::items::form_type_code(&s)).map_or(-1.0, f64::from);
+        let ty = self.data.sig(base).and_then(|s| fnv_script::vm::form_type_code(&s)).map_or(-1.0, f64::from);
         self.jg8_fire(Ev::Crosshair, &[XVal::Ref(r.0), XVal::Num(ty)], vec![XVal::Ref(r.0)]);
     }
 
@@ -459,9 +461,22 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
             };
             let Some(func) = args.get(1).cloned().filter(|f| !matches!(f, XVal::Num(n) if *n == 0.0)) else { return Some(Ok(zero)) };
             // The filters that are numbers (a limb, a level, an actor value code, an
-            // emotion, a form type, the sleep/wait mode) keep 0 as a value; a 0 where a
-            // form goes (or a menu ID for KeyboardSelection) is no filter [hypothesis:
-            // scripts pass 0 for "any"].
+            // emotion, a form type, the sleep/wait mode) keep 0 as a value; a 0 or
+            // XMarker (0x3B) where a form goes (or a menu ID <= 0 for KeyboardSelection)
+            // is no filter. Live-observed ONLY for XMarker wildcard dispatch on
+            // SetOnReputationChangeEventHandler (`xm=1`) and XMarker + `21`
+            // registration/removal returning `0` on SetJohnnyOnCrosshairEventHandler
+            // (`xh(0,0)`) [observed 2026-11-24: Fallout: New Vegas 1.4.0.525 + xNVSE
+            // 6.4.9 + JohnnyGuitarNVSE 528 + JIP LN 57.30, 10 official base masters,
+            // GSDocMitchellHouse (`0x00103DF9`), isolated clean-room staging copy,
+            // committed probe `w6t2p2_12_jg_reputation_and_crosshair_xmarker`
+            // (`tools/capture/nvse/catalogs/wave6c_jg8_xmarker_wildcard.json`):
+            // `PROBE|w6t2p2_12_jg_reputation_and_crosshair_xmarker|xh(0,0)|fame(n=0,rOk=0,ax=0,v=0.0)|inf(n=1,ax=1.08423e+09,v=3.0)|xm=1`;
+            // no DLL or source consulted]; applying XMarker wildcard to the remaining
+            // unprobed handlers (FailQuest, LimbGone, SeenData, ProcessLevel,
+            // NpcActorValue, GeneralSubtitle, RadioPostSound, TakeBackItem) and numeric 0
+            // in a form slot are [hypothesis].
+            const XMARKER: u32 = 0x0000_003B;
             let numeric: &[usize] = match ev {
                 Ev::LimbGone | Ev::ProcessLevel | Ev::NpcActorValue | Ev::Crosshair => &[1],
                 Ev::NpcResponse | Ev::SleepWait | Ev::KeyboardSelection => &[0],
@@ -473,6 +488,7 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
                 .enumerate()
                 .map(|(k, a)| match a {
                     XVal::Ref(0) => None,
+                    XVal::Ref(XMARKER) if !numeric.contains(&k) => None,
                     XVal::Num(n) if !numeric.contains(&k) && *n == 0.0 => None,
                     XVal::Num(n) if ev == Ev::KeyboardSelection && *n <= 0.0 => None,
                     XVal::Num(n) if numeric.contains(&k) && ev != Ev::SleepWait && *n < 0.0 => None,
@@ -517,7 +533,12 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
             let n = text(args, 0).unwrap_or_default();
             yes(!n.is_empty() && crate::mod_files::archives().iter().any(|a| a.eq_ignore_ascii_case(&n)))
         }
-        // `path`, under Data\Textures [documented: GetTexture…]; 0 without the file.
+        // `path`, under Data\Textures [documented: GetTexture…]; 0 without the file
+        // [observed 2026-11-24: Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 +
+        // JohnnyGuitarNVSE 528, 10 official base masters, `GSDocMitchellHouse`, committed
+        // probe `w6t2_23_jg_dds_texture_format_and_bounds`
+        // (`tools/capture/nvse/catalogs/wave6_t2_observed_matches.json`):
+        // `dds(w=64,h=64,m=0,fmt=5,miss=0)` confirming DXT5 = 5 and missing file = 0].
         // GetTextureFormat: 1-5 for DXT1-DXT5 [documented], 0 for another format
         // [hypothesis].
         "gettexturewidth" | "gettextureheight" | "gettexturemipmapcount" | "gettextureformat" => {
@@ -546,8 +567,9 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
             return Some(Ok(outputs(g, 0.0, &[f64::from(c[0]), f64::from(c[1]), f64::from(c[2])])));
         }
         // ---- arrays [documented: Ar_Shuffle, a new shuffled array; Ar_SortEditor, a new
-        // array of the forms by editor ID, `reverse` the other way; hypothesis: the IDs
-        // compared without case, forms without one first].
+        // array of the forms by editor ID, `reverse` the other way; observed: IDs compared
+        // without case in `jg_30_ar_sort_editor_case_order` (`wave4a_extenders.json`),
+        // see docs/spec-notes/ext-jg8.md §2; hypothesis: forms without an editor ID first].
         "ar_shuffle" => {
             let Some(XVal::Array(id)) = args.first() else { return Some(Ok(zero)) };
             let mut vals: Vec<XVal> = g.ext.array(*id).map(|a| a.entries.iter().map(|(_, v)| v.clone()).collect()).unwrap_or_default();
@@ -572,12 +594,20 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
             list(g, keyed.into_iter().map(|(_, v)| v).collect())
         }
         // ---- the system colours: 1 HUD, 2 HUD alt, 3 terminal, 4 Pip-Boy, 5 main menu
-        // [documented], SetSystemColor's (`nvse_jip9`) else [`default_colour`]. GetSystemColor packs
-        // them as 0xRRGGBB [hypothesis]; GetSystemColorAlt writes the three variables.
+        // [documented], SetSystemColor's (`nvse_jip9`) else [`default_colour`].
+        // GetSystemColor packs them as 0xRRGGBB and returns 0 for another id
+        // [observed: `jg_31_get_system_color_packed` (`wave4a_extenders.json`),
+        // see docs/spec-notes/ext-jg8.md §2]; GetSystemColorAlt writes the three
+        // variables for types 1..=5 and leaves them unchanged for other ids [observed:
+        // Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 + JohnnyGuitarNVSE 528, 2026-11-24,
+        // `w6_t1_08_jg_system_color_alt` (`tools/capture/nvse/catalogs/wave6_t1_jg_colors.json`,
+        // `ext-jg8.md` §2)].
         "getsystemcolor" => XVal::Num(system_colour(g, num(args, 0, 0.0) as i64).map_or(0.0, |c| f64::from((u32::from(c[0]) << 16) | (u32::from(c[1]) << 8) | u32::from(c[2])))),
         "getsystemcoloralt" => {
-            let c = system_colour(g, num(args, 0, 0.0) as i64).unwrap_or([0; 3]);
-            return Some(Ok(outputs(g, 0.0, &[f64::from(c[0]), f64::from(c[1]), f64::from(c[2])])));
+            return Some(Ok(match system_colour(g, num(args, 0, 0.0) as i64) {
+                Some(c) => outputs(g, 0.0, &[f64::from(c[0]), f64::from(c[1]), f64::from(c[2])]),
+                None => outputs(g, 0.0, &[]),
+            }));
         }
         // 0 closed, 1 wait, 2 sleep [documented: GetSleepWaitMenuState].
         "getsleepwaitmenustate" => XVal::Num(if !g.menu_open(crate::game::menus::SLEEP_WAIT) {

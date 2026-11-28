@@ -28,6 +28,7 @@ mod collide_cmd;
 mod crash_report;
 mod combat_cmd;
 mod combat_sim;
+mod coop_cmd;
 mod dds_cmd;
 mod mo2_args;
 mod mod_log_digest;
@@ -130,6 +131,9 @@ enum Cmd {
     /// Quests: static checks over the data for soft locks (issue #2365).
     #[command(subcommand)]
     Quest(quest_sweep::QuestCmd),
+    /// Co-op data: the unique quest rewards of a load order (shared progression).
+    #[command(subcommand)]
+    Coop(coop_cmd::CoopCmd),
     /// Actor appearance: the parts that make up placed NPCs (workstream 5).
     #[command(subcommand)]
     Actor(ActorCmd),
@@ -1252,6 +1256,7 @@ fn main() -> ExitCode {
         Cmd::Script(c) => script_cmd::run(c),
         Cmd::Dialogue(c) => dialogue_cmd::run(c),
         Cmd::Quest(c) => quest_sweep::run(c),
+        Cmd::Coop(c) => coop_cmd::run(c),
         Cmd::Actor(c) => actor_cmd::run(c),
         Cmd::Combat(c) => combat_cmd::run(c),
         Cmd::Nav(c) => nav_cmd::run(c),

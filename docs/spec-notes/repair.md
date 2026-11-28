@@ -1,5 +1,44 @@
 # Spec note: repair
 
+## Android touch presentation (source increment)
+
+[design] Android uses a compact maintenance sheet for player donor repair and
+vendor repair. It is an alternate mobile presentation of the existing sessions,
+not a claim that touch operates the original menu-file widgets. The same sheet
+works when the existing native-file presentation is selected and when its
+hand-built fallback is selected. Existing keyboard, mouse and controller routes
+and the repair formulas in this note remain authoritative.
+
+[design] `touch-maintenance-v1` is a saved Menus switch, on by default on Android
+and off on desktop. Turning it off restores the ordinary maintenance presentation;
+changing it cancels pending sheet actions and retains owned contacts until neutral.
+Invalid presentation metadata is refused before drawing: logical dimensions and
+48-pixel targets must remain finite after UI-scale conversion. Supported normal
+scales are unchanged; fresh valid metadata can rebuild the sheet.
+
+[design] A touch selects a row without consuming anything. A separate confirmation
+shows the selected target, donor and resulting condition, or the vendor's quoted
+condition/caps/skill requirements. Cancel changes neither equipment nor caps.
+Scrolling changes the visible list without choosing a different donor or item.
+Confirmation carries the painted item/unit/quote identity and is checked again
+inside the existing action consumer before any inventory mutation. A changed
+selection, missing item, changed quote, modal, source or input owner rejects that
+old confirmation. Repeated delivery must not consume a second donor or charge
+twice.
+
+[design] The parent Android input coordinator supplies the current full-window UI
+camera, logical viewport and safe insets and remains the sole raw touch reader.
+The sheet never writes hardware button state. Real hardware intent hides/cancels
+the touch sheet; returning touch restores it with an action-free contact. An
+already-consumed controller return restores it without costing an additional tap.
+The touch surface owns its entire panel and closing drain, so its contacts cannot
+also act on the underlying native, hand-built or dialogue surface.
+
+[design] This source increment requires actual App controls for donor consumption,
+vendor charging, refusal, cancellation, late refresh and hardware handoff in both
+presentation configurations. Authored or merely compiled controls do not establish
+runtime or Android device coverage.
+
 Tags as in `nif.md`: `[documented]` cites a page or file, `[observed]` says what was
 looked at, `[hypothesis]` is a reading that nothing has confirmed yet. `[design]` marks
 what is NVForever's own, `[owner]` a rule the owner set.
@@ -97,8 +136,13 @@ screen's height):
 
 **What the screenshots add** [observed]:
 
-- The words: "Repair Services", "Repair Skill  100", "Caps  18", "Repair All (285)  A)",
-  "Done  E)", "CND", "DAM", "+66 %" (the percent sign small), "+3", "Cost: 98 caps".
+- The words: the title; the skill and the caps, each with its figure two spaces after
+  it; Repair All with its total in brackets and its key hint; Done with its hint; the
+  condition and damage cards; the gains ("+66 %", the percent sign small; "+3"); the
+  cost with its figure. NVForever's hand-built page writes the settings the menu files
+  name for the title, skill, caps and buttons (`sRepairServicesTitle`, `sRepairSkill`,
+  `sInventoryCaps`, `sRepairAllItems`, `sDone`), and its own "Cost: N caps" [design,
+  #4495: in place of the words read from the screen].
 - The rows the player can have repaired come first and bright (Minigun, Sturdy Caravan
   Shotgun, Weathered 10mm Pistol, Mercenary's Grenade Rifle at 11, 11, ?, 1 caps), the
   others after them, dim at about two thirds (Straight Razor 32, Varmint Rifle 98, 9mm
@@ -312,7 +356,8 @@ epairmenuPlayer, Repair 17]:
 - A physical repair or mod-menu key is consumed for the rest of its frame, including
   when it closes the list. ITEMS keeps its open-list guards and also checks `KeysTaken`,
   cleared once per frame in Bevy's `First` schedule; the closing Enter/Space (controller
-  A maps to Enter) cannot also toggle equipment. Mouse messages do not mark keys, and
+  A maps to Enter) cannot also toggle equipment. Mouse messages and guarded Android
+  maintenance requests do not mark physical keys, and
   a fresh press on the following frame reaches ITEMS normally [design, #2553:
   `engine/nvf-play/src/pipboy.rs`, `pipboy/repair.rs`, `pipboy/item_mod.rs`,
   `pipboy/items.rs`, `engine/nvf-play/src/pad.rs`]. The tile repair page retains these
@@ -419,3 +464,50 @@ it; a long list, the brackets moving with the scroll; the choose text's period (
 **The seam with the ITEMS page**: the page's adapter (`tiles/inventory_menu.rs`, on its own branch)
 leaves ITEMS hand-built while a repair list is open, so that its body draws the list. With both
 switches on, this page takes that place; the two have to be checked together when both land.
+
+### Android presentation with Main's repair preferences
+
+[design] The optional maintenance sheet reads the same repair Session and Part
+records as the ordinary menu. Preview sessions display a disabled preview-only
+confirmation, and kit rows display the shared Session::after gain and kit action.
+A changed preview mode retires the old scroll/confirmation source. The existing
+consumer still owns eligibility, exact unit consumption and inventory refresh.
+Main's workbench/mod-skill requirements remain Open-only predicates for both
+physical and touch confirmation; this merge adds no stricter touch-only policy.
+Any future change to that policy must use a shared all-input effect boundary.
+[qualification] New actual-consumer controls cover preview reopen/stale
+confirmation, one-kit consumption and matching physical/touch Open-only behavior.
+They are source-authored and remain uncompiled/unrun until separately qualified.
+
+
+### Ordinary vendor-menu finger input and typography
+
+[design] With the saved touch maintenance preference On (the Android default),
+vendor repair now uses the ordinary native-file or hand-built menu, with finger
+End taps and vertical list dragging. Dragging changes only that list's browse
+position; it does not select, repair or pay. A tap on another row selects it; a
+tap on the selected row requests the same repair as the existing pointer. The
+original consumer remains responsible for condition, skill, caps, exact unit and
+quote checks, caps transfer, and the Repair All confirmation tweak. Done follows
+the same original close path. The alternate vendor sheet is not prepared by the
+new ordinary-menu route. Off retains ordinary physical controls.
+
+[design] When the optional Repair All confirmation is required, idle frames keep
+the pending question. A deliberate selection, single repair or close retains its
+existing cancellation behavior; another Repair All confirms through the original
+cost and inventory consumer. This applies to physical and touch input alike.
+
+Repair menu size changes font metrics/wrapping and measured rows in the existing
+clipped viewport, with a 51-unit minimum hand-built row and larger explicit XML
+row heights preserved. Paint, current native hit data and End admission use the
+same size. Changed effective settings retire pending finger input; equivalent
+values preserve it. Late script, creator, loading, device, geometry or source
+changes refuse a proposal before the original effect.
+
+This scope is vendor RepairServices. Pip-Boy item donor repair and weapon-mod
+selection retain their existing touch presentation and saved On/Off behavior;
+normal-menu conversion of those paths is separate work. At source `62e54d8`,
+R40 executed the thirteen ordinary service controls: nine passed and four failed.
+The failures cover confirmation, target publication and physical row geometry;
+they are retained as the correction baseline. The correction's owning input and
+geometry checks do not establish a phone outcome.

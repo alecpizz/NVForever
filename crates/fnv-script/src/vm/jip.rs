@@ -105,10 +105,13 @@ pub const JIP_NAMES: [&str; 1] = ["JIP NVSE Plugin"];
 /// missing" messages although NVForever runs the functions TTW calls from them
 /// (`TTW_GetPlugins` and the other `TTW_*`, StewieGetValue; `fnv_game::nvse_small`)
 /// [design, owner 2026-11-08: "technically the dll is present, just in engine"]:
-/// Stewie's Tweaks started at 941 (TTW 3.4's minimum) and was promoted to 945 once the
+/// Stewie's Tweaks started at 941 (TTW 3.4's minimum), was promoted to 945 once the
 /// 9.42–9.45 changelog features and Casino Rewards Fix 1.1 consumers were verified
-/// (#3179, ext-version.md §5.1); ttw_nvse stays at 1, as TTW only asks whether it is
-/// there. Higher gates (960, 970) remain unpromoted until their own steps are verified.
+/// (#3179), and was promoted to 960 once the 9.50–9.60 changelog features, live
+/// `StewVal`/`StewieGetValue` settings, live `GetPipBoyMode`, and menu search-bar tile
+/// publication were verified (#3183, ext-version.md §5.1); ttw_nvse stays at 1, as TTW
+/// only asks whether it is there. The higher gate (970, #3184) remains unpromoted until
+/// its own step is verified.
 ///
 /// The same holds for every other plugin whose functions the engine builds: a mod that
 /// asks `IsPluginInstalled "SUP NVSE Plugin"` before calling SUP's functions got 0 and
@@ -137,14 +140,14 @@ pub const JIP_NAMES: [&str; 1] = ["JIP NVSE Plugin"];
 /// functions are built, its menus are not, and a mod that finds it goes on to read its
 /// tiles), and the plugins whose registered name no page gives (ITR, One111, ppNVSE,
 /// vheyes-nvse and the smaller ones): ext-version.md §6.
-pub const PLUGINS: [(&str, f64); 16] = [
+pub const PLUGINS: [(&str, f64); 18] = [
     ("JIP NVSE Plugin", JIP_VERSION),
     ("JIP LN NVSE", JIP_VERSION),
     ("ShowOffNVSE Plugin", 184.0),
     ("kNVSE", 37.0),
     ("JohnnyGuitarNVSE", 528.0),
     ("MCM Extensions", 1.0),
-    ("lStewieAl's Tweaks", 945.0),
+    ("lStewieAl's Tweaks", 960.0),
     ("ttw_nvse", 1.0),
     ("CUI", 120.0),
     ("hNVSE", 120.0),
@@ -154,6 +157,13 @@ pub const PLUGINS: [(&str, f64); 16] = [
     ("Extensions for NVSE", UNOBSERVED_VERSION),
     ("UI Organizer Plugin", UNOBSERVED_VERSION),
     ("Improved Console", 3.0),
+    // No script functions of their own; their work (engine speed-ups, a sharper local map)
+    // is the engine's own here, as UIO's lists are (ext-version.md §4). Nuclear Sunset's
+    // start-up Script Runner check shows "Outdated xNVSE plugins detected!" without them
+    // [observed in FadedLight's Nuclear Sunset fork: an installed copy's nvse.log,
+    // "Engine Optimizations; version 100", "HighResLocalMaps; version 12" (#4491)].
+    ("Engine Optimizations", 100.0),
+    ("HighResLocalMaps", 12.0),
 ];
 
 /// The version reported for a plugin the engine builds whose own number is neither
@@ -587,7 +597,8 @@ impl Vm<'_, '_> {
     }
 
     /// The regular-expression functions (jip-strings.md §1). The dialect is ECMAScript's
-    /// [hypothesis from ValidateRegex's error kinds]; `fancy-regex` has its groups,
+    /// [observed: `w4c_b1_24_jip_regex` (`wave4c_extenders.json`), see
+    /// docs/spec-notes/jip-strings.md §1]; `fancy-regex` has its groups,
     /// classes and back-references. An invalid pattern is a run-time error [decision: the
     /// original crashes, documented].
     pub(super) fn regex_function(&mut self, n: &str, c: &XCall) -> Result<XVal, VmError> {
@@ -740,8 +751,9 @@ impl Vm<'_, '_> {
     pub(super) fn strmap_function(&mut self, n: &str, c: &XCall) -> Result<Option<XVal>, VmError> {
         let Some(op) = n.strip_prefix("auxstringmaparray") else { return Ok(None) };
         // `0|1`: every temporary (1) or saved (0) map, by name, each as a string map;
-        // no array when there is none [observed: sm.getall.0 none with no saved map,
-        // sm.getall.1 one with one temporary map; hypothesis: the flag picks the store].
+        // no array when there is none [observed: sm.getall.0, sm.getall.1, and
+        // `so_09_auxstrmap_getall_0_vs_1` (`wave4a_extenders.json`), see
+        // docs/spec-notes/ext-unlisted-rest.md §3].
         if op == "getall" {
             let temp = match self.jarg(c, 0)? {
                 Some(v) => v.num()? != 0.0,

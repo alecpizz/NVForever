@@ -25,6 +25,21 @@ impl Text {
         if self.truncated { text.push_str("<truncated>"); }
         text
     }
+
+    /// Single-line label for human-readable error units: escapes control characters
+    /// while keeping path separators unescaped.
+    pub(crate) fn single_line(&self) -> String {
+        let mut text = String::with_capacity(self.value.len());
+        for c in self.value.chars() {
+            if c.is_control() {
+                text.extend(c.escape_debug());
+            } else {
+                text.push(c);
+            }
+        }
+        if self.truncated { text.push_str("<truncated>"); }
+        text
+    }
 }
 
 #[derive(Debug, Clone)]

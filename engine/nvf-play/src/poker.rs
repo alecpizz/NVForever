@@ -134,13 +134,16 @@ impl Casino {
 #[derive(Message, Clone, Copy, Debug)]
 pub struct OpenPoker {
     pub casino: Casino,
+    /// The poker table in the world it was opened at, if any.
+    pub table: Option<FormId>,
 }
 
 /// The table's picture, drawn by the engine while it is open; `anchors`: where each seat's
 /// label goes, as fractions of the view from its top left (the engine projects the seats).
+/// No picture: the table stands at a table in the world, seen by the game's own camera.
 #[derive(Resource, Clone, Debug)]
 pub struct PokerView {
-    pub image: Handle<Image>,
+    pub image: Option<Handle<Image>>,
     pub anchors: Vec<Vec2>,
 }
 
@@ -170,9 +173,14 @@ pub struct Session {
     next_hand: Option<f32>,
     /// Sounds to play (`sound`): when (aid seconds) and which record.
     pub cues: Vec<(f32, &'static str)>,
+    /// Hands won by a person at the table, to show as highlights then.
+    pub wins: Vec<(f32, String)>,
     /// Hands played and won by the player, for the summary.
     hands: u32,
     won: u32,
+    /// The poker table in the world this was opened at: the engine
+    /// draws the table there, the room around it.
+    pub table_ref: Option<FormId>,
 }
 
 impl Session {
@@ -344,7 +352,7 @@ fn run_aid(time: AidTime, mut aid: ResMut<PokerAid>, mut sim: ResMut<SimState>, 
         info!("test aid NVF_PLAY_TEST_POKER: {step:?}");
         match step {
             AidStep::Open(casino) => {
-                open.write(OpenPoker { casino });
+                open.write(OpenPoker { casino, table: None });
             }
             AidStep::Seed(s) => aid.seed = Some(s),
             AidStep::Caps(n) => {
@@ -416,9 +424,9 @@ fn open(
         }
         return;
     }
+    let buy_in = have.min(BUY_IN);
     let seed = aid.seed.unwrap_or_else(|| seed_now(now));
     let mut rng = ChaCha8Rng::seed_from_u64(seed ^ 0x5EA7);
-    let buy_in = have.min(BUY_IN);
     let mut seats = vec![Seat::new("You", buy_in, Style { tightness: 0.5, aggression: 0.5, bluff: 0.05 })];
     for i in 1..=OPPONENTS {
         let (lo, hi) = OPPONENT_STACK;
@@ -432,9 +440,16 @@ fn open(
         table.seats[1..].iter().map(|s| format!("{} {} (tight {:.2}, aggressive {:.2}, bluff {:.2})", s.name, s.stack, s.style.tightness, s.style.aggression, s.style.bluff)).collect::<Vec<_>>().join(", ")
     );
     stats.opened += 1;
-    screen.0 = Some(Session {
+    let mut s = new_session(table, asked.casino, buy_in, now);
+    s.table_ref = asked.table;
+    screen.0 = Some(s);
+    next.set(PlayState::Menu);
+}
+
+fn new_session(table: Table, casino: Casino, buy_in: u32, now: f32) -> Session {
+    Session {
         table,
-        casino: asked.casino,
+        casino,
         buy_in,
         status: None,
         raise_to: 2 * BIG_BLIND,
@@ -447,10 +462,11 @@ fn open(
         next_choice: None,
         next_hand: Some(now + 1.0),
         cues: Vec::new(),
+        wins: Vec::new(),
         hands: 0,
         won: 0,
-    });
-    next.set(PlayState::Menu);
+        table_ref: None,
+    }
 }
 
 fn keys(keys: crate::pad::ActionButtons<KeyCode>, scroll: Option<Res<AccumulatedMouseScroll>>, screen: Res<PokerScreen>, mut out: MessageWriter<PokerInput>) {
@@ -572,6 +588,10 @@ fn log_events(s: &mut Session, events: &[Event], now: f32) {
                 s.cues.push((now + 0.3, sound::COLLECT_CHIPS));
                 if *seat == PLAYER {
                     s.cues.push((now + 0.1, sound::WIN));
+                }
+                // The player's win is a highlight.
+                if *seat == PLAYER {
+                    s.wins.push((now + 0.3, fnv_util::words::tr("YOU WIN THE HAND").to_string()));
                 }
                 let who = if *seat == PLAYER { "You win".to_string() } else { format!("{} wins", name(*seat)) };
                 let line = format!("{who} {amount}{with}");
@@ -774,6 +794,8 @@ pub fn report_progress_fixture(step: usize) -> PokerScreen {
         cues: vec![],
         hands: 0,
         won: 0,
+        wins: vec![],
+        table_ref: None,
     }))
 }
 

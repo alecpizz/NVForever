@@ -35,9 +35,31 @@
 //!     `crate::frame_gen::GeneratedFrames` (the performance overlay's count); a line every ten
 //!     seconds with real and presented frames; a status other than `eOk` while on turns frame
 //!     generation off for the session, said once with the flags' names [documented: §14.3].
-//!     The frames presented, with whether the mode was on, also decide what frame pacing's cap
-//!     is divided by (`fg_cap.rs`, #2731): the frames DLSS-G presents while it generates, 1 in
-//!     menus and while it presents one per real frame; each change is one `frame cap:` line.
+//! - **Queue parallelism** (2026-11-23): the options ask for `eBlockNoClientQueues`, so DLSS-G no
+//!   longer holds the game's queue (wgpu's one queue, which presents) until its whole workload
+//!   is done; the next frame's GPU work can run while DLSS-G still generates on its own queues
+//!   [documented: Streamline v2.14.16 `sl_dlss_g.h:55-66` `DLSSGQueueParallelismMode`;
+//!   `ProgrammingGuideDLSS_G.md` (Version 2.14.16) §17.0, `:963-967`: "may offer extra
+//!   performance gains depending on the workload ... most apparent in GPU-limited
+//!   applications"; `docs/spec-notes/streamline.md`]. In
+//!   exchange the game must not touch DLSS-G's inputs (the depth, motion, HUD-less and UI buffer
+//!   it tagged) until DLSS-G has read them: [`state`] keeps `inputsProcessingCompletionFence` and
+//!   `lastPresentInputsProcessingCompletionFenceValue` after a present with the mode on, and
+//!   [`wait_for_inputs`] (exclusive, first in the next frame's `Render`, on the render thread,
+//!   before any of the frame's submits) stages a wait on it for the queue's next submit
+//!   (wgpu-hal's `Queue::add_wait_semaphore`, all commands), which every later submit follows
+//!   (wgpu-hal orders its submits with relay semaphores). The object is a timeline `VkSemaphore`
+//!   waited on the GPU, as NVIDIA's sample does it: `QueueGPUWaitOnSyncObjectSet` queues
+//!   `queueWaitForSemaphore(Graphics, reinterpret_cast<VkSemaphore>(syncObj), syncObjVal)` on
+//!   Vulkan, called at the start of `RenderScene` "before any of the inputs are modified in the
+//!   subsequent command list submission", when DLSS-G was on last frame [documented:
+//!   NVIDIA-RTX/Streamline_Sample tag v2.14.16 (94da85b65) `src/SLWrapper.cpp:250-279`,
+//!   `src/StreamlineSample.cpp:828-836`; the Streamline headers and guide do not name the
+//!   Vulkan type]. A wait no submit took (a frame
+//!   with nothing submitted) is taken back before the next one is staged, and when DLSS-G is
+//!   loaded or unloaded. `NVF_DLSSG_QUEUE=block` keeps the default mode, for comparisons.
+//!   GPU-bound at 4x it measured +6% real frames, latency the same [observed: RTX 5090, driver
+//!   621.24, design doc "Queue parallelism"].
 //! - **UI buffer** ([`ui_buffer`], stage 4 item 2; after the UI, before Bevy's upscaling blit,
 //!   where FSR's frame generation's `generate` sits): on a tagged frame the UI is drawn a second
 //!   time, alone, over transparent black (`fg_ui_layer.rs`, the main texture's format), which
@@ -141,17 +163,18 @@
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use ash::vk;
+use ash::vk::Handle;
 use bevy::camera::{CameraMainTextureUsages, NormalizedRenderTarget};
 use bevy::core_pipeline::prepass::{PreviousViewData, ViewPrepassTextures};
 use bevy::core_pipeline::{upscaling::upscaling, Core3d, Core3dSystems};
 use bevy::log::Level;
 use bevy::prelude::*;
 use bevy::render::camera::{ExtractedCamera, TemporalJitter};
-use bevy::render::renderer::{render_system, RenderAdapter, RenderContext, RenderGraph, RenderGraphSystems, ViewQuery};
+use bevy::render::renderer::{render_system, RenderAdapter, RenderContext, RenderGraph, RenderGraphSystems, RenderQueue, ViewQuery};
 use bevy::render::sync_world::MainEntity;
 use bevy::render::view::{create_surfaces, extract_windows, prepare_view_targets, ExtractedView, ExtractedWindow, HoldSurfaceReconfigure, SurfaceData, ViewTarget};
 use bevy::render::{Extract, ExtractSchedule, Render, RenderSystems};
@@ -161,7 +184,7 @@ use bevy::ui_render::{ui_pass, UiCameraView};
 use super::evaluate::{constants_for, describe, ConstantsInput, VIEWPORT};
 use super::ffi::{
     boolean_name, dlssg_status_name, ApiError, BaseStructure, DlssgOptions, DlssgState, Extent, ResourceTag, SlDlssgGetState, SlDlssgSetOptions, SubresourceRange, ViewportHandle,
-    BOOL_TRUE, BUFFER_DEPTH, BUFFER_HUDLESS_COLOR, BUFFER_MOTION_VECTORS, BUFFER_UI_ALPHA, BUFFER_UI_COLOR_AND_ALPHA, DLSSG_FLAG_RETAIN_RESOURCES_WHEN_OFF, DLSSG_MODE_OFF, DLSSG_MODE_ON, LIFECYCLE_VALID_UNTIL_PRESENT,
+    BOOL_TRUE, BUFFER_DEPTH, BUFFER_HUDLESS_COLOR, DLSSG_QUEUE_BLOCK_NO_CLIENT_QUEUES, DLSSG_QUEUE_BLOCK_PRESENTING_CLIENT_QUEUE, BUFFER_MOTION_VECTORS, BUFFER_UI_ALPHA, BUFFER_UI_COLOR_AND_ALPHA, DLSSG_FLAG_RETAIN_RESOURCES_WHEN_OFF, DLSSG_MODE_OFF, DLSSG_MODE_ON, LIFECYCLE_VALID_UNTIL_PRESENT,
 };
 use super::{frame_token, note_fg};
 use crate::upscaler::prep::{PreparedUpscale, UpscaleCamera};
@@ -176,6 +199,16 @@ const RATIO_EVERY: Duration = Duration::from_secs(10);
 const KEEP_FRAMES: usize = 4;
 /// The most frames a window change is held for DLSS-G to be presented off first.
 const MAX_HOLD: u32 = 3;
+
+/// The queue parallelism the options ask for (the module comment's "Queue parallelism"):
+/// `eBlockNoClientQueues`, or the default with `NVF_DLSSG_QUEUE=block` (for comparisons).
+static QUEUE_MODE: LazyLock<u32> = LazyLock::new(|| {
+    if std::env::var("NVF_DLSSG_QUEUE").is_ok_and(|v| v.trim().eq_ignore_ascii_case("block")) { DLSSG_QUEUE_BLOCK_PRESENTING_CLIENT_QUEUE } else { DLSSG_QUEUE_BLOCK_NO_CLIENT_QUEUES }
+});
+
+fn queue_mode_name(mode: u32) -> &'static str {
+    if mode == DLSSG_QUEUE_BLOCK_NO_CLIENT_QUEUES { "eBlockNoClientQueues" } else { "eBlockPresentingClientQueue" }
+}
 
 /// The options as last set, to set them again only on a change.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -294,8 +327,24 @@ struct FrameGen {
     /// The swapchain was just made again by the live toggle: the mode stays off one frame more
     /// ([`window_changes`]).
     just_switched: bool,
-    /// What frame pacing's cap is divided by, from the frames presented ([`state`], `fg_cap.rs`).
-    cap: super::fg_cap::CapDivisor,
+    /// `eBlockNoClientQueues`: DLSS-G's inputs fence (a timeline `VkSemaphore`) and the value it
+    /// reaches once the last present's inputs are read, from [`state`] after a present with the
+    /// mode on; for [`wait_for_inputs`].
+    inputs_fence: Option<(u64, u64)>,
+    /// The wait [`wait_for_inputs`] staged on the queue (the queue, the semaphore), taken back if
+    /// no submit took it before the next is staged or DLSS-G is loaded or unloaded.
+    staged_wait: Option<(wgpu::Queue, u64)>,
+    /// The first staged wait was said.
+    wait_said: bool,
+}
+
+/// Takes a staged wait back from the queue's next submit, if no submit took it yet.
+fn unstage(queue: &wgpu::Queue, semaphore: u64) {
+    // SAFETY: only reads wgpu-hal's queue to drop an entry from its pending wait list; no
+    // Vulkan call is made.
+    if let Some(hal) = unsafe { queue.as_hal::<wgpu::hal::api::Vulkan>() } {
+        hal.remove_wait_semaphore(vk::Semaphore::from_raw(semaphore));
+    }
 }
 
 /// The UI alpha's full-screen pass (`NVF_FG_UI_LAYER=0`) and its textures (two used in turn,
@@ -473,13 +522,15 @@ impl FrameGen {
         if !result.is_ok() {
             return;
         }
+        // DLSS-G's inputs fence belongs to the DLSS-G that was loaded: no wait on it any more.
+        self.inputs_fence = None;
+        if let Some((queue, semaphore)) = self.staged_wait.take() {
+            unstage(&queue, semaphore);
+        }
         self.loaded = load;
         shared.store(load, Ordering::Relaxed);
         self.applied = None;
         self.presented_off = true;
-        // Loaded or unloaded: the cap's divisor starts again at the full limit (`fg_cap.rs`).
-        self.cap = super::fg_cap::CapDivisor::default();
-        super::FG_DIVISOR.store(1, Ordering::Relaxed);
     }
 
     fn new(get_state: SlDlssgGetState, set_options: SlDlssgSetOptions, loaded: bool) -> Self {
@@ -516,7 +567,9 @@ impl FrameGen {
             hudless_pass: None,
             ui_said: false,
             just_switched: false,
-            cap: super::fg_cap::CapDivisor::default(),
+            inputs_fence: None,
+            staged_wait: None,
+            wait_said: false,
         }
     }
 }
@@ -560,7 +613,6 @@ fn on() -> bool {
 /// `slGetFeatureFunction` under `kFeatureDLSS_G`.
 pub(super) fn install(get_state: SlDlssgGetState, set_options: SlDlssgSetOptions, loaded: bool) {
     *frame_gen() = Some(FrameGen::new(get_state, set_options, loaded));
-    super::FG_DIVISOR.store(1, Ordering::Relaxed);
     ON.store(true, Ordering::Relaxed);
     ACTIVE.store(true, Ordering::Relaxed);
 }
@@ -613,7 +665,8 @@ pub(super) fn add_systems(render_app: &mut SubApp) {
         .add_systems(Core3d, tag.after(Core3dSystems::PostProcess).before(ui_pass).run_if(on))
         .add_systems(Core3d, ui_buffer.after(ui_pass).before(upscaling).run_if(on))
         .add_systems(RenderGraph, options.after(RenderGraphSystems::Finish).run_if(active))
-        .add_systems(Render, state.in_set(RenderSystems::Render).after(render_system).run_if(active));
+        .add_systems(Render, state.in_set(RenderSystems::Render).after(render_system).run_if(active))
+        .add_systems(Render, wait_for_inputs.in_set(RenderSystems::ExtractCommands).run_if(active));
 }
 
 /// `DLSSGOptions::onErrorCallback`: stores the call's `VkResult` and returns at once (the module
@@ -642,6 +695,8 @@ fn off_options() -> DlssgOptions {
     options.mode = DLSSG_MODE_OFF;
     options.flags = DLSSG_FLAG_RETAIN_RESOURCES_WHEN_OFF;
     options.on_error_callback = Some(on_api_error);
+    // "must be same for all viewports" (one here), and the same in every call.
+    options.queue_parallelism_mode = *QUEUE_MODE;
     options
 }
 
@@ -962,6 +1017,11 @@ fn state(world: &mut World) {
     if state.num_frames_actually_presented > 0 || off_now {
         fg.presented_off = off_now;
     }
+    // The fence for the next frame's first submit: after a present with the mode on, as NVIDIA's
+    // sample waits only when DLSS-G was on last frame (a value of 0 waits on nothing).
+    let fence = state.inputs_processing_completion_fence;
+    let value = state.last_present_inputs_processing_completion_fence_value;
+    fg.inputs_fence = (*QUEUE_MODE == DLSSG_QUEUE_BLOCK_NO_CLIENT_QUEUES && !off_now && state.num_frames_actually_presented > 0 && !fence.is_null() && value > 0).then_some((fence as u64, value));
     let now = Instant::now();
     // A frame nothing was presented for (the window minimised) is not counted as a real frame.
     if state.num_frames_actually_presented > 0 {
@@ -970,13 +1030,6 @@ fn state(world: &mut World) {
         period.presented += u64::from(state.num_frames_actually_presented);
     }
     let is_on = fg.applied.is_some_and(|a| a.on);
-    // What frame pacing's cap is divided by now (`fg_cap.rs`): the frames this present showed,
-    // whether the mode was on for it, the frames asked for.
-    let asked = fg.applied.map_or(1, |a| a.frames + 1);
-    if let Some(change) = fg.cap.after(super::fg_cap::Present { mode_on: is_on, presented: state.num_frames_actually_presented, asked }) {
-        super::FG_DIVISOR.store(change.to, Ordering::Relaxed);
-        note_fg(Level::INFO, change.line());
-    }
     {
         if let Some(generated) = &generated {
             generated.0.fetch_add(u64::from(state.num_frames_actually_presented.saturating_sub(1)), Ordering::Relaxed);
@@ -1000,6 +1053,36 @@ fn state(world: &mut World) {
             *period = Period::new(now);
             note_fg(Level::INFO, line);
         }
+    }
+}
+
+/// `eBlockNoClientQueues`: the GPU wait on DLSS-G's inputs fence for this frame's submits (the
+/// module comment's "Queue parallelism"). Exclusive and first in `Render`, so on the render
+/// thread (which presents) and before any of the frame's submits; after the extraction, so a
+/// live toggle has already dropped the fence ([`FrameGen::complete_load`]).
+fn wait_for_inputs(world: &mut World) {
+    let mut guard = frame_gen();
+    let Some(fg) = guard.as_mut() else { return };
+    // A wait no submit took (nothing submitted last frame): the newer value covers it.
+    if let Some((queue, semaphore)) = fg.staged_wait.take() {
+        unstage(&queue, semaphore);
+    }
+    let Some((semaphore, value)) = fg.inputs_fence.take() else { return };
+    if !fg.loaded {
+        return;
+    }
+    let queue: wgpu::Queue = (**world.resource::<RenderQueue>()).clone();
+    // SAFETY: only adds an entry to wgpu-hal's pending wait list for the queue's next submit; the
+    // semaphore is DLSS-G's, alive while DLSS-G is loaded (a load or unload takes the entry back).
+    let Some(hal) = (unsafe { queue.as_hal::<wgpu::hal::api::Vulkan>() }) else { return };
+    hal.add_wait_semaphore(vk::Semaphore::from_raw(semaphore), Some(value), vk::PipelineStageFlags::ALL_COMMANDS);
+    drop(hal);
+    fg.staged_wait = Some((queue, semaphore));
+    if !std::mem::replace(&mut fg.wait_said, true) {
+        note_fg(
+            Level::INFO,
+            format!("queue parallelism {}: each frame's first submit waits on DLSS-G's inputs fence (first value {value})", queue_mode_name(*QUEUE_MODE)),
+        );
     }
 }
 
@@ -1578,6 +1661,11 @@ mod tests {
         assert_eq!((options.mode, options.flags), (0, 8), "eOff, eRetainResourcesWhenOff (sl_dlss_g.h:36, 48)");
         assert!(options.on_error_callback.is_some());
         assert_eq!((options.num_frames_to_generate, options.base.struct_version), (1, 5));
+        assert_eq!(options.queue_parallelism_mode, *QUEUE_MODE);
+        if std::env::var_os("NVF_DLSSG_QUEUE").is_none() {
+            assert_eq!(*QUEUE_MODE, 1, "eBlockNoClientQueues by default (sl_dlss_g.h, second enumerator)");
+        }
+        assert_eq!(queue_mode_name(1), "eBlockNoClientQueues");
     }
 
     #[test]
@@ -1586,7 +1674,8 @@ mod tests {
         let o = options_for(applied);
         assert_eq!((o.mode, o.flags, o.num_frames_to_generate, o.num_back_buffers), (1, 8, 3, 3));
         assert_eq!((o.mvec_depth_width, o.mvec_depth_height, o.color_width, o.color_height), (853, 480, 1280, 720));
-        assert_eq!((o.dynamic_res_width, o.queue_parallelism_mode), (0, 0), "no dynamic resolution, the default queue mode");
+        assert_eq!(o.dynamic_res_width, 0, "no dynamic resolution");
+        assert_eq!(o.queue_parallelism_mode, *QUEUE_MODE, "the same queue mode in every call");
         assert_eq!(o.enable_user_interface_recomposition, BOOL_TRUE, "the HUD-less and the UI buffer tagged (§6.6)");
         let off = options_for(Applied { on: false, ..applied });
         assert_eq!((off.mode, off.flags), (0, 8));

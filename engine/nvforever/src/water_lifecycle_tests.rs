@@ -131,6 +131,7 @@ fn setup() -> (App, Entity, EmptyData) {
         centre: None,
         waiting: Vec::new(),
         model_overrides: HashMap::new(),
+        coop_areas: Vec::new(),
         travels: 0,
     };
     static NEXT: AtomicUsize = AtomicUsize::new(0);

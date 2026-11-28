@@ -493,7 +493,9 @@ pub(crate) fn sync_game(
                     main_fog.clone(),
                     // Render world and water only; exclude `ARMS_LAYER` and `DECAL_LAYER`
                     // (avoiding a per-PiP-camera `DepthPrepass` requirement for ForwardDecal) [design].
-                    RenderLayers::from_layers(&[0, crate::reflection::WATER_LAYER]),
+                    // The weather's flat clouds too while the volumetric clouds take their place in
+                    // the main view, as the mirror and the scope's lens (the layer is empty otherwise).
+                    RenderLayers::from_layers(&[0, crate::reflection::WATER_LAYER, crate::volumetric_clouds::FLAT_CLOUD_LAYER]),
                     cam_tf,
                     cam_global,
                 ))
@@ -679,6 +681,41 @@ mod tests {
         (app, anchor, lens, orig_mat)
     }
 
+    /// Two shapes of a reference drawn flat below its cell, the first with a solid core
+    /// (solid_cores.rs, a loose entity): switching the light in the air leaves the shapes'
+    /// components and children, the reference's root and the node lookups as they were.
+    #[test]
+    fn a_solid_core_of_one_flat_shape_does_not_change_the_root() {
+        use crate::solid_cores::tests as cores;
+        let mut app = cores::app(Some(true));
+        let cored = cores::add(&mut app, cores::tank());
+        let plain = cores::add(&mut app, nvf_assets::nif_material::nif_material(StandardMaterial::default()));
+        let cell = app.world_mut().spawn((Transform::IDENTITY, Visibility::Inherited)).id();
+        let shapes = [(&cored, "Tank"), (&plain, "Lens")].map(|(m, name)| {
+            let e = cores::place(&mut app, m);
+            app.world_mut().entity_mut(e).insert((RefVisual(STAT_REF), Name::new(name), ChildOf(cell)));
+            e
+        });
+        let mut resolve = |on: bool| {
+            app.insert_resource(crate::medium_air_demand::AirDraws(on));
+            app.update();
+            assert_eq!(cores::cores(&mut app).len(), usize::from(on));
+            let w = app.world_mut();
+            let kept = shapes.map(|e| (w.entity(e).archetype().id(), w.get::<Children>(e).map(|c| c.to_vec())));
+            let found = w
+                .run_system_once(|rigs: Rigs, visuals: Visuals, nodes: NodesRead| {
+                    [None, Some("Tank"), Some("Lens")].map(|n| resolve_node(STAT_REF, n, &rigs, &visuals, &nodes))
+                })
+                .unwrap();
+            (kept, found)
+        };
+        let off = resolve(false);
+        assert_eq!(off.1[0], Some(shapes[0]));
+        for on in [true, false, true] {
+            assert!(resolve(on) == off, "light {on}");
+        }
+    }
+
     fn run_sync(app: &mut App, game: &Game<'_>) {
         let game_ptr = game as *const Game<'_> as usize;
         app.world_mut()
@@ -810,6 +847,10 @@ mod tests {
         let cam_e = cam_q.single(app.world()).expect("spawned camera");
         assert!(app.world().get::<Camera>(cam_e).unwrap().is_active);
         assert_ne!(app.world().get::<MeshMaterial3d<NifMaterial>>(lens).unwrap().0.id(), orig_mat.id());
+        // The weather's flat clouds while the volume draws in the main view; the volume itself never.
+        let layers = app.world().get::<RenderLayers>(cam_e).unwrap();
+        assert!(layers.intersects(&RenderLayers::layer(crate::volumetric_clouds::FLAT_CLOUD_LAYER)));
+        assert!(!layers.intersects(&RenderLayers::layer(crate::volumetric_clouds::VOLUME_LAYER)));
 
         // Zero-scale anchor must deactivate camera and restore original material without panicking.
         *app.world_mut().get_mut::<GlobalTransform>(anchor).unwrap() = GlobalTransform::from(Transform::from_scale(Vec3::ZERO));
