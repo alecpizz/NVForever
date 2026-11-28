@@ -15115,7 +15115,7 @@ run_seconds = 19
 expect = [
   { re = 'quality presets: Medium is not offered: medium\.ini not found in .*quality-presets-part', count = 1, label = "Medium's file is missing, said once" },
   { re = 'quality presets: Very High is not offered: VeryHigh\.ini not found in .*quality-presets-part', count = 1, label = "Very High's too" },
-  { re = 'quality presets: Low, High from .*quality-presets-part; ', count = 1, label = "the two found are offered" },
+  { re = 'quality presets: Low, High, Steam Deck from .*quality-presets-part; ', count = 1, label = "the two found are offered, and Steam Deck with High (#3909)" },
   { text = "settings: quality has no such choice", count = 1, label = "Medium cannot be taken" },
 ]
 order = [["settings: quality Low", "quality presets: the Quality row reads Low", "settings: quality High", "quality presets: the Quality row reads High"]]
