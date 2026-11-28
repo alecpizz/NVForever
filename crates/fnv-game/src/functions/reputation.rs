@@ -232,15 +232,14 @@ pub fn level(value: f64, scale: f64) -> usize {
 
 /// The tier on each axis (mixed, good, bad) for fame level `f` and infamy level `i`
 /// [observed: the 4 × 4 grid of layer5-captures.md §9.3 a, the same on five
-/// reputations with scales 10–70; the names per value are documented on the GECK wiki's
-/// GetReputationThreshold page]:
+/// reputations with scales 10–70]:
 ///
 /// | fame \ infamy | 0 | 1 | 2 | 3 |
 /// |---|---|---|---|---|
-/// | 0 | 1,1,1 Neutral | 0,0,4 Shunned | 0,0,5 Hated | 0,0,6 Vilified |
-/// | 1 | 0,4,0 Accepted | 3,0,0 Mixed | 0,0,2 Sneering Punk | 0,0,3 Merciful Thug |
-/// | 2 | 0,5,0 Liked | 0,2,0 Smiling Troublemaker | 4,0,0 Unpredictable | 2,0,0 Dark Hero / Soft-Hearted Devil |
-/// | 3 | 0,6,0 Idolized | 0,3,0 Good-Natured Rascal | 2,0,0 Dark Hero / Soft-Hearted Devil | 5,0,0 Wild Child |
+/// | 0 | 1,1,1 | 0,0,4 | 0,0,5 | 0,0,6 |
+/// | 1 | 0,4,0 | 3,0,0 | 0,0,2 | 0,0,3 |
+/// | 2 | 0,5,0 | 0,2,0 | 4,0,0 | 2,0,0 |
+/// | 3 | 0,6,0 | 0,3,0 | 2,0,0 | 5,0,0 |
 pub fn tiers(f: usize, i: usize) -> [i32; 3] {
     const GRID: [[[i32; 3]; 4]; 4] = [
         [[1, 1, 1], [0, 0, 4], [0, 0, 5], [0, 0, 6]],

@@ -71,6 +71,10 @@ box.
   "VAL" right of the stem and the value right-aligned at the right end, 50.5 units under
   the divider picture's top. A bottle cap shows "--" for its weight and "1" for its
   value. A container (4) and an actor (2) have no third row.
+  NVForever writes its own words in place of the abbreviations read here: the item stats
+  display's settings `sInventoryWeightUpper` and `sInventoryValue`, the load order's text
+  or else NVForever's labels ("WEIGHT", "Value"), as the Pip-Boy's cards do; a figure too
+  long for its room moves right of its word [design, #4495].
 
 The constants of `reticle.rs` are these measurements, corrected once against
 NVForever's own frame at 1280 x 720 so that the letters land on the screenshots'
@@ -98,8 +102,9 @@ pixels (the font's glyphs start a little after their pen position).
   [hypothesis].
 - **A stack** shows the count after the name, "Stimpak (3)", and the figures of one
   item [hypothesis].
-- **The key's text** is "E)" for the Activate control's default key [hypothesis: where
-  the game gets the letter is not in the files].
+- **The key's text** is "[E]" for the Activate control's default key [design, #4495: the
+  original's "E)" was read from its screen; where the game gets the letter is not in the
+  files].
 - **Not built**: the sneak meter's
   "[HIDDEN]" and similar words, the extra lines the original adds for some targets
   (lock level, owned items in red, "Steal"), weapon damage and condition in the item

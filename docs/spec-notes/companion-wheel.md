@@ -1,5 +1,11 @@
 # Spec note: the companion wheel and the companion behaviour it sets
 
+**NVForever's words** [design, #2984]: the buttons read Aggressive/Passive, Far/Near,
+Ranged/Melee, Wait/Follow, Heal, Talk, Step Back and Inventory
+(`fnv_game::companion_wheel::Command::label`); the lines under the wheel are "HP
+<now>/<full>" and "Stimpak <n>" for Heal and "Weight <carried>/<capacity>" for
+Inventory. Words of the original's screen quoted below only say what it shows.
+
 Tags as in `nif.md`: `[documented]` cites a page or file, `[observed]` says what was looked
 at, `[hypothesis]` is a reading nothing has confirmed yet, `[design]` is NVForever's own
 choice. Code: `crates/fnv-game/src/companion_wheel.rs` (rules), `engine/nvf-play/src/companion_wheel.rs`

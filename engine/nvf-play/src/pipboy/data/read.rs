@@ -53,7 +53,13 @@ pub fn note(lo: &LoadOrder, schema: &Schema, form: u32) -> Option<Note> {
     let quest = f.raw(b"ONAM").and_then(|s| s.data.get(..4)).and_then(|b| global(lo, f.plugin, u32::from_le_bytes([b[0], b[1], b[2], b[3]])));
     Some(Note {
         form,
-        name: text(&f, b"FULL").unwrap_or_else(|| format!("{}", FormId(form))),
+        // `FULL` display name; fall back to `EDID` when a `NOTE` record carries no `FULL`
+        // (for example terminal-only `NOTE` records referenced by `TERM`/`INAM`, matching
+        // `Game::note_notice_text` and radio stations), and to raw `FormId` only when both
+        // are absent or blank [design].
+        name: text(&f, b"FULL")
+            .or_else(|| text(&f, b"EDID"))
+            .unwrap_or_else(|| format!("{}", FormId(form))),
         kind,
         text: if kind == 1 { f.raw(b"TNAM").map(|s| game_text(&s.data)) } else { None },
         image: if kind == 2 { text(&f, b"XNAM") } else { None },
@@ -254,6 +260,9 @@ pub fn doors(lo: &LoadOrder, schema: &Schema, index: &WorldIndex, refs: &RefTabl
     }
     out
 }
+
+#[cfg(test)]
+mod note_display_name_tests;
 
 #[cfg(test)]
 mod tests {

@@ -47,6 +47,8 @@ documented retention mechanism shared by duplicate and fork-inherited descriptor
 it does not establish the cause of an earlier CI failure without an
 incident-specific process trace. The existing real child-process test retains all
 its ownership, process-ID, content and exact-path reuse assertions.
+A second duplicated-handle control closes the old duplicate while a replacement
+writer is live and checks that the replacement still owns the exact path.
 
 Earlier private trace-corruption evidence and the original overlapping-writer test
 are historical regression context, not original-game behavior observations or proof

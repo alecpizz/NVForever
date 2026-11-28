@@ -49,13 +49,19 @@ enum Trait {
     Colour(&'static str),
 }
 
-/// An effect shader trait 0-50 [documented: GetEffectShaderTraitNumeric's table, 0-46]:
-/// the EFSH DATA field. Traits 47, 48, and 50 read the next DATA fields: colour key 1,
-/// colour key 2, and colour key 1 alpha [observed: jg3 efsh.trait.nuke.47 read
-/// 1.43523e+07; Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 + JohnnyGuitarNVSE 528,
-/// clean-room script probe jg_03_efsh_trait_beyond_47: (47, 48, 50, -1) ->
-/// 1.43523e+07, 8.84712e+06, 1, 0; no DLL or source consulted]; trait 49 lies between
-/// them as colour key 3 [hypothesis]; past 50 is not known (0 here).
+/// An effect shader trait 0-60 [documented: GetEffectShaderTraitNumeric's table, 0-46]:
+/// the EFSH DATA field. Traits 47-52 read the next DATA fields: colour keys 1-3 and
+/// colour keys 1-3 alpha [observed: jg3 efsh.trait.nuke.47 read 1.43523e+07; Fallout:
+/// New Vegas 1.4.0.525 + xNVSE 6.4.9 + JohnnyGuitarNVSE 528, clean-room script probe
+/// jg_03_efsh_trait_beyond_47: (47, 48, 50, -1) -> 1.43523e+07, 8.84712e+06, 1, 0;
+/// observed: Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 + JohnnyGuitarNVSE 528,
+/// 2026-11-24, GSDocMitchellHouse (0x00103DF9), 10 official base masters,
+/// w4d_30_jg_efsh_47_to_52 (tools/capture/nvse/catalogs/wave4d_extenders.json):
+/// get(47=1.43523e+07,48=8.84712e+06,49=9.07549e+06,50=1,51=1,52=1)|set(49:1->1.12233e+06,51:1->0.5,52:1->0.25);
+/// no DLL or source consulted]. Traits 53-60 map to colour key 1-3 times, initial speed
+/// along normal range, initial rotation/range, and rotation speed/range (see
+/// docs/spec-notes/ext-jg3.md). Traits `< 0` and `> 60` return 0 [design: safe out-of-range
+/// guard; -1 also observed returning 0 on getter in jg3 and jg_03].
 fn efsh_trait(id: i64) -> Option<Trait> {
     match id {
         4 => return Some(Trait::Colour("fill_color")),
@@ -64,6 +70,16 @@ fn efsh_trait(id: i64) -> Option<Trait> {
         48 => return Some(Trait::Colour("color_key_2")),
         49 => return Some(Trait::Colour("color_key_3")),
         50 => return Some(Trait::Field("color_key_1_alpha", false)),
+        51 => return Some(Trait::Field("color_key_2_alpha", false)),
+        52 => return Some(Trait::Field("color_key_3_alpha", false)),
+        53 => return Some(Trait::Field("color_key_1_time", false)),
+        54 => return Some(Trait::Field("color_key_2_time", false)),
+        55 => return Some(Trait::Field("color_key_3_time", false)),
+        56 => return Some(Trait::Field("initial_speed_along_normal_range", false)),
+        57 => return Some(Trait::Field("initial_rotation_deg", false)),
+        58 => return Some(Trait::Field("initial_rotation_deg_range", false)),
+        59 => return Some(Trait::Field("rotation_speed_deg", false)),
+        60 => return Some(Trait::Field("rotation_speed_deg_range", false)),
         _ => {}
     }
     const NAMES: [&str; 47] = [
@@ -160,7 +176,8 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         // SetEffectShaderTraitNumeric]; the setter returns 1 when done [documented:
         // "returning 1 on success"] and takes every trait the getter reads, not only the
         // 0-42 its page lists [observed: jg3 efsh.set.nuke.43 and efsh.set.nuke.47 returned
-        // 1 and read the new value back].
+        // 1 and read the new value back; w4d_30_jg_efsh_47_to_52 confirmed setter round-trips
+        // for 49, 51, 52].
         "geteffectshadertraitnumeric" | "seteffectshadertraitnumeric" => {
             let set = name.starts_with("set");
             let (Some(s), Some(t)) = (of_sig(g, form(args, 0), b"EFSH"), index(args, 1).and_then(efsh_trait)) else { return Some(Ok(zero)) };
@@ -176,7 +193,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
                 (Trait::Field(path, _), false) => XVal::Num(number(field(g, s, "DATA", path))),
                 // A colour set as one number reads back as given [observed: jg3
                 // efsh.set.nuke.4, 255 read 255]; kept to the three channels' 24 bits
-                // [hypothesis].
+                // (see docs/spec-notes/ext-jg3.md).
                 (Trait::Colour(path), true) => {
                     g.field_overrides.insert((s, format!("DATA/{path}")), XVal::Num(v.trunc().clamp(0.0, f64::from(0xFF_FFFF))));
                     XVal::Num(1.0)

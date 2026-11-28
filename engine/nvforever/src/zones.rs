@@ -64,7 +64,7 @@ fn sync_actor_lists(script: Option<Res<ScriptState>>, actor_world: Option<ResMut
 /// references.
 #[derive(Default)]
 struct LevelSync {
-    key: Option<(usize, u16)>,
+    key: Option<(usize, u16, bool)>,
     fixed: std::collections::BTreeMap<fnv_sim::FormId, fnv_sim::zones::LevelAt>,
 }
 
@@ -83,7 +83,7 @@ fn sync_levels(script: Option<Res<ScriptState>>, sim: Option<Res<nvf_play::sim::
     // stand-in (`nvf_play::script::with_world`) with no fixed levels.
     let w = &sim.world;
     let player = g.player.level.map_or(w.config().player_level, |l| l.clamp(1, i32::from(u16::MAX)) as u16);
-    let key = (w.zone_levels().len(), player);
+    let key = (w.zone_levels().len(), player, g.tweaks.no_lock_encounter_zone_levels);
     let display = fnv_sim::zones::LevelAt::plain(fnv_actor::resolve::DISPLAY_LEVEL);
     let is_actor = |r: fnv_sim::FormId| w.placed.get(r).is_some_and(|p| matches!(&p.sig, b"ACHR" | b"ACRE"));
     if last.key == Some(key) {

@@ -17,8 +17,10 @@
 //! Path containment is checked on canonicalized paths, case-insensitively on Windows.
 
 pub mod mo2;
+pub mod mod_order;
 pub mod plugins;
 pub mod reports;
+pub mod steam;
 
 use serde::Deserialize;
 use std::fmt;
@@ -201,8 +203,12 @@ impl EngineHome {
         EngineHome { cache_root: root.join("cache"), root }
     }
 
+    /// `NVForever.ini` in the home. When there is no file of exactly that name but one
+    /// whose name differs only in case (`nvforever.ini`, made by hand on a case-sensitive
+    /// file system), that file is the one read and written, as the game's own files are
+    /// found ([`child_ci`], #995). Every reader and writer of the INI goes through here.
     pub fn config_file(&self) -> PathBuf {
-        self.root.join(CONFIG_FILE)
+        child_ci(&self.root, CONFIG_FILE).unwrap_or_else(|| self.root.join(CONFIG_FILE))
     }
     pub fn saves(&self) -> PathBuf {
         self.root.join("saves")
@@ -246,6 +252,10 @@ impl EngineHome {
         // INI marks the home as set up, so saves are copied once and a save deleted here
         // later does not come back.
         Config::load(old)?.save(self, None)?;
+        // The old home's player has started the game before.
+        let p = self.config_file();
+        let text = std::fs::read_to_string(&p).map_err(|e| InstallError::Io(p.clone(), e))?;
+        write_whole(&p, after_first_start(&text).as_bytes())?;
         let mut copied = Vec::new();
         let Ok(entries) = std::fs::read_dir(old.saves()) else { return Ok(copied) };
         for e in entries.flatten() {
@@ -472,11 +482,18 @@ impl Config {
         }
     }
 
-    /// `text` (an existing INI, or empty) with this config's keys set.
+    /// `text` (an existing INI, or empty) with this config's keys set. A new INI is marked
+    /// as not started with yet ([`FIRST_START_KEY`]).
     pub fn to_ini(&self, text: &str) -> String {
-        let base = if text.trim().is_empty() { INI_HEADER.to_string() } else { text.to_string() };
+        let new = text.trim().is_empty();
+        let base = if new { INI_HEADER.to_string() } else { text.to_string() };
         let path = self.game_dir.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
-        ini_set(&base, "Game", "Path", &path)
+        let t = ini_set(&base, "Game", "Path", &path);
+        if new {
+            with_first_start(&t)
+        } else {
+            t
+        }
     }
 
     pub fn save(&self, home: &EngineHome, game: Option<&GameInstall>) -> Result<(), InstallError> {
@@ -556,6 +573,27 @@ pub fn ini_get(text: &str, section: &str, key: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// `[Game] FirstStart`: `1` in an INI NVForever has not started with yet. Whatever makes a
+/// new INI (the first start, `fnvtool setup`, the launcher) writes it, and the engine's
+/// start sets it to `0` [design, #3909: an INI without the key was made before it, by a
+/// player who has started the game, so nothing is taken for a first start].
+pub const FIRST_START_KEY: &str = "FirstStart";
+
+/// `text` marked as an INI the engine has not started with yet ([`FIRST_START_KEY`]).
+pub fn with_first_start(text: &str) -> String {
+    ini_set(text, "Game", FIRST_START_KEY, "1")
+}
+
+/// Whether the INI `text` is marked as not started with yet ([`FIRST_START_KEY`]).
+pub fn first_start_pending(text: &str) -> bool {
+    ini_get(text, "Game", FIRST_START_KEY).is_some_and(|v| v.trim() == "1")
+}
+
+/// `text` marked as started with ([`FIRST_START_KEY`] `0`).
+pub fn after_first_start(text: &str) -> String {
+    ini_set(text, "Game", FIRST_START_KEY, "0")
 }
 
 /// `text` with `key=value` in `[section]`: the first such line replaced, else the key added
@@ -825,6 +863,38 @@ mod tests {
         assert_eq!(Config::load(&home).unwrap(), c);
         let text = std::fs::read_to_string(home.config_file()).unwrap();
         assert!(text.starts_with("; NVForever settings") && text.contains("\n[Game]\nPath="), "{text}");
+        // #3909: a new INI is marked as not started with yet; a save keeps the mark's value.
+        assert!(first_start_pending(&text), "{text}");
+        let again = Config { game_dir: Some(t.join("Other")), ..Config::default() }.to_ini(&after_first_start(&text));
+        assert!(!first_start_pending(&again), "{again}");
+        assert!(!first_start_pending("[Game]\nPath=F:\\FNV\n"), "an INI from before the key has been started with");
+        std::fs::remove_dir_all(&t).ok();
+    }
+
+    /// A hand-made `nvforever.ini` on a case-sensitive file system is the INI read and
+    /// written: a save does not put a second `NVForever.ini` beside it. With both names
+    /// present the exact one wins, as `child_ci` finds it (#995).
+    #[test]
+    fn an_existing_ini_is_used_whatever_its_case() {
+        let t = tmp("cfg-case");
+        let home = EngineHome::new(t.join("home"));
+        home.create().unwrap();
+        let lower = home.root.join("nvforever.ini");
+        std::fs::write(&lower, "[Game]\nPath=F:\\FNV\n").unwrap();
+        let exact = home.root.join(CONFIG_FILE);
+        if exact.exists() {
+            // A case-insensitive file system (Windows, macOS): both names are one file, so
+            // there is no other case to find.
+            std::fs::remove_dir_all(&t).ok();
+            return;
+        }
+        assert_eq!(home.config_file(), lower);
+        assert_eq!(Config::load(&home).unwrap().game_dir, Some(PathBuf::from("F:\\FNV")));
+        Config { game_dir: Some(PathBuf::from("D:\\FNV")), ..Config::default() }.save(&home, None).unwrap();
+        assert!(!exact.exists(), "the save made a second INI");
+        assert_eq!(Config::load(&home).unwrap().game_dir, Some(PathBuf::from("D:\\FNV")));
+        std::fs::write(&exact, "[Game]\nPath=G:\\FNV\n").unwrap();
+        assert_eq!(home.config_file(), exact);
         std::fs::remove_dir_all(&t).ok();
     }
 
@@ -925,6 +995,7 @@ c=2
         assert_eq!(new.adopt_legacy(&old).unwrap(), ["a.nvfsave"]);
         assert_eq!(Config::load(&new).unwrap().game_dir, Some(PathBuf::from("F:\\FNV")));
         assert!(new.config_file().is_file());
+        assert!(!first_start_pending(&std::fs::read_to_string(new.config_file()).unwrap()), "an old home's player has started before (#3909)");
         assert_eq!(std::fs::read(new.saves().join("b.nvfsave")).unwrap(), b"2");
         assert!(old.saves().join("a.nvfsave").is_file());
         // Once the INI is there, nothing is taken again.

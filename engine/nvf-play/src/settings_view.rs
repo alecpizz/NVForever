@@ -988,6 +988,8 @@ impl SettingsLayout {
 mod tests {
     use super::*;
     use crate::settings::Settings;
+    // Shared page cases describe the desktop profile; Android grouping has its own controls.
+    use crate::settings_layout::{resolve_desktop_layout as resolve_layout, DESKTOP_TAB_ORDER as TAB_ORDER};
 
     /// The owner's fifth build note: places on the search and the Changed list close to
     /// their crumb (which the keys can choose), for the run only, apart from the tabs'.

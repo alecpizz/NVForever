@@ -52,6 +52,31 @@ pub struct Button;
 /// test aids that feed presses run before [`UiSystems::Focus`]).
 pub struct UiPointerPlugin;
 
+/// One frame's alternate-sheet touch ownership, published by the sole wrapper
+/// reader before UI focus. Hardware input is never filtered by this resource.
+/// Overflow suppresses touch until the publisher's next fresh frame; the sheet
+/// remains responsible for draining its contacts to actual neutral.
+#[derive(Resource, Default)]
+pub struct TouchUiCapture {
+    ids: [Option<u64>; 32],
+    overflow: bool,
+    pointer_suppressed: bool,
+}
+impl TouchUiCapture {
+    pub fn begin_frame(&mut self) { self.ids.fill(None); self.overflow = false; self.pointer_suppressed = false; }
+    pub fn block(&mut self, id: u64) {
+        if self.ids.contains(&Some(id)) { return; }
+        if let Some(slot) = self.ids.iter_mut().find(|slot| slot.is_none()) { *slot = Some(id); }
+        else { self.overflow = true; }
+    }
+    pub fn allows(&self, id: u64) -> bool { !self.overflow && !self.ids.contains(&Some(id)) }
+    pub fn quarantine_overflow(&mut self) { self.overflow = true; }
+    /// Hide the stale pointer under a visible sheet. Actual hardware intent yields
+    /// the sheet first, so physical input resumes without changing Window state.
+    pub fn suppress_pointer(&mut self, suppressed: bool) { self.pointer_suppressed = suppressed; }
+    pub fn pointer_suppressed(&self) -> bool { self.pointer_suppressed }
+}
+
 impl Plugin for UiPointerPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(PreUpdate, update_pointer_state.in_set(UiSystems::Focus).after(InputSystems));
@@ -157,14 +182,23 @@ fn update_pointer_state(
     ui_stack: Res<UiStack>,
     nodes: Query<NodeData>,
     mut states: Query<(Entity, &mut PointerState)>,
-    pad_pointer: Option<Res<crate::pad::pointer::PadPointer>>,
+    (pad_pointer, platform): (Option<Res<crate::pad::pointer::PadPointer>>, Option<Res<crate::pad::PlatformInputGate>>),
+    touch_owner: Option<Res<TouchUiCapture>>,
 ) {
+    if platform.as_ref().is_some_and(|g| !g.allows_actions()) {
+        to_reset.clear(); places.clear();
+        for (_, mut state) in &mut states { state.set_if_neq(PointerState::None); }
+        return;
+    }
     let mouse = mouse.snapshot();
     // A pointer asleep under the controller is on nothing (`crate::pad::pointer`, #2310).
-    let sleeping = crate::pad::pointer::asleep(pad_pointer.as_deref());
+    let sleeping = crate::pad::pointer::asleep(pad_pointer.as_deref())
+        || touch_owner.as_ref().is_some_and(|owner| owner.pointer_suppressed());
     let primary_window = primary_window.iter().next();
-    let released = mouse.just_released(MouseButton::Left) || touches.any_just_released();
-    let clicked = mouse.just_pressed(MouseButton::Left) || touches.any_just_pressed();
+    let touch_allowed = |id| platform.as_ref().is_none_or(|g| g.allows_touch(id))
+        && touch_owner.as_ref().is_none_or(|owner| owner.allows(id));
+    let released = mouse.just_released(MouseButton::Left) || touches.iter_just_released().any(|t| touch_allowed(t.id()));
+    let clicked = mouse.just_pressed(MouseButton::Left) || touches.iter_just_pressed().any(|t| touch_allowed(t.id()));
 
     // The pointer in each window camera's viewport, in physical pixels.
     let cursor: EntityHashMap<Vec2> = cameras
@@ -175,11 +209,17 @@ fn update_pointer_state(
             };
             let window = windows.get(window.entity()).ok()?;
             let origin = camera.physical_viewport_rect().map(|r| r.min.as_vec2()).unwrap_or_default();
-            window
-                .physical_cursor_position()
-                .filter(|_| !sleeping)
-                .or_else(|| touches.first_pressed_position().map(|p| p * window.scale_factor()))
-                .map(|p| (entity, p - origin))
+            let mouse_position = window.physical_cursor_position().filter(|_| !sleeping);
+            let touch_position = || touches.iter().chain(touches.iter_just_pressed())
+                .chain(touches.iter_just_released()).find(|t| touch_allowed(t.id()))
+                .map(|t| t.position() * window.scale_factor());
+            // A passive retained mouse coordinate is not a fresh touch's position.
+            // An admitted mouse hold/press/release keeps its existing priority.
+            let mouse_active = mouse.pressed(MouseButton::Left)
+                || mouse.just_pressed(MouseButton::Left) || mouse.just_released(MouseButton::Left);
+            let position = if mouse_active { mouse_position.or_else(touch_position) }
+                else { touch_position().or(mouse_position) };
+            position.map(|p| (entity, p - origin))
         })
         .collect();
 
@@ -237,6 +277,48 @@ mod tests {
     use super::PointerState::{Hovered, None, Pressed};
     use super::*;
 
+    fn touch_scene() -> (App, Entity, Entity) {
+        use bevy::{app::{HierarchyPropagatePlugin, PropagateSet}, camera::{ComputedCameraValues,RenderTargetInfo,visibility::VisibilityPlugin}, ui::{ComputedUiRenderTargetInfo,UiScale,ui_surface::UiSurface,update::propagate_ui_target_cameras}};
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins,bevy::input::InputPlugin,bevy::asset::AssetPlugin::default(),bevy::transform::TransformPlugin,bevy::text::TextPlugin));
+        app.init_resource::<Assets<Mesh>>().init_resource::<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>()
+            .add_plugins((VisibilityPlugin,HierarchyPropagatePlugin::<ComputedUiTargetCamera>::new(PostUpdate),HierarchyPropagatePlugin::<ComputedUiRenderTargetInfo>::new(PostUpdate),UiPointerPlugin))
+            .init_resource::<UiScale>().init_resource::<UiSurface>().init_resource::<UiStack>();
+        app.add_systems(PostUpdate,(ApplyDeferred,propagate_ui_target_cameras,bevy::ui::ui_layout_system).chain());
+        app.configure_sets(PostUpdate,PropagateSet::<ComputedUiTargetCamera>::default().after(propagate_ui_target_cameras).before(bevy::ui::ui_layout_system));
+        app.configure_sets(PostUpdate,PropagateSet::<ComputedUiRenderTargetInfo>::default().after(propagate_ui_target_cameras).before(bevy::ui::ui_layout_system));
+        let camera=app.world_mut().spawn((Camera2d,Camera {computed:ComputedCameraValues {target_info:Some(RenderTargetInfo {physical_size:UVec2::splat(400),scale_factor:1.0}),..default()},..default()})).id();
+        let window=app.world_mut().spawn((Window {resolution:bevy::window::WindowResolution::new(400,400),..default()},PrimaryWindow)).id();
+        let button=app.world_mut().spawn((Button,Node {position_type:PositionType::Absolute,left:px(20.0),top:px(20.0),width:px(100.0),height:px(50.0),..default()},UiTargetCamera(camera))).id();
+        for _ in 0..4 {app.update();}
+        // This is real Taffy layout, not authored ComputedNode data. Its system
+        // requires TextPlugin's FontCx and RemSize even for a text-free Button.
+        let node=app.world().get::<ComputedNode>(button).unwrap();
+        assert!(node.size().abs_diff_eq(Vec2::new(100.0,50.0),0.01),"actual laid-out button: {:?}",node.size());
+        assert!(app.world().get::<UiGlobalTransform>(button).unwrap().translation.abs_diff_eq(Vec2::new(70.0,45.0),0.01));
+        assert!(app.world().get::<InheritedVisibility>(button).unwrap().get());
+        assert_eq!(app.world().get::<ComputedUiTargetCamera>(button).unwrap().get(),Some(camera));
+        let mut stack=app.world_mut().resource_mut::<UiStack>();
+        stack.uinodes=vec![button];stack.partition.clear();stack.partition.push(0..1);
+        (app,window,button)
+    }
+
+    #[test]
+    fn alternate_sheet_owns_touch_at_real_ui_focus_without_consuming_mouse_or_raw_touches() {
+        let (mut app,window,button)=touch_scene();
+        app.init_resource::<TouchUiCapture>();
+        app.world_mut().resource_mut::<TouchUiCapture>().block(7);
+        app.world_mut().write_message(bevy::input::touch::TouchInput {window,id:7,phase:bevy::input::touch::TouchPhase::Started,position:Vec2::splat(40.0),force:std::option::Option::None});
+        app.update();
+        assert_eq!(*app.world().get::<PointerState>(button).unwrap(),PointerState::None);
+        assert!(app.world().resource::<Touches>().get_pressed(7).is_some());
+        app.world_mut().get_mut::<Window>(window).unwrap().set_cursor_position(Some(Vec2::splat(40.0)));
+        app.world_mut().write_message(bevy::input::mouse::MouseButtonInput {window,button:MouseButton::Left,state:bevy::input::ButtonState::Pressed});
+        app.update();
+        assert_eq!(*app.world().get::<PointerState>(button).unwrap(),PointerState::Pressed,"physical mouse still reaches the real UI focus consumer");
+        assert!(app.world().resource::<ButtonInput<MouseButton>>().pressed(MouseButton::Left));
+    }
+
     fn f(place: Place) -> Frame {
         Frame { place, clicked: false, released: false, reset: false }
     }
@@ -283,4 +365,22 @@ mod tests {
         // `Changed` fires.
         assert_eq!(next_state(Pressed, Frame { clicked: true, released: true, ..f(Place::Top) }), (Pressed, true, true));
     }
+    #[test]
+    fn platform_cover_blocks_real_touch_pointer_admission_without_clearing_touch_hardware() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::input::InputPlugin, UiPointerPlugin))
+            .init_resource::<UiStack>().init_resource::<crate::pad::PlatformInputGate>();
+        app.world_mut().resource_mut::<crate::pad::PlatformInputGate>().set_blocked(true);
+        let button = app.world_mut().spawn((Button, PointerState::Pressed)).id();
+        app.world_mut().write_message(bevy::input::touch::TouchInput {
+            window: Entity::PLACEHOLDER, id: 7, phase: bevy::input::touch::TouchPhase::Started,
+            position: Vec2::ONE, force: std::option::Option::None,
+        });
+        app.update();
+        assert_eq!(*app.world().get::<PointerState>(button).unwrap(), PointerState::None);
+        assert!(app.world().resource::<Touches>().any_just_pressed(), "hardware touch ownership is preserved");
+    }
+
+    include!("ui_pointer_retained_cursor_tests.rs");
+
 }

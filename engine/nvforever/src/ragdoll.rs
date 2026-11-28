@@ -135,6 +135,12 @@ pub struct Ragdolls {
     templates: HashMap<String, Option<Arc<RagdollTemplate>>>,
     /// Bone poses (game space, in the ragdoll's body order) of corpses by reference.
     pub rest: HashMap<u32, Vec<Option<Iso>>>,
+    /// The [`Self::rest`] poses taken from a ragdoll still falling (its body taken away,
+    /// or the ground under it gone, before it came to rest): it goes on falling from
+    /// there when it is drawn again, not laid at rest in that pose (bodies drawn again
+    /// just after they died were set at rest knelt upright, "after 0.0 s of physics",
+    /// otherwise) [observed: buckallobill, in game, FNV 1.4.0.525].
+    pub falling: HashSet<u32>,
     pub started: usize,
     pub restored: usize,
     pub rested: usize,
@@ -144,6 +150,10 @@ pub struct Ragdolls {
     /// whose stored pose did not fit their skeleton.
     pub authored: usize,
     pub authored_skipped: usize,
+    /// Corpses whose stored pose (`XRGD`) is on a skeleton other than the one its reading
+    /// was checked on ([`authored_pose::CHECKED_ROOT`](crate::authored_pose::CHECKED_ROOT)):
+    /// they start awake from that pose and settle, not held in it (#3408).
+    pub settle_from_stored: HashSet<u32>,
     /// Ragdolls held at rest at the end of their time limit ([`MAX_AWAKE`] and the others)
     /// while still moving, after their settle; and how many of them had
     /// [`MAX_AWAKE_CROWDED`].
@@ -324,7 +334,7 @@ impl Ragdolls {
         for (b, &n) in bones.iter().enumerate() {
             body_of[n] = Some(b);
         }
-        Some(Corpse { data: rag, bones, body_of, live: false, velocity: [0.0; 3], settled: false, lifts: 0, laid_out: false, ragdolled: false, calm: 0.0, since: Vec::new(), window: 0.0, awake: 0.0, woken: Woken::Fresh, settle: None, hits: 0, settle_contacts: None })
+        Some(Corpse { data: rag, bones, body_of, live: false, velocity: [0.0; 3], settled: false, lifts: 0, laid_out: false, ragdolled: false, calm: 0.0, since: Vec::new(), window: 0.0, awake: 0.0, woken: Woken::Fresh, settle: None, hits: 0, settle_contacts: None, fell_here: false })
     }
 }
 
@@ -363,6 +373,9 @@ pub struct Corpse {
     body_of: Vec<Option<usize>>,
     /// The ragdoll is in the physics world.
     pub live: bool,
+    /// It died in sight here and its ragdoll took the pose as it was (`deaths.rs`): a co-op
+    /// guest keeps its own fall, not the host's resting pose (`coop::replication`).
+    pub fell_here: bool,
     /// The velocity its bodies start with (game units a second, game space): a knockdown's
     /// shove (`knockouts.rs`); used once.
     pub velocity: [f32; 3],
@@ -616,8 +629,14 @@ fn start(
         let (nodes, lifted) = out_of_terrain(&mut phys, rig.reference, &c, nodes, stored.is_some());
         let parts = body_parts(rig, &c, limbs);
         // A saved pose lifted out of the ground starts awake, to come down onto it: held at
-        // rest it would hover where it was lifted to.
-        let asleep = stored.is_some() && !lifted;
+        // rest it would hover where it was lifted to. So does a designer's pose on a
+        // skeleton its reading was not checked on (`settle_from_stored`, #3408): held, the
+        // Capital Wasteland's dead brahmin at Arefu hung in the air upside down.
+        let settle = stored.is_some() && ragdolls.settle_from_stored.contains(&rig.reference);
+        let asleep = stored.is_some() && !lifted && !settle;
+        if settle && !lifted {
+            info!("ragdoll: actor {:08X} starts awake from the pose its reference stores, to settle: a skeleton the stored poses' reading was not checked on", rig.reference);
+        }
         let velocity = std::mem::take(&mut c.velocity);
         let start = RagdollStart { form_id: rig.reference, ragdoll: &c.data, scale, nodes: &nodes, velocity, parts: &parts, asleep };
         // Bad ragdoll data that breaks the physics build (a panic, caught), or the test aid
@@ -831,6 +850,9 @@ pub(crate) fn pose(
         if !phys.ready_at(first) {
             // The ground under it is gone: keep the pose for when it is back.
             ragdolls.rest.insert(id, rest());
+            if !phys.world.ragdoll_asleep(id) {
+                ragdolls.falling.insert(id);
+            }
             phys.world.remove_ragdoll(id);
             c.live = false;
             continue;
@@ -1044,6 +1066,7 @@ pub(crate) fn pose(
         if asleep {
             ragdolls.rested += 1;
             ragdolls.rest.insert(id, rest());
+            ragdolls.falling.remove(&id);
             // How high its trunk lies over its lowest bone: a corpse lying down is low, one
             // set at rest standing (#1049) about a body's height.
             let trunk = phys.world.ragdoll_center(id).unwrap_or(first);
@@ -1062,6 +1085,11 @@ pub(crate) fn pose(
     for id in gone {
         if let Some(nodes) = phys.world.ragdoll_nodes(id) {
             ragdolls.rest.insert(id, nodes.iter().map(|b| b.as_ref().map(iso_of)).collect());
+            if phys.world.ragdoll_asleep(id) {
+                ragdolls.falling.remove(&id);
+            } else {
+                ragdolls.falling.insert(id);
+            }
         }
         phys.world.remove_ragdoll(id);
     }

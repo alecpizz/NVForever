@@ -93,6 +93,8 @@ pub struct ForwardDecalMaterialExt {
     /// Units are in meters.
     /// This has no effect if alpha mode is `Opaque`.
     pub depth_fade_factor: f32,
+    /// Include this decal in the scene color behind refractive surfaces.
+    pub before_transmission: bool,
 }
 
 #[derive(Clone, Default, ShaderType)]
@@ -112,6 +114,10 @@ impl AsBindGroupShaderType<ForwardDecalMaterialExtUniform> for ForwardDecalMater
 }
 
 impl MaterialExtension for ForwardDecalMaterialExt {
+    fn render_before_transmission(&self) -> bool {
+        self.before_transmission
+    }
+
     // Forward decal is incompatible with OIT as it needs to be rendered
     // even it's occluded by opaque objects.
     fn enable_oit() -> bool {
@@ -153,6 +159,7 @@ impl Default for ForwardDecalMaterialExt {
     fn default() -> Self {
         Self {
             depth_fade_factor: 8.0,
+            before_transmission: false,
         }
     }
 }

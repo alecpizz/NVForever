@@ -388,7 +388,7 @@ mod tests {
     use super::*;
 
     fn row(kind: ItemKind) -> Row {
-        Row { item: FormId(1), at: None, name: "Test tool".into(), count: 1, weight: None, value: None, kind: Some(kind), equipped: false, quest: false, condition: None, icon: None, price: None, bartered: false, loaded: false, mods: 3, mods_value: 0, folder: None, reference: None, live: false, ysi: None }
+        Row { item: FormId(1), at: None, name: "Test tool".into(), count: 1, weight: None, value: None, kind: Some(kind), equipped: false, quest: false, condition: None, icon: None, price: None, bartered: false, loaded: false, dim: false, mods: 3, mods_value: 0, folder: None, reference: None, live: false, ysi: None }
     }
 
     #[test]

@@ -100,11 +100,17 @@ def third_party(meta: dict, roots: tuple[str, ...]) -> list[dict]:
 
 def ours(pkg: dict) -> bool:
     """A path package of this repository (the root crates the engine uses), not one of
-    the patched third-party copies in engine/vendor."""
+    the patched third-party copies in either vendor folder."""
     if pkg.get("source"):
         return False
     path = Path(pkg["manifest_path"]).resolve()
-    return REPO in path.parents and (REPO / "engine" / "vendor") not in path.parents
+    return REPO in path.parents and vendor_root(path) is None
+
+
+def vendor_root(path: Path) -> Path | None:
+    """Both workspaces may share a patched dependency kept beside the root crates."""
+    return next((root for root in (REPO / "vendor", REPO / "engine" / "vendor")
+                 if root in path.parents), None)
 
 
 def license_texts(pkg: dict) -> list[tuple[str, str]]:
@@ -112,8 +118,8 @@ def license_texts(pkg: dict) -> list[tuple[str, str]]:
     found = licence_files(folder)
     # A vendored workspace (engine/vendor/wgpu-ffx) keeps one licence at its root for its
     # crates: look up to the vendor folder, never past it into NVForever's own licence.
-    vendor = REPO / "engine" / "vendor"
-    for parent in folder.parents if not found and vendor in folder.parents else ():
+    vendor = vendor_root(folder)
+    for parent in folder.parents if not found and vendor is not None else ():
         if parent == vendor:
             break
         found = [((parent.relative_to(vendor) / name).as_posix(), text) for name, text in licence_files(parent)]

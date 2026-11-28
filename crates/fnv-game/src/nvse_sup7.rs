@@ -281,7 +281,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         // world pc calcStart`): from start to end in timer seconds by mode [documented:
         // the pages]; calcStart takes the block's value now as the start [documented:
         // "Scale N will be calculated automatically"]. 1 when it runs, 0 without a
-        // reference or a block name [hypothesis]. The translation's world flag is not
+        // reference or a block name (see docs/spec-notes/ext-sup7.md §1). The translation's world flag is not
         // used [decision: the mirror holds and sets values in the parent's space].
         "nifblockinterpolatetranslation" | "nifblockinterpolaterotation" | "nifblockinterpolatescale" => {
             let (Some(r), Some(node)) = (on, text(args, 0)) else { return Some(Ok(zero)) };
@@ -326,7 +326,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         // matched [observed: `sup_23_nif_interp_stop_and_type`], -1 when the reference
         // has active interpolations but none match [observed: sup7 scale.next;
         // `sup_23_nif_interp_stop_and_type`]. A stopped block keeps the value it had
-        // [hypothesis].
+        // (see docs/spec-notes/ext-sup7.md §1).
         "nifblockinterpolatestop" | "isnifblockinterpolated" => {
             let Some(r) = on else { return Some(Ok(zero)) };
             let (block, kind, pc) = search(args, 0);
@@ -362,7 +362,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
             zero
         }
         // `udf [loops]` [documented: SetSUPOnInterpolateFinishEvent]; the same handler
-        // again changes its loops flag [hypothesis]. Every reference's interpolations
+        // again changes its loops flag (see docs/spec-notes/ext-sup7.md §1). Every reference's interpolations
         // [documented: "when an interpolation on object will end", the handler given the
         // object].
         "setsuponinterpolatefinishevent" => {

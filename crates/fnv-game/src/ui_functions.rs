@@ -32,6 +32,14 @@ fn text(args: &[XVal], k: usize) -> String {
     }
 }
 
+fn text_cow<'a>(args: &'a [XVal], k: usize) -> std::borrow::Cow<'a, str> {
+    match args.get(k) {
+        Some(XVal::Str(s)) => std::borrow::Cow::Borrowed(s.as_str()),
+        Some(XVal::Num(n)) => std::borrow::Cow::Owned(Value::Num(*n).text()),
+        _ => std::borrow::Cow::Borrowed(""),
+    }
+}
+
 fn num(args: &[XVal], k: usize) -> f64 {
     match args.get(k) {
         Some(XVal::Num(n)) => *n,
@@ -189,19 +197,29 @@ fn inherited(ui: &fnv_ui::Ui, path: &str, exclude_root: bool) -> Option<f64> {
 /// The UI function `name` (any case) with its arguments; `None` when it is not one of
 /// these.
 pub fn call(g: &mut Game, name: &str, args: &[XVal]) -> Option<Result<XVal, String>> {
-    let lname = name.to_ascii_lowercase();
-    let path = text(args, 0);
+    let mut name_buf = [0u8; 40];
+    let lname_owned: String;
+    let lname: &str = if name.is_ascii() && name.len() <= name_buf.len() {
+        for (dst, &src) in name_buf.iter_mut().zip(name.as_bytes()) {
+            *dst = src.to_ascii_lowercase();
+        }
+        std::str::from_utf8(&name_buf[..name.len()]).expect("ASCII bytes")
+    } else {
+        lname_owned = name.to_ascii_lowercase();
+        lname_owned.as_str()
+    };
+    let path = text_cow(args, 0);
     // The path names the trait or tile read or changed, the tile injected into or
     // unloaded; AddTileFromTemplate's is before its first `|` [documented:
     // AddTileFromTemplate].
-    let target = if lname == "addtilefromtemplate" { path.split('|').next().unwrap_or("") } else { path.as_str() };
-    if TREE_FUNCTIONS.contains(&lname.as_str()) && on_hud(target) {
+    let target = if lname == "addtilefromtemplate" { path.split('|').next().unwrap_or("") } else { path.as_ref() };
+    if TREE_FUNCTIONS.contains(&lname) && on_hud(target) {
         // The HUD's writes kept back while nothing read the HUD, made now; the engine
         // writes them every frame from here on (`crate::ui_hud::defer`) [design].
         g.ui_used = true;
         crate::ui_hud::flush(g);
     }
-    Some(Ok(match lname.as_str() {
+    Some(Ok(match lname {
         // The extender's own four count `*:N` from the first child, JIP's from the last
         // (`fnv_ui::Count`) [observed: menu-xml.md §10.1; hud.md §14.8; documented: MCM
         // Guide v6, menu-xml.md §10.4].
@@ -212,7 +230,7 @@ pub fn call(g: &mut Game, name: &str, args: &[XVal]) -> Option<Result<XVal, Stri
         "setuifloat" => yes(g.ui_tree.set_counted(&path, fnv_ui::Count::FromFirst, Value::Num(num(args, 1)))),
         "setuifloatalt" => yes(g.ui_tree.set_float(&path, num(args, 1))),
         "setuistring" | "setuistringex" => yes(g.ui_tree.set_counted(&path, fnv_ui::Count::FromFirst, Value::Str(text(args, 1)))),
-        "setuistringalt" => yes(g.ui_tree.set_string(&path, &text(args, 1))),
+        "setuistringalt" => yes(g.ui_tree.set_string(&path, &text_cow(args, 1))),
         "moduifloat" => yes(g.ui_tree.mod_float(&path, num(args, 1))),
         // MCM's shorthands for the traits of `StartMenu/MCM/*:child/*:grandchild/setting`
         // [documented: SetMCMFloat and SetMCMString give the SetUIFloat and SetUIString

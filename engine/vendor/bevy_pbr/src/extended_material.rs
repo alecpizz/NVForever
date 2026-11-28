@@ -46,6 +46,11 @@ pub trait MaterialExtension: Asset + AsBindGroup + Clone + Sized {
         None
     }
 
+    /// Blend into the picture sampled by transmissive materials.
+    fn render_before_transmission(&self) -> bool {
+        false
+    }
+
     /// Controls if the prepass is enabled for the Material.
     /// For more information about what a prepass is, see the [`bevy_core_pipeline::prepass`] docs.
     #[inline]
@@ -256,6 +261,10 @@ impl<B: Material, E: MaterialExtension> Material for ExtendedMaterial<B, E> {
 
     fn reads_view_transmission_texture(&self) -> bool {
         B::reads_view_transmission_texture(&self.base)
+    }
+
+    fn render_before_transmission(&self) -> bool {
+        self.extension.render_before_transmission() || self.base.render_before_transmission()
     }
 
     fn enable_prepass() -> bool {

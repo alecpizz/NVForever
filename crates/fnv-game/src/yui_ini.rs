@@ -17,13 +17,15 @@
 //!   UTF-8 BOMs, CRLF endings, `;`/`#` comments, non-ASCII text, and invalid UTF-8 bytes
 //!   never panic [design].
 //! - Already-avoided original-engine bugfix keys (`bFixIndefiniteSorting`,
-//!   `bFixDroppedItems`, `bFixTablineSelected`) and unbuilt `[Sorting and Icons]
-//!   bEnableCategories` are skipped cleanly rather than stored as dead struct fields.
+//!   `bFixDroppedItems`, `bFixTablineSelected`) are skipped cleanly rather than stored as
+//!   dead struct fields.
 
 /// Case-insensitive VFS path for `Data\NVSE\Plugins\yUI.ini`
 /// [documented: yUI - User Ynterface v1.4d (`https://www.nexusmods.com/newvegas/mods/74357`),
 /// shipped `Data\NVSE\Plugins\yUI.ini` install path].
 pub const YUI_INI_PATH: &str = "NVSE\\Plugins\\yUI.ini";
+
+pub use crate::ysi_filename::{YsiCategoryDef, YsiCategoryIndex};
 
 /// Case-insensitive VFS path for `Data\menus\ySI\ySI.ini`
 /// [documented: ySI - Sorting Ycons 1.4b (`https://www.nexusmods.com/newvegas/mods/74358`),
@@ -43,6 +45,8 @@ pub const YSI_INI_PATH: &str = "menus\\ySI\\ySI.ini";
 /// - `add_inventory_icons` -> `nvf_play::menu`, `tiles/item_mod_menu`, `tiles/repair_menu`
 /// - `replace_hotkey_icons` -> `Game::ysi_hotkey_icon_path` -> `nvf_play::hotkeys::icon_override`
 ///   (`pipboy/hotkey_panel` and `weapon_wheel/draw`)
+/// - `enable_categories` -> `Game::ysi_categories_enabled` / `Game::ysi_categories` ->
+///   `nvf_play::menu` / `MenuModel::apply_ysi_categories`
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct YuiConfig {
     /// `[General] bSortingIcons`: master gate for `[Sorting and Icons]` and ySI XML
@@ -62,6 +66,10 @@ pub struct YuiConfig {
     /// when no explicit `SetItemHotkeyIconPath` override is set (shipped `yUI.ini`
     /// default `1`; gated by `sorting_icons`).
     pub replace_hotkey_icons: bool,
+    /// `[Sorting and Icons] bEnableCategories`: enable JSON-defined clickable Pip-Boy
+    /// inventory categories and subfolders (shipped `yUI.ini` default `1`; gated by
+    /// `sorting_icons`).
+    pub enable_categories: bool,
 }
 
 impl Default for YuiConfig {
@@ -74,6 +82,7 @@ impl Default for YuiConfig {
             sort_inventory: true,
             add_inventory_icons: true,
             replace_hotkey_icons: true,
+            enable_categories: true,
         }
     }
 }
@@ -94,6 +103,12 @@ impl YuiConfig {
     /// (`bSortingIcons && bReplaceHotkeyIcons`).
     pub const fn effective_replace_hotkey_icons(self) -> bool {
         self.sorting_icons && self.replace_hotkey_icons
+    }
+
+    /// Whether JSON-defined Pip-Boy inventory categories and subfolders are enabled
+    /// (`bSortingIcons && bEnableCategories`).
+    pub const fn effective_enable_categories(self) -> bool {
+        self.sorting_icons && self.enable_categories
     }
 
     /// Parse raw `yUI.ini` bytes from defaults strictly on `&[u8]` slices [design].
@@ -154,6 +169,10 @@ impl YuiConfig {
                     } else if key.eq_ignore_ascii_case(b"bReplaceHotkeyIcons") {
                         if let Some(b) = parse_bool(val) {
                             self.replace_hotkey_icons = b;
+                        }
+                    } else if key.eq_ignore_ascii_case(b"bEnableCategories") {
+                        if let Some(b) = parse_bool(val) {
+                            self.enable_categories = b;
                         }
                     }
                 }
@@ -283,10 +302,12 @@ mod tests {
         assert!(cfg.sort_inventory);
         assert!(cfg.add_inventory_icons);
         assert!(cfg.replace_hotkey_icons);
+        assert!(cfg.enable_categories);
         // Master gate bSortingIcons = 0 disables every [Sorting and Icons] feature.
         assert!(!cfg.effective_sort_inventory());
         assert!(!cfg.effective_add_inventory_icons());
         assert!(!cfg.effective_replace_hotkey_icons());
+        assert!(!cfg.effective_enable_categories());
     }
 
     #[test]
@@ -326,7 +347,7 @@ mod tests {
             .expect("config present")
         };
 
-        // yUI.ini bSortingIcons=1 + ySI.ini bSortingIcons=0 stays enabled [hypothesis].
+        // yUI.ini bSortingIcons=1 + ySI.ini bSortingIcons=0 stays enabled (see `YuiConfig` docs above).
         let yui1_ysi0 = load(
             Some(b"[General]\nbSortingIcons = 1\n"),
             Some(b"[General]\nbSortingIcons = 0\n"),
@@ -335,7 +356,7 @@ mod tests {
         assert!(yui1_ysi0.effective_sort_inventory());
         assert!(yui1_ysi0.effective_add_inventory_icons());
 
-        // yUI.ini bSortingIcons=0 + ySI.ini bSortingIcons=1 is enabled [hypothesis].
+        // yUI.ini bSortingIcons=0 + ySI.ini bSortingIcons=1 is enabled (see `YuiConfig` docs above).
         let yui0_ysi1 = load(
             Some(b"[General]\nbSortingIcons = 0\n"),
             Some(b"[General]\nbSortingIcons = 1\n"),
@@ -383,5 +404,6 @@ mod tests {
         // Invalid value leaves default `true` intact.
         assert!(cfg.effective_add_inventory_icons());
         assert!(!cfg.effective_replace_hotkey_icons());
+        assert!(!cfg.effective_enable_categories());
     }
 }

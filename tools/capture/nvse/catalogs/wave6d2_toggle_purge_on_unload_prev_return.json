@@ -1,0 +1,90 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6d2_toggle_purge_on_unload_prev_return",
+  "description": "Wave 6D-2 read-only probe confirming TogglePurgeOnUnload returns the previous state.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "jip_ln_nvse": "57.30 (5730)"
+  },
+  "batches": [
+    {
+      "id": "w6d2_toggle_purge",
+      "title": "Wave 6D-2: TogglePurgeOnUnload previous-state return",
+      "extender": "JIP LN NVSE 57.30",
+      "required_plugins": [
+        "jip_nvse.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6d2_23_world_state_internal_marker_and_light",
+          "bucket": "A",
+          "extender": "JIP LN 57.30",
+          "required_plugins": [
+            "jip_nvse.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/jip-world-12.md",
+          "spec_line": 70,
+          "functions_tested": [
+            "GetLightAmountAtPoint",
+            "GetActorLightAmount",
+            "GetPCFastTravelled",
+            "GetLoadOrderChanged",
+            "GetGameSettings",
+            "TogglePurgeOnUnload",
+            "SetInternalMarker"
+          ],
+          "claim": "Verify SetInternalMarker defaults & toggling (XMarker 0x3B, NorthMarker 0x03, Weap10mmPistol 0x434F; jip-world-12.md:71), TogglePurgeOnUnload on placed vs dynamic ref, GetLightAmountAtPoint vs GetActorLightAmount, GetPCFastTravelled, GetLoadOrderChanged, and GetGameSettings.",
+          "expected": "Confirm SetInternalMarker returns 1 on XMarker/NorthMarker and 0 on 10mm Pistol, toggles cleanly, and TogglePurgeOnUnload works only on dynamic (0xFF) refs.",
+          "script_lines": [
+            "ref rXmk = GetFormFromMod \"FalloutNV.esm\" \"3B\"",
+            "ref rNmk = GetFormFromMod \"FalloutNV.esm\" \"3\"",
+            "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+            "ref rDoor = GetFormFromMod \"FalloutNV.esm\" \"103E61\"",
+            "ref rCaps = GetFormFromMod \"FalloutNV.esm\" \"F\"",
+            "int imX = SetInternalMarker rXmk",
+            "int imN = SetInternalMarker rNmk",
+            "int imW0 = SetInternalMarker r10",
+            "int imW1 = SetInternalMarker r10 1",
+            "int imW2 = SetInternalMarker r10 0",
+            "int pgDoor = rDoor.TogglePurgeOnUnload 1",
+            "ref rDyn = Player.PlaceAtMe rCaps 1 0 0",
+            "int pgD0 = rDyn.TogglePurgeOnUnload",
+            "int pgD1 = rDyn.TogglePurgeOnUnload 1",
+            "int pgD2 = rDyn.TogglePurgeOnUnload 0",
+            "rDyn.Disable",
+            "rDyn.MarkForDelete",
+            "float px = Player.GetPos X",
+            "float py = Player.GetPos Y",
+            "float pz = Player.GetPos Z",
+            "float lPt = GetLightAmountAtPoint px py pz",
+            "float lAct = Player.GetActorLightAmount",
+            "int ft1 = GetPCFastTravelled",
+            "int ft2 = GetPCFastTravelled",
+            "int loc = GetLoadOrderChanged",
+            "array_var aG1 = GetGameSettings 1",
+            "array_var aG2 = GetGameSettings 2",
+            "PrintToConsole \"PROBE|w6d2_23_world_state_internal_marker_and_light|im=%g,%g,%g->%g->%g|pg(dr=%g,dyn=%g,%g,%g)|lPt=%.1f,lAct=%.1f|ft=%g,%g,loc=%g|gmst=%g/%g\" imX imN imW0 imW1 imW2 pgDoor pgD0 pgD1 pgD2 lPt lAct ft1 ft2 loc (ar_Size aG1) (ar_Size aG2)"
+          ]
+        }
+      ]
+    }
+  ]
+}

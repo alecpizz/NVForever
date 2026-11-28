@@ -78,6 +78,61 @@ pub const MULTIBOUNCE: bool = true;
 /// `FALLBACK_TOLERANCE`) [engineering choice].
 pub const DISTANCE_TOLERANCE: f32 = 0.05;
 
+/// The share of the lamps' factor ([`LAMPS`]) that also reaches the light of a lamp whose
+/// shadow is looked up at the fragment (the ALC shadows row's lamps, the flashlight): 0..1
+/// [engineering choice, 2026-11-24: half. At 0, as it was, a room lit by casting lamps kept
+/// its occlusion on the ambient light alone (0.7% of pixels changed by the occlusion in Doc
+/// Mitchell's house against 2.5% with the lamps casting none); at 1 a crease the lamp's
+/// shadow already darkens is darkened twice]. `NVF_PLAY_DEBUG_AO_SHADOWED=<0..1>` gives
+/// another for a run.
+pub const SHADOWED_LAMPS: f32 = 0.5;
+
+/// [`SHADOWED_LAMPS`], or the test aid's.
+pub fn shadowed_lamps() -> f32 {
+    static SHARE: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *SHARE.get_or_init(|| match std::env::var("NVF_PLAY_DEBUG_AO_SHADOWED").ok().and_then(|v| v.trim().parse::<f32>().ok()) {
+        Some(v) => {
+            bevy::log::info!("ambient occlusion: NVF_PLAY_DEBUG_AO_SHADOWED={v}");
+            v.clamp(0.0, 1.0)
+        }
+        None => SHADOWED_LAMPS,
+    })
+}
+
+/// The weight of the occlusion on the lamps' highlights (the specular part of point and spot
+/// lights; ssao_lighting.wesl `nvf_specular_visibility`): 0..1 [engineering choice,
+/// 2026-11-24: in full, the published specular occlusion as it is]. Not the sun's or the
+/// moon's, as their diffuse light takes none; not the ambient highlight, which the NIF and
+/// terrain shaders take back with the un-occluded factor (hook.rs `HOOK_EDITS`).
+/// `NVF_PLAY_DEBUG_AO_HIGHLIGHTS=<0..1>` gives another for a run.
+pub const HIGHLIGHTS: f32 = 1.0;
+
+/// [`HIGHLIGHTS`], or the test aid's.
+pub fn highlights() -> f32 {
+    static WEIGHT: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *WEIGHT.get_or_init(|| match std::env::var("NVF_PLAY_DEBUG_AO_HIGHLIGHTS").ok().and_then(|v| v.trim().parse::<f32>().ok()) {
+        Some(v) => {
+            bevy::log::info!("ambient occlusion: NVF_PLAY_DEBUG_AO_HIGHLIGHTS={v}");
+            v.clamp(0.0, 1.0)
+        }
+        None => HIGHLIGHTS,
+    })
+}
+
+/// ssao_lighting.wesl `nvf_specular_visibility` on the CPU, for the tests: a highlight's
+/// factor from the ambient's factor `g`, the cosine between normal and view, the roughness
+/// and the weight.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn specular_visibility(g: f32, n_dot_v: f32, roughness: f32, weight: f32) -> f32 {
+    let w = weight.clamp(0.0, 1.0);
+    if w <= 0.0 {
+        return 1.0;
+    }
+    let exponent = (-16.0 * roughness.clamp(0.0, 1.0) - 1.0).exp2();
+    let open = ((n_dot_v.max(0.0) + g).powf(exponent) - 1.0 + g).clamp(0.0, 1.0);
+    1.0 + (open - 1.0) * w
+}
+
 /// `NvfAmbientOcclusion` of ssao_lighting.wesl (field for field).
 #[derive(Clone, Copy, Debug, Default, PartialEq, ShaderType)]
 pub struct AmbientOcclusionLightingUniform {
@@ -85,6 +140,9 @@ pub struct AmbientOcclusionLightingUniform {
     pub params: Vec4,
     /// Strength, the lamps' weight (0..1), the multi-bounce fit (1 on); w unused.
     pub extra: Vec4,
+    /// The share of the lamps' factor on lamps whose shadow is looked up ([`SHADOWED_LAMPS`]),
+    /// the weight of the factor on the lamps' highlights ([`HIGHLIGHTS`]); z, w unused.
+    pub more: Vec4,
 }
 
 impl AmbientOcclusionLightingUniform {
@@ -96,6 +154,7 @@ impl AmbientOcclusionLightingUniform {
         AmbientOcclusionLightingUniform {
             params: Vec4::new(exponent, if debug { 1.0 } else { 0.0 }, fade_end, DISTANCE_TOLERANCE),
             extra: Vec4::new(strength, lamps.clamp(0.0, 1.0), if multibounce { 1.0 } else { 0.0 }, 0.0),
+            more: Vec4::new(shadowed_lamps(), highlights(), 0.0, 0.0),
         }
     }
 }
@@ -276,7 +335,7 @@ mod tests {
                 // without a shadow, never by the directional lights.
                 assert_eq!(lighting.matches("let nvf_ao_lamps = nvf_ao_multibounce(nvf_lamp_visibility(nvf_ao_ambient), diffuse_color);").count(), usize::from(on), "{case}");
                 assert_eq!(lighting.matches("let nvf_ao_ambient = nvf_ambient_visibility(in.frag_coord.xy, -view_z);").count(), usize::from(on), "{case}: the texels are read once a fragment");
-                assert_eq!(lighting.matches("* select(nvf_ao_lamps, vec3(1.0),").count(), if on { 2 } else { 0 }, "{case}");
+                assert_eq!(lighting.matches("* mix(nvf_ao_lamps, nvf_ao_shadowed, select(0.0, shadows::nvf_shadow_fade(light_id),").count(), if on { 2 } else { 0 }, "{case}");
                 assert_eq!(lighting.matches("if nvf_display { nvf_direct += nvf_point_display(").count(), 1, "{case}: one point line");
                 assert_eq!(lighting.matches("if nvf_display { nvf_direct += nvf_spot_display(").count(), 1, "{case}: one spot line");
                 let directional = block_after(lighting, "for (var i: u32 = 0u; i < n_directional_lights; i = i + 1u) {");
@@ -291,18 +350,22 @@ mod tests {
                     assert!(at("let diffuse_color") < at("* nvf_ao_multibounce("), "{case}: the diffuse colour exists where the ambient line takes it");
                     assert!(at("* nvf_ao_multibounce(nvf_ao_ambient, diffuse_color);") < at("    // Total light\n"), "{case}");
                     assert!(at("let view_z") < at("let nvf_ao_lamps") && at("let nvf_ao_lamps") < at("    // Point lights (direct)\n"), "{case}: formed after view_z, before the loops");
-                    let point = at("nvf_point_display(light_id, in.world_position.xyz, in.N) * shadow * select(");
-                    let spot = at("nvf_spot_display(light_id, in.world_position.xyz, in.N) * shadow * select(");
+                    let point = at("nvf_point_display(light_id, in.world_position.xyz, in.N) * shadow * mix(nvf_ao_lamps, nvf_ao_shadowed, select(");
+                    let spot = at("nvf_spot_display(light_id, in.world_position.xyz, in.N) * shadow * mix(nvf_ao_lamps, nvf_ao_shadowed, select(");
                     assert!(point < at("    // Spot lights (direct)\n"), "{case}: in the point loop");
                     assert!(at("    // Spot lights (direct)\n") < spot && spot < at("    // directional lights (direct)\n"), "{case}: in the spot loop");
                     // Only where bevy_pbr leaves the light's shadow unread.
-                    assert_eq!(lighting.matches("(in.flags & MESH_FLAGS_SHADOW_RECEIVER_BIT) != 0u && (view_bindings::clustered_lights.data[light_id].flags & mesh_view_types::POINT_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u)").count(), 2, "{case}");
+                    assert_eq!(lighting.matches("(in.flags & MESH_FLAGS_SHADOW_RECEIVER_BIT) != 0u && (view_bindings::clustered_lights.data[light_id].flags & mesh_view_types::POINT_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u)").count(), 4, "{case}: each lamp line's diffuse and highlight");
+                    // The highlights: what Bevy's line added is taken back by the factor, for
+                    // the point and the spot lights, from the one factor read above.
+                    assert_eq!(lighting.matches("if nvf_display { direct_light -= light_contrib * (max(shadow, 0.0) * (1.0 - mix(nvf_ao_spec, nvf_ao_spec_shadowed, select(0.0, shadows::nvf_shadow_fade(light_id),").count(), 2, "{case}");
+                    assert_eq!(lighting.matches("let nvf_ao_spec = nvf_specular_visibility(nvf_ao_ambient, NdotV, roughness);").count(), 1, "{case}");
                     let p = |s: &str| post.find(s).unwrap_or_else(|| panic!("{case}: {s}"));
                     // After the fog (and the dither), before the alpha is premultiplied; the
                     // same position and distance as the ambient line's.
                     assert!(p("apply_fog(") < p("if nvf_ao_debug()") && p("if nvf_ao_debug()") < p("premultiply_alpha(pbr_input.material.flags"), "{case}");
                     assert!(post.contains("nvf_ambient_visibility(pbr_input.frag_coord.xy, -nvf_view_z)"));
-                    assert!(r.find("import nvforever::ssao_lighting::{nvf_ambient_visibility, nvf_ao_debug, nvf_ao_multibounce, nvf_lamp_visibility};").expect("import") < r.find("fn nvf_apply_pbr_lighting(").unwrap());
+                    assert!(r.find("import nvforever::ssao_lighting::{nvf_ambient_visibility, nvf_ao_debug, nvf_ao_multibounce, nvf_lamp_visibility, nvf_shadowed_lamp_visibility, nvf_specular_visibility};").expect("import") < r.find("fn nvf_apply_pbr_lighting(").unwrap());
                 }
             }
         }
@@ -341,10 +404,10 @@ mod tests {
         for n in ["(43,", "                44,\n"] {
             assert_eq!(bindings.matches(n).count(), if n.starts_with('(') { 2 } else { 1 }, "{n:?}");
         }
-        // The uniform: two vec4s in the Rust order.
-        let fields: Vec<usize> = ["params: vec4<f32>,", "extra: vec4<f32>,"].iter().map(|f| wesl.find(f).unwrap_or_else(|| panic!("{f}"))).collect();
+        // The uniform: three vec4s in the Rust order.
+        let fields: Vec<usize> = ["params: vec4<f32>,", "extra: vec4<f32>,", "more: vec4<f32>,"].iter().map(|f| wesl.find(f).unwrap_or_else(|| panic!("{f}"))).collect();
         assert!(fields.windows(2).all(|w| w[0] < w[1]));
-        assert_eq!(AmbientOcclusionLightingUniform::min_size().get(), 32, "two vec4s, as ssao_lighting.wesl's struct");
+        assert_eq!(AmbientOcclusionLightingUniform::min_size().get(), 48, "three vec4s, as ssao_lighting.wesl's struct");
         let u = AmbientOcclusionLightingUniform::new(EXPONENT, 7000.0, 0.4, 0.0, false, true);
         assert_eq!(u.params, Vec4::new(EXPONENT, 1.0, 7000.0, DISTANCE_TOLERANCE));
         assert_eq!(u.extra, Vec4::new(0.4, 0.0, 0.0, 0.0));
@@ -499,7 +562,8 @@ mod tests {
     }
 
     /// The exponent sets how the shown value falls. The display-value sum is shown as about
-    /// itself (light = texture × sum^2.2, shown ≈ light^(1/2.2)), so with the exponent built in,
+    /// itself (the texture's display value × the sum, lights/display_shader.rs; `shown` below
+    /// stands in for it with a 2.2 power both ways), so with the exponent built in,
     /// 1, the shown value of a surface lit by what the factor reaches falls by the factor
     /// itself, as the picture placement multiplies the shown picture by it; with the first
     /// value, 1/2.2, it was the light that fell by the factor and the shown value only by
@@ -575,5 +639,30 @@ mod tests {
         let (dark, light) = (multibounce(0.5, 0.1, true), multibounce(0.5, 0.9, true));
         assert!(light > dark + 0.1, "a light surface keeps more: {light} against {dark}");
         assert!((dark - 0.5).abs() < 0.03, "a dark one about the factor itself: {dark}");
+    }
+
+    #[test]
+    fn a_highlight_in_a_crease_dims_and_an_open_one_does_not() {
+        // Open: whole, whatever the view or the roughness.
+        for (v, r) in [(1.0, 0.0), (0.3, 0.5), (0.05, 1.0)] {
+            assert_eq!(specular_visibility(1.0, v, r, 1.0), 1.0);
+        }
+        // A rough surface's highlight falls as its diffuse light does.
+        assert!((specular_visibility(0.5, 0.7, 1.0, 1.0) - 0.5).abs() < 1e-3);
+        // A smooth one keeps more looked at straight on, and loses it at a grazing view.
+        let (straight, grazing) = (specular_visibility(0.5, 1.0, 0.0, 1.0), specular_visibility(0.5, 0.1, 0.0, 1.0));
+        assert!(straight > 0.7 && grazing < 0.3 && grazing > 0.0, "{straight} {grazing}");
+        // Never brighter, never negative; the weight scales it and 0 leaves the highlight whole.
+        for g in [0.0, 0.2, 0.6, 1.0] {
+            for v in [0.0, 0.4, 1.0] {
+                for r in [0.0, 0.3, 1.0] {
+                    let f = specular_visibility(g, v, r, 1.0);
+                    assert!((0.0..=1.0).contains(&f), "{g} {v} {r}: {f}");
+                    assert_eq!(specular_visibility(g, v, r, 0.0), 1.0);
+                    assert!((specular_visibility(g, v, r, 0.5) - (1.0 + f) * 0.5).abs() < 1e-6);
+                }
+            }
+        }
+        assert_eq!(HIGHLIGHTS, 1.0);
     }
 }

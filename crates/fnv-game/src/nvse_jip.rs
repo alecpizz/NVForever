@@ -40,8 +40,16 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
                 Some(XVal::Str(s)) => s.to_ascii_lowercase(),
                 _ => String::new(),
             };
-            // SetEditorID's names first, then loaded plugin records, then built-in
-            // JohnnyGuitar camera overlay references [design: ext-jg-nif-camera.md].
+            // SetEditorID's names first [hypothesis: SetEditorID precedence over
+            // JohnnyGuitar camera overlay refs is unprobed], then loaded plugin records,
+            // then built-in JohnnyGuitar camera overlay references
+            // (`JG_CameraOverlayRef_PreIS`, `JG_CameraOverlayRef_PreUI`) [observed:
+            // Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 + JohnnyGuitarNVSE 528,
+            // 2026-11-24, GSDocMitchellHouse (0x00103DF9), 10 official base masters,
+            // `w4d_35_jg_camera_overlay_nif_bound`
+            // (`tools/capture/nvse/catalogs/wave4d_extenders.json`, calling
+            // `EditorIDToFormID` on both overlay names):
+            // `camRef(preIS=FF001314,preUI=FF001318)`; no DLL or source consulted].
             let set = g.other.edids.iter().find(|(_, e)| e.eq_ignore_ascii_case(&id)).map(|(f, _)| *f);
             let found = if id == "playerref" {
                 Some(FormId::PLAYER_REF)

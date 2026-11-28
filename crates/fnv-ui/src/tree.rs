@@ -360,6 +360,12 @@ pub struct Tile {
     /// structural dependencies during [`Ui::update`] [design].
     root_evaluated: bool,
     pub traits: Vec<Trait>,
+    /// Case-insensitive FNV-1a hashes parallel to `traits` so [`Tile::trait_index`]
+    /// scans packed `u64`s instead of chasing `Trait`/`String` pointers [design].
+    trait_hashes: Vec<u64>,
+    /// Indices into `traits` that carry an expression (`expr.is_some()`), kept sorted
+    /// ascending so [`Ui::update`] skips plain value traits [design].
+    expr_traits: Vec<u32>,
     pub templates: Vec<Template>,
     /// False once unloaded: [`Ui::tile`] answers such a tile for an id kept past its
     /// tile's unloading.
@@ -384,16 +390,38 @@ impl Tile {
             root_shape: 0,
             root_evaluated: false,
             traits: Vec::new(),
+            trait_hashes: Vec::new(),
+            expr_traits: Vec::new(),
             templates: Vec::new(),
             live: false,
         }
     }
 
+    fn mark_expr_trait(&mut self, k: u32) {
+        if let Err(pos) = self.expr_traits.binary_search(&k) {
+            self.expr_traits.insert(pos, k);
+        }
+    }
+
+    fn unmark_expr_trait(&mut self, k: u32) {
+        if let Ok(pos) = self.expr_traits.binary_search(&k) {
+            self.expr_traits.remove(pos);
+        }
+    }
+
+    #[inline]
     pub fn trait_index(&self, name: &str) -> Option<usize> {
-        self.traits.iter().position(|t| t.name.eq_ignore_ascii_case(name))
+        let key = name_key(name);
+        for (i, &h) in self.trait_hashes.iter().enumerate() {
+            if h == key && self.traits[i].name.eq_ignore_ascii_case(name) {
+                return Some(i);
+            }
+        }
+        None
     }
 
     /// A trait's value by name (any case).
+    #[inline]
     pub fn get(&self, name: &str) -> Option<&Value> {
         self.trait_index(name).map(|k| &self.traits[k].value)
     }
@@ -975,6 +1003,7 @@ impl Ui {
                     old.sources.clear();
                     old.struct_deps.clear();
                     old.seen_valid = false;
+                    self.tiles[slot].mark_expr_trait(k as u32);
                     self.dirty = true;
                 }
                 None => {
@@ -989,6 +1018,7 @@ impl Ui {
                     old.sources.clear();
                     old.struct_deps.clear();
                     old.seen_valid = false;
+                    self.tiles[slot].unmark_expr_trait(k as u32);
                     if differs {
                         self.gen += 1;
                         let gen = self.gen;
@@ -1000,10 +1030,17 @@ impl Ui {
             None => {
                 self.gen += 1;
                 let gen = self.gen;
+                let key = name_key(&e.name);
+                let has_expr = expr.is_some();
                 let mut new = Trait::new(e.name.clone(), value, expr, gen);
                 new.write_serial = write_serial;
                 new.built_in_label = built_in_label;
+                let idx = self.tiles[slot].traits.len() as u32;
                 self.tiles[slot].traits.push(new);
+                self.tiles[slot].trait_hashes.push(key);
+                if has_expr {
+                    self.tiles[slot].expr_traits.push(idx);
+                }
                 self.tiles[slot].traits_shape += 1;
                 if e.name.eq_ignore_ascii_case("childcount") {
                     self.tiles[slot].explicit_childcount = true;
@@ -1079,10 +1116,21 @@ impl Ui {
     /// hud_xp_limbs all, hud_prompt2 p0-p8; menu-xml.md §5]. Unindexed lookup keeps
     /// file order [hypothesis: menu-xml.md §5].
     pub fn find_tile(&self, path: &str) -> Option<TileId> {
-        let segs = split(path);
+        let mut stack = [""; 16];
+        let mut heap = Vec::new();
+        let segs = split_slice(path, &mut stack, &mut heap);
         let (first, rest) = segs.split_first()?;
         let root = self.root_named(first)?;
         self.walk(root, rest, Count::FromLast)
+    }
+
+    /// Resolve a relative child path under an already-known `parent` tile (zero allocation)
+    /// [design].
+    pub fn find_child_path(&self, parent: TileId, rel: &str) -> Option<TileId> {
+        let mut stack = [""; 16];
+        let mut heap = Vec::new();
+        let segs = split_slice(rel, &mut stack, &mut heap);
+        self.walk(parent, segs, Count::FromLast)
     }
 
     /// The tile and trait a path names: [`Ui::find_tile`] of all but the last segment,
@@ -1094,7 +1142,9 @@ impl Ui {
     /// [`Ui::find_trait`] with `name:N` / `*:N` counted as `count` says (the extender's
     /// GetUIFloat and SetUIFloat count from the first child, [`Count::FromFirst`]).
     pub fn find_trait_counted(&self, path: &str, count: Count) -> Option<(TileId, usize)> {
-        let segs = split(path);
+        let mut stack = [""; 16];
+        let mut heap = Vec::new();
+        let segs = split_slice(path, &mut stack, &mut heap);
         let (name, tiles) = segs.split_last()?;
         let (first, rest) = tiles.split_first()?;
         let root = self.root_named(first)?;
@@ -1118,7 +1168,9 @@ impl Ui {
     /// `at` itself when the path is one segment (SortUIListBox's keys, read on each item)
     /// [design].
     pub fn find_trait_in(&self, at: TileId, path: &str) -> Option<(TileId, usize)> {
-        let segs = split(path);
+        let mut stack = [""; 16];
+        let mut heap = Vec::new();
+        let segs = split_slice(path, &mut stack, &mut heap);
         let (name, tiles) = segs.split_last()?;
         self.walk_to_trait(at, tiles, name, Count::FromLast)
     }
@@ -1127,33 +1179,51 @@ impl Ui {
         self.roots.iter().copied().find(|&r| self.tile(r).live && self.tile(r).name.eq_ignore_ascii_case(seg))
     }
 
-    /// The children of `at` a segment matches, in order.
-    fn matching(&self, at: TileId, seg: &str, count: Count) -> Vec<TileId> {
-        let (name, index) = match seg.rsplit_once(':') {
-            Some((n, k)) if k.trim().parse::<usize>().is_ok() => (n, k.trim().parse::<usize>().ok()),
-            _ => (seg, None),
-        };
-        let all = self.tile(at).children.iter().copied();
-        let named: Vec<TileId> = all.filter(|&c| name == "*" || self.tile(c).name.eq_ignore_ascii_case(name)).collect();
-        match (index, count) {
-            (Some(k), Count::FromLast) => named.iter().rev().nth(k).copied().into_iter().collect(),
+    /// The single child of `at` matching an indexed segment (`name:k` or `*:k`), without
+    /// allocating an intermediate `Vec`.
+    fn find_indexed_child(&self, at: TileId, name: &str, k: usize, count: Count) -> Option<TileId> {
+        let children = &self.tile(at).children;
+        let matches = |&c: &TileId| name == "*" || self.tile(c).name.eq_ignore_ascii_case(name);
+        match (k, count) {
+            (k, Count::FromLast) => children.iter().rev().copied().filter(matches).nth(k),
             // 0 the last, 1 the first, N the N-th, none past the one before the last.
-            (Some(0), Count::FromFirst) => named.last().copied().into_iter().collect(),
-            (Some(k), Count::FromFirst) => named.get(k - 1).filter(|_| k < named.len()).copied().into_iter().collect(),
-            (None, _) => named,
+            (0, Count::FromFirst) => children.iter().rev().copied().find(matches),
+            (k, Count::FromFirst) => {
+                let mut it = children.iter().copied().filter(matches);
+                let pick = it.nth(k - 1)?;
+                it.next().map(|_| pick)
+            }
         }
     }
 
     fn walk(&self, at: TileId, segs: &[&str], count: Count) -> Option<TileId> {
         let Some((seg, rest)) = segs.split_first() else { return Some(at) };
-        self.matching(at, seg, count).into_iter().find_map(|c| self.walk(c, rest, count))
+        let (name, index) = parse_seg(seg);
+        if let Some(k) = index {
+            return self.find_indexed_child(at, name, k, count).and_then(|c| self.walk(c, rest, count));
+        }
+        self.tile(at)
+            .children
+            .iter()
+            .copied()
+            .filter(|&c| name == "*" || self.tile(c).name.eq_ignore_ascii_case(name))
+            .find_map(|c| self.walk(c, rest, count))
     }
 
-    fn walk_to_trait(&self, at: TileId, segs: &[&str], name: &str, count: Count) -> Option<(TileId, usize)> {
-        match segs.split_first() {
-            None => self.tile(at).trait_index(name).map(|k| (at, k)),
-            Some((seg, rest)) => self.matching(at, seg, count).into_iter().find_map(|c| self.walk_to_trait(c, rest, name, count)),
+    fn walk_to_trait(&self, at: TileId, segs: &[&str], trait_name: &str, count: Count) -> Option<(TileId, usize)> {
+        let Some((seg, rest)) = segs.split_first() else {
+            return self.tile(at).trait_index(trait_name).map(|k| (at, k));
+        };
+        let (name, index) = parse_seg(seg);
+        if let Some(k) = index {
+            return self.find_indexed_child(at, name, k, count).and_then(|c| self.walk_to_trait(c, rest, trait_name, count));
         }
+        self.tile(at)
+            .children
+            .iter()
+            .copied()
+            .filter(|&c| name == "*" || self.tile(c).name.eq_ignore_ascii_case(name))
+            .find_map(|c| self.walk_to_trait(c, rest, trait_name, count))
     }
 
     /// The path of a tile, from its menu: `HUDMainMenu/HitPoints`.
@@ -1274,11 +1344,43 @@ impl Ui {
         if !self.is_live(tile) {
             return;
         }
-        let k = match self.tile(tile).trait_index(name) {
+        let k = self.trait_or_new(tile, name);
+        self.set_at(tile, k, v);
+    }
+
+    /// Sets a tile's string trait without allocating a new `String` when the trait
+    /// already holds the exact same text [design].
+    #[track_caller]
+    pub fn set_trait_str(&mut self, tile: TileId, name: &str, value: &str) {
+        self.entered("set_trait");
+        if !self.is_live(tile) {
+            return;
+        }
+        let k = self.trait_or_new(tile, name);
+        let unchanged = matches!(&self.tiles[tile.index as usize].traits[k].value, Value::Str(s) if s == value);
+        if unchanged {
+            self.gen += 1;
+            self.trait_writes += 1;
+            let gen = self.gen;
+            let write_serial = self.next_write_serial();
+            let tr = &mut self.tiles[tile.index as usize].traits[k];
+            tr.write_serial = write_serial;
+            tr.built_in_label = None;
+            tr.evaluated = gen;
+            tr.seen_valid = false;
+        } else {
+            self.set_at(tile, k, Value::Str(value.to_string()));
+        }
+    }
+
+    /// The index of a live tile's trait by name, made (empty) when it is not there.
+    fn trait_or_new(&mut self, tile: TileId, name: &str) -> usize {
+        match self.tile(tile).trait_index(name) {
             Some(k) => k,
             None => {
                 let slot = self.slot(tile).expect("a loaded tile");
                 self.tiles[slot].traits.push(Trait::new(name.to_string(), Value::default(), None, 0));
+                self.tiles[slot].trait_hashes.push(name_key(name));
                 self.tiles[slot].traits_shape += 1;
                 if name.eq_ignore_ascii_case("childcount") {
                     self.tiles[slot].explicit_childcount = true;
@@ -1287,8 +1389,36 @@ impl Ui {
                 self.bump_shape();
                 self.tiles[slot].traits.len() - 1
             }
-        };
-        self.set_at(tile, k, v);
+        }
+    }
+
+    /// Gives a tile's trait the operators `ops`, making the trait when it is not there (the
+    /// engine's own expression writes: an adapter that moves a mod's expression-driven place
+    /// keeps the file's operators working). The value is worked out afresh on the next
+    /// [`Ui::update`]; until then the trait keeps the value it had [design]. Nothing for an
+    /// id whose tile is unloaded.
+    #[track_caller]
+    pub fn set_trait_expr(&mut self, tile: TileId, name: &str, ops: Vec<crate::expr::Op>) {
+        self.entered("set_trait_expr");
+        if !self.is_live(tile) {
+            return;
+        }
+        let k = self.trait_or_new(tile, name);
+        self.gen += 1;
+        let gen = self.gen;
+        let write_serial = self.next_write_serial();
+        let slot = self.slot(tile).expect("a loaded tile");
+        let tr = &mut self.tiles[slot].traits[k];
+        tr.expr = Some(ops);
+        tr.changed = gen;
+        tr.write_serial = write_serial;
+        tr.evaluated = 0;
+        tr.built_in_label = None;
+        tr.sources.clear();
+        tr.struct_deps.clear();
+        tr.seen_valid = false;
+        self.tiles[slot].mark_expr_trait(k as u32);
+        self.dirty = true;
     }
 
     /// [design] The setting whose built-in label `name` of `tile` still holds as the file wrote
@@ -1408,6 +1538,16 @@ impl Ui {
         }
         let slot = self.slot(tile).expect("a loaded tile");
         self.tiles[slot].traits.remove(k);
+        self.tiles[slot].trait_hashes.remove(k);
+        self.tiles[slot].expr_traits.retain_mut(|x| {
+            if *x == k32 {
+                return false;
+            }
+            if *x > k32 {
+                *x -= 1;
+            }
+            true
+        });
         self.tiles[slot].traits_shape += 1;
         if name.eq_ignore_ascii_case("childcount") {
             self.tiles[slot].explicit_childcount = false;
@@ -1472,8 +1612,25 @@ impl Ui {
         self.add_template(src, at, template, name, Origin::Code)
     }
 
+    /// [design] Like [`Ui::add_code_tile_from_template`], attaching directly under `parent`
+    /// by [`TileId`] instead of resolving a string path. Avoids sibling collisions when
+    /// multiple list rows share the same display name or contain path delimiters (`/`, `\`,
+    /// `:`).
+    #[track_caller]
+    pub fn add_code_tile_from_template_under(&mut self, src: &dyn Source, parent: TileId, template: &str, name: Option<&str>) -> Option<TileId> {
+        self.entered("add_code_tile_from_template_under");
+        self.add_template_under(src, parent, template, name, Origin::Code)
+    }
+
     fn add_template(&mut self, src: &dyn Source, at: &str, template: &str, name: Option<&str>, origin: Origin) -> Option<TileId> {
         let parent = self.find_tile(at)?;
+        self.add_template_under(src, parent, template, name, origin)
+    }
+
+    fn add_template_under(&mut self, src: &dyn Source, parent: TileId, template: &str, name: Option<&str>, origin: Origin) -> Option<TileId> {
+        if !self.is_live(parent) {
+            return None;
+        }
         let mut look = Some(parent);
         let mut body = loop {
             let t = look?;
@@ -1609,18 +1766,17 @@ impl Ui {
             let mut this_pass = 0;
             let roots_shape = self.roots_shape;
             for id in 0..self.tiles.len() {
-                if !self.tiles[id].live {
+                if !self.tiles[id].live || self.tiles[id].expr_traits.is_empty() {
                     continue;
                 }
                 let tid = self.id_at(id);
                 let root = self.tiles[id].root;
                 let root_slot = self.slot(root);
                 let root_shape = root_slot.map_or(0, |r| self.tiles[r].root_shape);
-                for k in 0..self.tiles[id].traits.len() {
+                let expr_len = self.tiles[id].expr_traits.len();
+                for j in 0..expr_len {
+                    let k = self.tiles[id].expr_traits[j] as usize;
                     let tr = &self.tiles[id].traits[k];
-                    if tr.expr.is_none() {
-                        continue;
-                    }
                     let root_unchanged = tr.seen_root_shape == root_shape;
                     let roots_unchanged = tr.seen_roots_shape == roots_shape;
                     // What it read last (trait sources and structural resolution deps),
@@ -1817,7 +1973,19 @@ impl Ui {
             }
             names
         });
-        names.get(&name.to_ascii_lowercase()).copied()
+        // Avoid heap-allocating a lowercased String on the hot path for ASCII names <= 128 bytes.
+        let bytes = name.as_bytes();
+        if bytes.len() <= 128 && bytes.is_ascii() {
+            let mut buf = [0u8; 128];
+            for (dst, &b) in buf.iter_mut().zip(bytes) {
+                *dst = b.to_ascii_lowercase();
+            }
+            // SAFETY: ASCII lowercase bytes are valid UTF-8.
+            let lower = unsafe { std::str::from_utf8_unchecked(&buf[..bytes.len()]) };
+            names.get(lower).copied()
+        } else {
+            names.get(&name.to_ascii_lowercase()).copied()
+        }
     }
 
     fn read_trait(
@@ -1886,13 +2054,13 @@ impl Ui {
                     // the meter prefab's `_SolidMeter` and vertical_fade_line.xml's
                     // `_bottom_to_top` are `&false;`/`&true;` before the copy, and their
                     // `_filename_0`/`_Filename_1` are the two pictures; T15a].
-                    let name = match (&acc, name.ends_with('_')) {
-                        (Value::Num(n), true) if op.kind == OpKind::Copy => format!("{name}{}", *n as i64),
+                    let name: std::borrow::Cow<'_, str> = match (&acc, name.ends_with('_')) {
+                        (Value::Num(n), true) if op.kind == OpKind::Copy => std::borrow::Cow::Owned(format!("{name}{}", *n as i64)),
                         (v, true) if op.kind == OpKind::Copy => match v.sym_name().as_deref().and_then(crate::value::sym_number) {
-                            Some(n) => format!("{name}{}", n as i64),
-                            None => name.clone(),
+                            Some(n) => std::borrow::Cow::Owned(format!("{name}{}", n as i64)),
+                            None => std::borrow::Cow::Borrowed(name.as_str()),
                         },
-                        _ => name.clone(),
+                        _ => std::borrow::Cow::Borrowed(name.as_str()),
                     };
                     self.read_trait(me, src, &name, deps, sources, struct_deps.as_deref_mut())
                 }
@@ -1958,8 +2126,30 @@ fn prefab_path(file: &str) -> String {
     parts.join("\\")
 }
 
-fn split(path: &str) -> Vec<&str> {
-    path.split(['/', '\\']).map(str::trim).filter(|s| !s.is_empty()).collect()
+fn parse_seg(seg: &str) -> (&str, Option<usize>) {
+    match seg.rsplit_once(':') {
+        Some((n, k)) => match k.trim().parse::<usize>() {
+            Ok(idx) => (n, Some(idx)),
+            Err(_) => (seg, None),
+        },
+        None => (seg, None),
+    }
+}
+
+fn split_slice<'a, 'b>(path: &'a str, stack: &'b mut [&'a str; 16], heap: &'b mut Vec<&'a str>) -> &'b [&'a str] {
+    let mut len = 0usize;
+    for s in path.split(['/', '\\']).map(str::trim).filter(|s| !s.is_empty()) {
+        if heap.is_empty() && len < stack.len() {
+            stack[len] = s;
+            len += 1;
+        } else {
+            if heap.is_empty() {
+                heap.extend_from_slice(&stack[..len]);
+            }
+            heap.push(s);
+        }
+    }
+    if heap.is_empty() { &stack[..len] } else { heap.as_slice() }
 }
 
 /// Invalid/overflowing extra-operator results do not enter renderer traits [hypothesis].
@@ -2077,6 +2267,10 @@ fn apply(kind: OpKind, acc: Value, a: Value, me: TileId, k: usize) -> Value {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "trait_hash_and_expr_index_tests.rs"]
+mod trait_hash_and_expr_index_tests;
 
 #[cfg(test)]
 mod write_serial_tests {

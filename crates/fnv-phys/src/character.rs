@@ -87,6 +87,11 @@ pub struct CharacterParams {
 /// jumped as high; a crouched height is not captured).
 pub const HEIGHT: f32 = 128.9;
 
+/// Crouched capsule height share when the optional `sneak-bounding-box` setting (#3845)
+/// is active [design: shrinks standing height 128.9 to ~79.9 game units, clearing low
+/// openings while keeping cone ends and crouched eye height well inside the collider].
+pub const CROUCH_HEIGHT_SCALE: f32 = 0.62;
+
 /// Steepest slope walked by actors [design, #2511]: 56 degrees leaves about 1.7
 /// degrees below the default cone face (atan(1.58), physics.md §6.4.1/§6.9), so a thin
 /// wall's edge cannot be climbed along that face beyond `step_height`. It still admits
@@ -341,6 +346,9 @@ const SPOT_RAYS: usize = 3;
 /// a ray finds the support under the feet's middle; a cone that wide standing on a stair
 /// rests on the next step's edge, higher than that, as it does walking there].
 const SPOT_LIFTS: [f32; 3] = [0.0, 0.5, 1.0];
+/// A ray up from the landscape meets a skin laid on it at its top within this, game units
+/// ([`PhysWorld::character_spot`]) [design, #4826: the same triangle met from below].
+const SKIN_SAME: f32 = 0.5;
 
 /// Why [`PhysWorld::character_spot`] found no place.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -427,6 +435,43 @@ impl PhysWorld {
         self.remove_body(c.body);
     }
 
+    /// Resize `c`'s capsule height (keeping `c.feet` fixed), for the optional
+    /// `sneak-bounding-box` setting (#3845). When growing taller (standing up), verifies
+    /// headroom above `c.feet` and returns `false` without resizing if overhead geometry
+    /// blocks it [design: `docs/spec-notes/sneak-bounding-box.md`].
+    pub fn set_character_height(&mut self, c: &mut Character, height: f32) -> bool {
+        if !height.is_finite() || height <= 2.0 * c.params.radius {
+            return false;
+        }
+        if (c.params.height - height).abs() < 1e-3 {
+            return true;
+        }
+        let mut next_params = c.params;
+        next_params.height = height;
+        let next_shape = capsule(&next_params, self.k);
+        if height > c.params.height {
+            let mut probe = c.clone();
+            probe.params = next_params;
+            probe.shape = next_shape.clone();
+            let lift = c.params.skin.max(0.5);
+            let test_feet = [c.feet[0], c.feet[1], c.feet[2] + lift];
+            if !self.queries().character_overlap(&probe, test_feet).is_empty() {
+                return false;
+            }
+        }
+        c.params.height = height;
+        c.shape = next_shape;
+        let colliders: Vec<ColliderHandle> = self.w.bodies[c.body].colliders().to_vec();
+        for col in colliders {
+            self.w.colliders[col].set_shape(c.shape.clone());
+        }
+        let center = c.center(self.k);
+        self.w.bodies[c.body].set_translation(center, true);
+        self.body_placed(c.body);
+        self.mark_dirty(crate::world::DirtyBy::Bodies);
+        true
+    }
+
     /// Move a character teleport-style (no sweep), e.g. on a door transition.
     pub fn place_character(&mut self, c: &mut Character, feet: [f32; 3]) {
         c.feet = feet;
@@ -463,14 +508,12 @@ impl PhysWorld {
         let filter = crate::world::Filter { exclude_layers: c.ignore_layers, no_dynamic: true, no_actors: true, ..Default::default() };
         let q = self.queries();
         let (mut top, bottom) = (at[2] + SPOT_UP, at[2] - SPOT_DOWN);
-        let mut support: Option<(f32, f32)> = None;
+        // Walkable surfaces met: (rest height, distance from `at`, the hit).
+        let mut supports: Vec<(f32, f32, crate::world::RayHit)> = Vec::new();
         for _ in 0..SPOT_RAYS {
             let hits = q.ray_all([at[0], at[1], top], [0.0, 0.0, -1.0], top - bottom, &filter);
             for hit in hits.iter().filter(|h| h.normal[2] >= p.max_slope_deg.to_radians().cos()) {
-                let off = (hit.point[2] - at[2]).abs();
-                if support.is_none_or(|(_, best)| off < best) {
-                    support = Some((hit.point[2] + p.rest_gap(hit.shell), off));
-                }
+                supports.push((hit.point[2] + p.rest_gap(hit.shell), (hit.point[2] - at[2]).abs(), *hit));
             }
             let Some(nearest) = hits.first() else { break };
             top = nearest.point[2] - 0.5;
@@ -478,12 +521,30 @@ impl PhysWorld {
                 break;
             }
         }
-        let Some((z, _)) = support else { return Err(SpotRefused::NoSupport) };
-        SPOT_LIFTS
-            .iter()
-            .map(|share| [at[0], at[1], z + share * p.step_height])
-            .find(|&feet| q.character_overlap(c, feet).is_empty())
-            .ok_or(SpotRefused::NoRoom)
+        let Some(&(z, _, low)) = supports.iter().min_by(|a, b| a.1.total_cmp(&b.1)) else { return Err(SpotRefused::NoSupport) };
+        let fits = |z: f32| SPOT_LIFTS.iter().map(|share| [at[0], at[1], z + share * p.step_height]).find(|&feet| q.character_overlap(c, feet).is_empty());
+        if let Some(feet) = fits(z) {
+            return Ok(feet);
+        }
+        // The landscape under a skin laid on it (a road or path mesh over the ground): the
+        // skin's top, when the first thing over the landscape there is that very surface
+        // [design, #4826: a navmesh triangle is coarse and runs under a road; on the
+        // landscape below the road a body overlaps the road, so the place was refused and
+        // a follower stuck at the road's edge was left to the navmesh surface, under the
+        // road. A slab, table or upper floor has its underside below its top, a space a
+        // body would be put into: those still leave no room, the level asked for kept].
+        if matches!(low.owner, crate::world::Owner::Terrain { .. }) {
+            let skin = supports.iter().filter(|s| s.2.point[2] > low.point[2] && !matches!(s.2.owner, crate::world::Owner::Terrain { .. })).min_by(|a, b| a.2.point[2].total_cmp(&b.2.point[2]));
+            if let Some(&(z, _, upper)) = skin {
+                let rise = upper.point[2] - low.point[2];
+                let over = q.ray([at[0], at[1], low.point[2] + 0.1], [0.0, 0.0, 1.0], rise + 1.0, &filter);
+                let laid_on = over.is_some_and(|h| h.owner == upper.owner && (h.point[2] - upper.point[2]).abs() < SKIN_SAME);
+                if laid_on {
+                    return fits(z).ok_or(SpotRefused::NoRoom);
+                }
+            }
+        }
+        Err(SpotRefused::NoRoom)
     }
 
     /// One fixed step of character movement (call once per [`PhysWorld::step`], before
@@ -1386,5 +1447,75 @@ mod tests {
         assert!((rise + max / 60.0).abs() < 1e-5 && end == -max, "{rise} {end}");
         // No gravity: the speed carries the feet.
         assert_eq!(gravity_step(-10.0, 0.0, 0.5, Some(max)), (-5.0, -10.0));
+    }
+
+    #[test]
+    fn crouch_height_passes_low_opening_and_blocks_standup_under_lintel() {
+        use crate::world::{PhysParams, PhysWorld, RefPose};
+        use fnv_collide::{CollisionObject, Iso, Motion, Shape};
+
+        let box_obj = |half_extents: [f32; 3]| CollisionObject {
+            node: None,
+            node_block: 0,
+            node_transform: Iso::IDENTITY,
+            body_transform: Iso::IDENTITY,
+            motion: Motion::Static,
+            layer: 1,
+            mass: 0.0,
+            friction: 0.5,
+            restitution: 0.0,
+            shape: Shape::Box { half_extents }.into(),
+            shell: 0.0,
+            material: None,
+            wind: false,
+        };
+        let pose = |id: u32, position: [f32; 3]| RefPose {
+            form_id: id,
+            position,
+            rotation: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+            scale: 1.0,
+        };
+
+        let mut world = PhysWorld::new(PhysParams::default());
+        // Wide static floor with top surface at z = 0.
+        world.add_ref(&pose(1, [0.0, 0.0, -10.0]), &[box_obj([500.0, 500.0, 10.0])]);
+        // Low lintel spanning x = 80..180, bottom at z = 100 (blocks standing 128.9, clears crouched ~79.9).
+        world.add_ref(&pose(2, [130.0, 0.0, 125.0]), &[box_obj([50.0, 200.0, 25.0])]);
+        world.step();
+
+        let mut ch = world.add_character(10, CharacterParams::default(), [0.0, 0.0, 1.0]);
+        for _ in 0..10 {
+            world.move_character(&mut ch, CharacterInput::default());
+            world.step();
+        }
+        // Standing (128.9) cannot pass x = 80 - radius (~58).
+        for _ in 0..45 {
+            world.move_character(&mut ch, CharacterInput { velocity: [200.0, 0.0], ..Default::default() });
+            world.step();
+        }
+        assert!(ch.feet[0] < 70.0, "standing character must be blocked by lintel, got x={}", ch.feet[0]);
+
+        // Shrink for sneak-bounding-box -> walks cleanly under the lintel.
+        let crouched = HEIGHT * CROUCH_HEIGHT_SCALE;
+        assert!(world.set_character_height(&mut ch, crouched));
+        assert!((ch.params.height - crouched).abs() < 1e-3);
+        for _ in 0..45 {
+            world.move_character(&mut ch, CharacterInput { velocity: [120.0, 0.0], ..Default::default() });
+            world.step();
+        }
+        assert!(ch.feet[0] > 95.0 && ch.feet[0] < 170.0, "crouched character should be under lintel, got x={}", ch.feet[0]);
+
+        // Headroom check refuses to stand back up while directly underneath the lintel.
+        assert!(!world.set_character_height(&mut ch, HEIGHT), "must not stand up into low lintel");
+        assert!((ch.params.height - crouched).abs() < 1e-3);
+
+        // Walk clear past the lintel (x > 210), then standing back up succeeds.
+        for _ in 0..90 {
+            world.move_character(&mut ch, CharacterInput { velocity: [150.0, 0.0], ..Default::default() });
+            world.step();
+        }
+        assert!(ch.feet[0] > 210.0, "should clear lintel, got x={}", ch.feet[0]);
+        assert!(world.set_character_height(&mut ch, HEIGHT), "should stand back up once clear");
+        assert!((ch.params.height - HEIGHT).abs() < 1e-3);
     }
 }

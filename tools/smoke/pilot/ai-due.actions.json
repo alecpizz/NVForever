@@ -1,0 +1,25 @@
+{
+  "format": "fnv.script.actions/1",
+  "title": "Pilot smoke: steps left to the AI are checked afterwards",
+  "given": [],
+  "actions": [
+    {
+      "op": "note",
+      "text": "A step left to the AI that is already true (Sunny at her own place) is said done; one the AI never does (Sunny at coyote 6's place in the hills) is an ai_not_done finding when the chain ends."
+    },
+    {
+      "op": "patrol_point",
+      "actor": "SunnyRef",
+      "point": "SunnyRef"
+    },
+    {
+      "op": "patrol_point",
+      "actor": "SunnyRef",
+      "point": "VERGSCoyote6REF"
+    },
+    {
+      "op": "advance_seconds",
+      "seconds": 2
+    }
+  ]
+}

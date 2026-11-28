@@ -43,7 +43,7 @@ pub struct Message {
 /// A quest line on screen.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Quest {
-    /// "Quest added" (and its kinds, "You have discovered") over the name in capitals;
+    /// "New quest" (and its kinds, "Place found") over the name in capitals;
     /// `discovered` for a map discovery, which `Region_Location` gets too.
     Banner { label: String, name: String, strength: f64, discovered: bool },
     /// Objectives, each with its text (with "COMPLETED: " when done) and whether it is.
@@ -106,7 +106,7 @@ pub fn location_place((x, y): (f64, f64)) -> (f64, f64) {
     (x + QUEST_PIECE.0 - LOCATION_PIECE.0, y + QUEST_PIECE.1 - LOCATION_PIECE.1)
 }
 
-/// The label ("Quest added"), the name (font 8, [observed: quest-messages.md §4]) and the
+/// The label ("New quest"), the name (font 8, [observed: quest-messages.md §4]) and the
 /// first objective, from `QuestReminder`'s top left: each tile's top its font's line
 /// (`super::draw::text_base`) over the hand-built HUD's line, so the tiles draw the texts
 /// where it does (#979: the name's top 30 over its line, the label's and the
@@ -235,7 +235,7 @@ fn write_message(ui: &mut Ui, m: Option<&Message>) {
 /// §14.11]; directly under the piece at the hand-built HUD's places [hypothesis: which of
 /// its rects, `QuestStages` (y 40) or `QuestAdded` (y 80), the original's copies go under is
 /// not read; the first objective's top, 39, is next to `QuestStages`' 40]. A discovery is
-/// a banner here too [observed: the owner's screenshot "Discovered" at "Quest added"'s place
+/// a banner here too [observed: the owner's screenshot "Discovered" at "New quest"'s place
 /// and fonts, quest-messages.md].
 fn write_quest(ui: &mut Ui, q: Option<&Quest>, lines: &LineCount<'_>) {
     if ui.find_tile(&format!("{HUD}/QuestReminder")).is_none() {
@@ -488,7 +488,7 @@ mod tests {
     }
 
     fn discovery(name: &str, strength: f64) -> Notices {
-        Notices { quest: Some(Quest::Banner { label: "You have discovered".into(), name: name.into(), strength, discovered: true }), ..Default::default() }
+        Notices { quest: Some(Quest::Banner { label: "Place found".into(), name: name.into(), strength, discovered: true }), ..Default::default() }
     }
 
     fn message(text: &str, strength: f64) -> Notices {
@@ -550,11 +550,11 @@ mod tests {
         // Nothing before the first notice: QuestReminder's *:0 stays its file's QuestAdded.
         write(&mut ui, &Notices::default(), &lines);
         assert_eq!(ui.tile(ui.find_tile("HUDMainMenu/QuestReminder/*:0").unwrap()).name, "QuestAdded");
-        let banner = Quest::Banner { label: "Quest added".into(), name: "Back in the Saddle".into(), strength: 1.0, discovered: false };
+        let banner = Quest::Banner { label: "New quest".into(), name: "Back in the Saddle".into(), strength: 1.0, discovered: false };
         write(&mut ui, &Notices { quest: Some(banner), ..Default::default() }, &lines);
         let label = copies(&ui, "QuestReminder", "label")[0];
         let title = copies(&ui, "QuestReminder", "title")[0];
-        // "Quest added" on 247, the name in font 8 on 311, from x 45 (quest-messages.md §4):
+        // "New quest" on 247, the name in font 8 on 311, from x 45 (quest-messages.md §4):
         // the label's top 24 over its line (font 7), the name's 30 (font 8).
         fn at(ui: &Ui, t: TileId) -> (f64, f64) {
             (ui.tile(t).get("x").unwrap().num(), ui.tile(t).get("y").unwrap().num())
@@ -604,7 +604,7 @@ mod tests {
     fn a_discovery_is_written_under_region_location_too_and_drawn_once() {
         let mut ui = hud();
         // Another quest notice first: nothing under Region_Location.
-        let added = Quest::Banner { label: "Quest added".into(), name: "Back in the Saddle".into(), strength: 1.0, discovered: false };
+        let added = Quest::Banner { label: "New quest".into(), name: "Back in the Saddle".into(), strength: 1.0, discovered: false };
         write(&mut ui, &Notices { quest: Some(added.clone()), ..Default::default() }, &lines);
         assert!(copies(&ui, "Region_Location", "label").is_empty());
         write(&mut ui, &discovery("Goodsprings", 0.5), &lines);
@@ -617,17 +617,17 @@ mod tests {
         // 223, the name's on 281, as QuestReminder's (45, 200) + (0, 23) and (-1.5, 81).
         assert_eq!(traits(&ui, label), [0.0, -505.0, 127.5, 0.0]);
         assert_eq!(traits(&ui, title), [-1.5, -447.0, 127.5, 0.0]);
-        assert_eq!(ui.tile(label).get("string").unwrap().text(), "You have discovered");
+        assert_eq!(ui.tile(label).get("string").unwrap().text(), "Place found");
         assert_eq!((ui.tile(title).get("string").unwrap().text(), ui.tile(title).get("font").unwrap().num()), ("GOODSPRINGS".into(), 8.0));
         // QuestReminder's banner holds the same and is the one shown.
         let shown = copies(&ui, "QuestReminder", "label")[0];
-        assert_eq!((ui.tile(shown).get("string").unwrap().text(), ui.tile(shown).get("visible").unwrap().num()), ("You have discovered".into(), 1.0));
+        assert_eq!((ui.tile(shown).get("string").unwrap().text(), ui.tile(shown).get("visible").unwrap().num()), ("Place found".into(), 1.0));
         // Drawn once: at the hand-built HUD's place, from QuestReminder; nothing from
         // Region_Location.
         ui.update();
         let menu = ui.menu(HUD).unwrap();
         let (drawn, _) = pieces(&ui, menu, &plain, Select::Whole { kept: &kept_pieces(&ui), strip: None }, false);
-        let said: Vec<_> = drawn.iter().filter(|p| matches!(&p.look, Look::Text { string, .. } if string == "You have discovered")).collect();
+        let said: Vec<_> = drawn.iter().filter(|p| matches!(&p.look, Look::Text { string, .. } if string == "Place found")).collect();
         assert_eq!(said.len(), 1);
         assert_eq!((said[0].tile, said[0].rect.left, said[0].rect.top), (shown, 45.0, 223.0));
         assert!(!drawn.iter().any(|p| ui.path_of(p.tile).starts_with("HUDMainMenu/Region_Location/")));
@@ -755,20 +755,20 @@ mod tests {
     fn the_log_names_what_each_area_shows() {
         let n = Notices {
             message: Some(Message { text: "Two\nlines".into(), icon: String::new(), strength: 1.0 }),
-            quest: Some(Quest::Banner { label: "You have discovered".into(), name: "Goodsprings".into(), strength: 1.0, discovered: true }),
+            quest: Some(Quest::Banner { label: "Place found".into(), name: "Goodsprings".into(), strength: 1.0, discovered: true }),
             subtitles: vec!["Hi.".into()],
         };
         assert_eq!(
             describe(&n),
             [
                 Some("tiles: Messages text \"Two / lines\"".to_string()),
-                Some("tiles: QuestReminder banner You have discovered: GOODSPRINGS".to_string()),
-                Some("tiles: Region_Location banner You have discovered: GOODSPRINGS (not drawn)".to_string()),
+                Some("tiles: QuestReminder banner Place found: GOODSPRINGS".to_string()),
+                Some("tiles: Region_Location banner Place found: GOODSPRINGS (not drawn)".to_string()),
                 Some("tiles: Subtitles text \"Hi.\"".to_string()),
             ]
         );
         // Another banner: QuestReminder's line only.
-        let added = Notices { quest: Some(Quest::Banner { label: "Quest added".into(), name: "Back in the Saddle".into(), strength: 1.0, discovered: false }), ..Default::default() };
+        let added = Notices { quest: Some(Quest::Banner { label: "New quest".into(), name: "Back in the Saddle".into(), strength: 1.0, discovered: false }), ..Default::default() };
         assert_eq!(describe(&added)[2], None);
         assert_eq!(describe(&Notices::default()), [None, None, None, None]);
     }

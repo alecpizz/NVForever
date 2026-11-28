@@ -5,17 +5,7 @@
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
-mod app;
-mod catalog;
-mod display;
-mod dlss;
-mod fonts;
-mod launch;
-mod news;
-mod reports;
-mod start;
-mod theme;
-mod update;
+use nvf_launcher::App;
 
 const ICON: &[u8] = include_bytes!("../assets/icon-64.png");
 
@@ -29,5 +19,5 @@ fn main() -> eframe::Result {
         viewport = viewport.with_icon(icon);
     }
     let options = eframe::NativeOptions { viewport, ..Default::default() };
-    eframe::run_native("NVForever Launcher", options, Box::new(|cc| Ok(Box::new(app::App::new(cc)))))
+    eframe::run_native("NVForever Launcher", options, Box::new(|cc| Ok(Box::new(App::new(cc)))))
 }

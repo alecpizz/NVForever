@@ -221,7 +221,10 @@ pub fn run(cmd: ScriptCmd) -> anyhow::Result<Value> {
             let fjson = functions_json(&a)?;
             with_load_order(&a, |l, lo, schema| Ok(coverage(l, lo, schema, &fjson)))
         }
-        ScriptCmd::Stubs { a } => with_load_order(&a, |l, lo, _| Ok(stubs(l, lo))),
+        ScriptCmd::Stubs { a } => {
+            let fjson = functions_json(&a)?;
+            with_load_order(&a, |l, lo, schema| Ok(stubs(l, lo, schema, &fjson)))
+        }
         ScriptCmd::Uses { a } => {
             let fjson = functions_json(&a)?;
             with_load_order(&a, |l, lo, schema| Ok(uses(l, lo, schema, &fjson)))
@@ -238,7 +241,7 @@ pub fn run(cmd: ScriptCmd) -> anyhow::Result<Value> {
                 _ => 0,
             });
             let reader: fnv_game::mod_files::Reader = std::sync::Arc::new(move |p: &str| v2.as_ref().as_ref().and_then(|v| v.read(p)).and_then(Result::ok));
-            fnv_game::mod_files::set_roots(fnv_game::mod_files::Roots { read: vec![a.lo.data_dir.clone()], config: config.clone(), write: None, lookup: Some(lookup), reader: Some(reader), archives });
+            fnv_game::mod_files::set_roots(fnv_game::mod_files::Roots { hosted_from: None, read: vec![a.lo.data_dir.clone()], config: config.clone(), write: None, lookup: Some(lookup), reader: Some(reader), archives, list: None });
             weather_hook(&a);
             run_actions(&a, &actions, !no_voice_lengths, &ini, coverage.as_deref())
         }
@@ -810,13 +813,41 @@ fn shares(rows: &[(u64, Value)], key: &str) -> Value {
     })
 }
 
+/// First opcode past the base game's range [documented: GECK wiki "NVSE Opcode Base"].
+const EXTENDER_OPCODE_BASE: u16 = 0x1400;
+
+/// The extender opcodes among `ops` that have no game opcode registered but whose names
+/// reach a named handler, as the game runs them (`fnv_game::nvse::reaches_handler`,
+/// #1408): built, though the game's registry does not list them. Probed over an empty
+/// load order.
+fn extender_handled(schema: &Schema, table: &FunctionTable, fjson: &Value, ops: impl IntoIterator<Item = u16>) -> std::collections::HashSet<u16> {
+    let ops: Vec<u16> = ops.into_iter().filter(|op| *op >= EXTENDER_OPCODE_BASE && fnv_game::functions::lookup(*op).is_none()).collect();
+    if ops.is_empty() {
+        return Default::default();
+    }
+    let plugins: Vec<fnv_esm::Plugin> = Vec::new();
+    let Ok(lo) = LoadOrder::new(&plugins) else { return Default::default() };
+    let refs = fnv_sim::RefTable::build(&lo, schema);
+    let forms = fnv_sim::FormStore::build(&lo, schema);
+    let data = fnv_game::GameData::build(&lo, schema, table.clone(), fjson, &refs);
+    let mut g = fnv_game::game::Game::new(&data, fnv_sim::World::new(&forms, &refs, fnv_sim::SimConfig::default()), fnv_game::game::GameConfig::default());
+    ops.into_iter().filter(|op| fnv_game::nvse::reaches_handler(&mut g, table, *op)).collect()
+}
+
+/// The opcodes the catalogue counts a use of (script calls or condition uses).
+fn used_in_catalogue(table: &FunctionTable) -> Vec<u16> {
+    table.functions.iter().filter(|(_, f)| f.script_calls + f.condition_uses > 0).map(|(op, _)| *op).collect()
+}
+
 fn coverage(l: &Loaded, lo: &LoadOrder<'_>, schema: &Schema, fjson: &Value) -> Value {
     let done = decode_units(l);
     let mut stats = Stats::default();
     for d in &done {
         stats.program(&d.decoded);
     }
-    let implemented = |op: u16| fnv_game::functions::implemented(op);
+    // Extender functions the game runs by name count as implemented (#1408).
+    let by_name = extender_handled(schema, &l.table, fjson, stats.calls.keys().copied().chain(used_in_catalogue(&l.table)));
+    let implemented = |op: u16| fnv_game::functions::implemented(op) || by_name.contains(&op);
     let stub = |op: u16| fnv_game::functions::is_stub(op);
     let mut rows: Vec<(u64, Value)> = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -938,13 +969,15 @@ fn uses(l: &Loaded, lo: &LoadOrder<'_>, schema: &Schema, fjson: &Value) -> Value
 /// load order's decoded scripts (object, quest and effect scripts, quest stage, dialogue,
 /// package and terminal result scripts); condition uses are the catalogue's
 /// (`functions.json`, CTDA over the masters).
-fn stubs(l: &Loaded, lo: &LoadOrder<'_>) -> Value {
+fn stubs(l: &Loaded, lo: &LoadOrder<'_>, schema: &Schema, fjson: &Value) -> Value {
     use fnv_game::functions::stubs::{audit, Status};
     let done = decode_units(l);
     let mut stats = Stats::default();
     for d in &done {
         stats.program(&d.decoded);
     }
+    // Extender functions the game runs by name are handled (#1408).
+    let by_name = extender_handled(schema, &l.table, fjson, stats.calls.keys().copied().chain(used_in_catalogue(&l.table)));
     let calls = |op: u16| stats.calls.get(&op).map_or(0, |c| c[0] + c[1]);
     let conds = |op: u16| l.table.get(op).map_or(0, |f| f.condition_uses);
     let origin = |op: u16| l.table.get(op).and_then(|f| f.origin.clone()).unwrap_or_default();
@@ -976,11 +1009,22 @@ fn stubs(l: &Loaded, lo: &LoadOrder<'_>) -> Value {
         .table
         .functions
         .iter()
-        .filter(|(op, _)| **op >= 0x1000 && fnv_game::functions::lookup(**op).is_none())
+        .filter(|(op, _)| **op >= 0x1000 && fnv_game::functions::lookup(**op).is_none() && !by_name.contains(op))
         .map(|(op, f)| (calls(*op), f.condition_uses, op, f))
         .filter(|(c, k, ..)| c + k > 0)
         .map(|(c, k, op, f)| (c + k, json!({"opcode": format!("0x{op:04X}"), "name": f.name, "origin": origin(*op), "calls": c, "condition_uses": k})))
         .collect();
+    // Opcodes the load order's scripts call that the function table has no name for (a
+    // plugin's commands the catalogue never saw, or bytes no name matches: the
+    // catalogue's `unresolved_opcodes`), and nothing answers (#1408). Kept apart from
+    // `unhandled`, which lists named functions.
+    let mut unnamed: Vec<(u64, Value)> = stats
+        .calls
+        .iter()
+        .filter(|(op, _)| **op >= 0x1000 && l.table.get(**op).is_none() && fnv_game::functions::lookup(**op).is_none() && !by_name.contains(op))
+        .map(|(op, c)| (c[0] + c[1], json!({"opcode": format!("0x{op:04X}"), "calls": c[0] + c[1]})))
+        .collect();
+    unnamed.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1["opcode"].as_str().cmp(&b.1["opcode"].as_str())));
     // Condition indices the catalogue does not count (no `condition_uses`, often no page
     // at all) that a CTDA in the load order uses and nothing answers: the registry has
     // no function and `Game::condition_value` no handler (#3614: 123 and 258 reached
@@ -992,17 +1036,19 @@ fn stubs(l: &Loaded, lo: &LoadOrder<'_>) -> Value {
             let _ = r.visit_subrecords(|sig, data| {
                 if sig == b"CTDA" && data.len() >= 10 {
                     let f = u16::from_le_bytes([data[8], data[9]]);
-                    if fnv_game::functions::lookup(0x1000 + f).is_none() && !fnv_game::cond::answered_without_opcode(f) {
+                    if fnv_game::functions::lookup(0x1000 + f).is_none() && !fnv_game::cond::answered_without_opcode(f) && !by_name.contains(&(0x1000 + f)) {
                         *ctda.entry(f).or_default() += 1;
                     }
                 }
             });
         }
     }
+    // An extender condition is answered by name too (`Game::extender_condition`).
+    let by_name_ctda = extender_handled(schema, &l.table, fjson, ctda.keys().map(|f| 0x1000 + f));
     for (f, k) in ctda {
         let op = 0x1000 + f;
         let opcode = format!("0x{op:04X}");
-        if listed.contains(&opcode) {
+        if listed.contains(&opcode) || by_name_ctda.contains(&op) {
             continue;
         }
         let name = l.table.get(op).map(|t| t.name.clone()).unwrap_or_else(|| format!("condition index {f}"));
@@ -1022,9 +1068,11 @@ fn stubs(l: &Loaded, lo: &LoadOrder<'_>) -> Value {
             "stub_calls": stub_calls,
             "stub_condition_uses": stub_conds,
             "unhandled_used": unhandled.len(),
+            "unnamed_called": unnamed.len(),
         },
         "functions": rows.into_iter().map(|r| r.1).collect::<Vec<_>>(),
         "unhandled": unhandled.into_iter().map(|r| r.1).collect::<Vec<_>>(),
+        "unnamed": unnamed.into_iter().map(|r| r.1).collect::<Vec<_>>(),
     })
 }
 

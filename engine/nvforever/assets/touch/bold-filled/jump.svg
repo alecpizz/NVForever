@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Original NVForever geometry; Bold filled family. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="currentColor" stroke="none" color="#ffffff" fill-rule="evenodd" stroke-width="0" stroke-linecap="round" stroke-linejoin="round">
+  <title>Jump</title>
+  <path d="M 3 13 L 10 4 L 17 13 L 12 13 L 12 22 L 8 22 L 8 13 Z M 18 15 L 23 15 L 23 21 L 28 23 L 28 28 L 15 28 L 15 23 L 18 23 Z"/>
+</svg>

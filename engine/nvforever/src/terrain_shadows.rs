@@ -143,6 +143,14 @@
 //! (`Graphics::terrain_shadows`, [`follow_graphics`]) sets it; `NVF_PLAY_DEBUG_TERRAIN_SHADOWS=1`
 //! turns it on whatever the row says ([`TerrainShadowsForced`]).
 //!
+//! **Producer and surfaces** (#3032 stage 3) [design]: the producer (T0's
+//! heightfield, the jobs, the publication, the dump) follows
+//! [`TerrainShadowsProducerWanted`] = the switch above or the light in the air
+//! (`medium_air_demand::AirWanted`, which reads the publication in the render world); the
+//! surfaces ([`feed_sun_visibility`]) follow [`TerrainShadowsWanted`] alone, so the air never
+//! shades surfaces by the map nor changes their pipelines. Both are written by
+//! [`follow_graphics`] only; with the air off the two are equal.
+//!
 //! **Into the lighting** ([`feed_sun_visibility`]): the switch decides
 //! `SunVisibility::terrain_enabled` (the views' terrain variant and their pipelines), the
 //! publication only fills `SunVisibility::terrain` (the uniform and the texture binding):
@@ -502,16 +510,49 @@ pub fn update_reason(basis: Option<&Basis>, now: f32, version: u64, toward: Vec3
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TerrainShadowsWanted(pub bool);
 
+/// Whether the map is produced (T0's heightfield on, jobs given out, the map published and
+/// extracted): [`TerrainShadowsWanted`] or the light in the air
+/// (`medium_air_demand::AirWanted`), which reads the map but never shades surfaces by it
+/// (module notes, "Producer and surfaces"). Written by [`follow_graphics`] only.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TerrainShadowsProducerWanted(pub bool);
+
 /// `NVF_PLAY_DEBUG_TERRAIN_SHADOWS=1`: terrain shadows on whatever the settings row says.
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TerrainShadowsForced(pub bool);
 
-/// The settings row (`Graphics::terrain_shadows`) or the debug override decide the switch.
-pub fn follow_graphics(g: Res<crate::graphics::Graphics>, forced: Res<TerrainShadowsForced>, mut wanted: ResMut<TerrainShadowsWanted>) {
+/// The settings row (`Graphics::terrain_shadows`) or the debug override decide the switch;
+/// the switch or the light in the air (absent: off) decide the producer.
+pub fn follow_graphics(
+    g: Res<crate::graphics::Graphics>,
+    forced: Res<TerrainShadowsForced>,
+    air: Option<Res<crate::medium_air_demand::AirWanted>>,
+    mut wanted: ResMut<TerrainShadowsWanted>,
+    mut producer: ResMut<TerrainShadowsProducerWanted>,
+) {
     let want = forced.0 || g.terrain_shadows;
     if wanted.0 != want {
         wanted.0 = want;
     }
+    let produce = want || air.is_some_and(|a| a.0);
+    if producer.0 != produce {
+        producer.0 = produce;
+    }
+}
+
+/// Run condition of [`follow_graphics`]: the settings changed, or the air's demand did.
+fn graphics_or_air_changed(g: Option<Res<crate::graphics::Graphics>>, air: Option<Res<crate::medium_air_demand::AirWanted>>) -> bool {
+    g.is_some_and(|g| g.is_changed() || air.is_some_and(|a| a.is_changed()))
+}
+
+/// Run condition of the production: the map is wanted.
+fn producing(w: Res<TerrainShadowsProducerWanted>) -> bool {
+    w.0
+}
+
+/// Run condition of [`stop_terrain_shadows`]: the production was just switched off.
+fn production_stopped(w: Res<TerrainShadowsProducerWanted>) -> bool {
+    w.is_changed() && !w.0
 }
 
 /// What the terrain slot of the sun visibility gets for this switch, map and sun light
@@ -693,14 +734,15 @@ impl Plugin for TerrainShadowsPlugin {
         let forced = nvf_play::dialogue::debug_switch(std::env::var("NVF_PLAY_DEBUG_TERRAIN_SHADOWS").ok().as_deref());
         if forced {
             info!("terrain shadows: on by NVF_PLAY_DEBUG_TERRAIN_SHADOWS, whatever the settings row says");
-            app.insert_resource(TerrainShadowsWanted(true)).insert_resource(SunHeightfieldWanted(true));
+            app.insert_resource(TerrainShadowsWanted(true))
+                .insert_resource(TerrainShadowsProducerWanted(true))
+                .insert_resource(SunHeightfieldWanted(true));
         } else {
-            app.init_resource::<TerrainShadowsWanted>();
+            app.init_resource::<TerrainShadowsWanted>().init_resource::<TerrainShadowsProducerWanted>();
         }
         app.insert_resource(TerrainShadowsForced(forced));
         let path = std::env::var_os("NVF_PLAY_DEBUG_TERRAIN_SHADOW_DUMP").filter(|v| !v.is_empty()).map(PathBuf::from);
         let done = JobsDone::default();
-        let wanted = |w: Res<TerrainShadowsWanted>| w.0;
         app.insert_resource(done.clone())
             .insert_resource(DumpAid { path, asked: false })
             .init_resource::<TerrainShadows>()
@@ -710,14 +752,14 @@ impl Plugin for TerrainShadowsPlugin {
             .add_systems(
                 Update,
                 (
-                    (follow_graphics.run_if(resource_exists_and_changed::<crate::graphics::Graphics>), follow_wanted)
+                    (follow_graphics.run_if(graphics_or_air_changed), follow_wanted)
                         .chain()
                         .before(crate::sun_heightfield::stop_heightfield)
                         .before(crate::sun_heightfield::update_heightfield),
                     (
-                        stop_terrain_shadows.run_if(|w: Res<TerrainShadowsWanted>| w.is_changed() && !w.0),
-                        update_terrain_shadows.run_if(wanted),
-                        dump_terrain_shadows.run_if(wanted).run_if(|aid: Res<DumpAid>| aid.path.is_some() && !aid.asked),
+                        stop_terrain_shadows.run_if(production_stopped),
+                        update_terrain_shadows.run_if(producing),
+                        dump_terrain_shadows.run_if(producing).run_if(|aid: Res<DumpAid>| aid.path.is_some() && !aid.asked),
                         feed_sun_visibility.run_if(feeding_needed),
                     )
                         .chain()
@@ -734,18 +776,24 @@ impl Plugin for TerrainShadowsPlugin {
     }
 }
 
-/// Terrain shadows need T0's heightfield: switching them on switches it on, switching them
-/// off switches it off (T0's own debug switch still works while they were never on).
-fn follow_wanted(wanted: Res<TerrainShadowsWanted>, mut heightfield: ResMut<SunHeightfieldWanted>) {
+/// The map needs T0's heightfield: switching its production on switches it on, switching it
+/// off switches it off again, but only when the production was what switched it on
+/// (`turned_on`): a heightfield already on by its own demand (`NVF_PLAY_DEBUG_SUN_HEIGHTFIELD`)
+/// stays on through any on/off cycle of the row or the light in the air.
+fn follow_wanted(wanted: Res<TerrainShadowsProducerWanted>, mut heightfield: ResMut<SunHeightfieldWanted>, mut turned_on: Local<bool>) {
     if !wanted.is_changed() {
         return;
     }
     if wanted.0 {
         if !heightfield.0 {
             heightfield.0 = true;
+            *turned_on = true;
         }
-    } else if !wanted.is_added() && heightfield.0 {
-        heightfield.0 = false;
+    } else if *turned_on {
+        *turned_on = false;
+        if heightfield.0 {
+            heightfield.0 = false;
+        }
     }
 }
 
@@ -1745,6 +1793,7 @@ mod tests {
         app.insert_resource(Graphics::preset(Preset::Vanilla))
             .insert_resource(TerrainShadowsForced(false))
             .init_resource::<TerrainShadowsWanted>()
+            .init_resource::<TerrainShadowsProducerWanted>()
             .init_resource::<TerrainShadows>()
             .init_resource::<SunVisibility>()
             .insert_resource(crate::sky::SkyState::default())
@@ -1812,5 +1861,113 @@ mod tests {
         app.world_mut().resource_mut::<Graphics>().set_changed();
         app.update();
         assert!(app.world().resource::<TerrainShadowsWanted>().0 && vis(&app).terrain_enabled);
+    }
+
+    /// The light in the air (#3032 stage 3) keeps the producer alive without the surfaces:
+    /// off by default; the air alone turns the map's production and T0's heightfield on and
+    /// leaves the sun visibility's terrain slot off even with a map published; the row alone
+    /// is as before; the row off while the air holds the producer clears the surfaces only;
+    /// the air off again with the row off stops the production as the row going off does.
+    #[test]
+    fn light_in_the_air_drives_the_producer_not_the_surfaces() {
+        use crate::graphics::{Graphics, Preset};
+        use crate::medium_air_demand::AirWanted;
+        use crate::sun_visibility::SunVisibility;
+        let mut app = App::new();
+        app.insert_resource(Graphics::preset(Preset::Vanilla))
+            .insert_resource(TerrainShadowsForced(false))
+            .init_resource::<TerrainShadowsWanted>()
+            .init_resource::<TerrainShadowsProducerWanted>()
+            .init_resource::<SunHeightfieldWanted>()
+            .init_resource::<TerrainShadows>()
+            .init_resource::<SunVisibility>()
+            .init_resource::<Producer>()
+            .init_resource::<ShadowJob>()
+            .init_resource::<Assets<Image>>()
+            .add_systems(
+                Update,
+                (
+                    follow_graphics.run_if(graphics_or_air_changed),
+                    follow_wanted,
+                    stop_terrain_shadows.run_if(production_stopped),
+                    feed_sun_visibility.run_if(feeding_needed),
+                )
+                    .chain(),
+            );
+        let state = |app: &App| {
+            let w = app.world();
+            (w.resource::<TerrainShadowsWanted>().0, w.resource::<TerrainShadowsProducerWanted>().0, w.resource::<SunHeightfieldWanted>().0)
+        };
+        let vis = |app: &App| app.world().resource::<SunVisibility>().clone();
+        let image = app.world_mut().resource_mut::<Assets<Image>>().add(Image::default());
+        let (uv_scale, uv_offset) = TerrainShadows::uv_transform(Vec2::new(-1_000.0, 2_000.0), TEXEL, 512);
+        let publish = |app: &mut App, version: u64| {
+            *app.world_mut().resource_mut::<TerrainShadows>() = TerrainShadows { image: Some(image.clone()), texel: TEXEL, side: 512, uv_scale, uv_offset, version, ..default() };
+        };
+
+        // Off by default, with no demand resource and with a false one.
+        app.update();
+        assert_eq!(state(&app), (false, false, false), "off by default");
+        app.insert_resource(AirWanted(false));
+        app.update();
+        assert_eq!(state(&app), (false, false, false), "air off: off");
+
+        // The air alone: the producer and T0 on, the surfaces off even with a map published.
+        app.insert_resource(AirWanted(true));
+        app.update();
+        assert_eq!(state(&app), (false, true, true), "the air turns the producer on, not the surfaces");
+        publish(&mut app, 1);
+        app.update();
+        let v = vis(&app);
+        assert!(!v.terrain_enabled && v.terrain.is_none() && !v.terrain_on(), "the surfaces are not fed");
+        assert!(app.world().resource::<TerrainShadows>().is_active(), "the publication stands for the air");
+
+        // The row on as well: the surfaces as before; the row off again: only they are cleared.
+        app.world_mut().resource_mut::<Graphics>().terrain_shadows = true;
+        app.update();
+        assert_eq!(state(&app), (true, true, true));
+        assert!(vis(&app).terrain_enabled && vis(&app).terrain.is_some());
+        app.world_mut().resource_mut::<Graphics>().terrain_shadows = false;
+        app.update();
+        assert_eq!(state(&app), (false, true, true), "the air keeps the producer");
+        assert!(!vis(&app).terrain_on(), "the surfaces are cleared as when the row goes off");
+        assert!(app.world().resource::<TerrainShadows>().is_active(), "the publication is kept");
+
+        // The air off with the row off: the production stops as the row going off stops it.
+        app.insert_resource(AirWanted(false));
+        app.update();
+        assert_eq!(state(&app), (false, false, false));
+        let out = app.world().resource::<TerrainShadows>();
+        assert!(!out.is_active() && out.reason == "off" && out.version == 2, "unpublished as the row going off does");
+        assert!(app.world().resource::<ShadowJob>().0.is_none());
+
+        // The row alone, as before: everything on, then off with the production.
+        app.world_mut().resource_mut::<Graphics>().terrain_shadows = true;
+        app.update();
+        assert_eq!(state(&app), (true, true, true));
+        assert!(vis(&app).terrain_enabled);
+        publish(&mut app, 3);
+        app.world_mut().resource_mut::<Graphics>().terrain_shadows = false;
+        app.update();
+        assert_eq!(state(&app), (false, false, false));
+        assert!(!vis(&app).terrain_on() && !app.world().resource::<TerrainShadows>().is_active());
+
+        // T0's heightfield asked for on its own (`NVF_PLAY_DEBUG_SUN_HEIGHTFIELD=1` sets it at
+        // start) with the row off: an air on/off cycle and a row on/off cycle both leave it on
+        // (the production inherited it, so it is not theirs to clear).
+        app.world_mut().resource_mut::<SunHeightfieldWanted>().0 = true;
+        app.update();
+        assert_eq!(state(&app), (false, false, true));
+        app.insert_resource(AirWanted(true));
+        app.update();
+        assert_eq!(state(&app), (false, true, true));
+        app.insert_resource(AirWanted(false));
+        app.update();
+        assert_eq!(state(&app), (false, false, true), "the heightfield's own demand survives the air going off");
+        app.world_mut().resource_mut::<Graphics>().terrain_shadows = true;
+        app.update();
+        app.world_mut().resource_mut::<Graphics>().terrain_shadows = false;
+        app.update();
+        assert_eq!(state(&app), (false, false, true), "and the row going off");
     }
 }

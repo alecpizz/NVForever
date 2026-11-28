@@ -16,7 +16,7 @@
 //! | `missing_asset` | a model, texture, actor file or particles failed to load (nvf-assets guard.rs); a model or actor file a plugin's record names says the `plugin`, and one the base game's own data names and no archive has is not reported (asset_sources.rs, #3045) |
 //! | `save_trouble` | a save failed to write, or a load fell back to the main menu |
 //! | `audio` | no audio output device; a spoken line without its voice file (not a line with no words, such as `...`) |
-//! | `hitch` | a frame over [`HITCH_MS`] outside a load and the [`HITCH_SETTLE_SECS`] after one |
+//! | `hitch` | a frame over [`HITCH_MS`] outside a load and the [`HITCH_SETTLE_SECS`] after one, and not with the game away (the window unfocused, covered or minimised, the app suspended, the second after each, or a frame of 30 s or more: `mod.rs` `away_frame`, #3043) |
 //! | `slow_load` | a loading screen up longer than [`SLOW_LOAD_MS`] |
 //! | `player_stuck` | movement held [`STUCK_SECS`] with under [`STUCK_UNITS`] moved, while playing |
 //! | `controls_locked` | [design, #2403] an unchanged dialogue, menu or script control lock for [`CONTROLS_LOCKED_SECS`] with [`CONTROLS_LOCKED_PRESSES`] recent press edges |

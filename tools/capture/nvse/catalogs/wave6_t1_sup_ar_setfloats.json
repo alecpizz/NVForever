@@ -1,0 +1,68 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6_t1_sup_ar_setfloats",
+  "description": "Wave 6 Tier 1 read-only console probe for SUP NVSE Ar_SetFloatsFrom handling of numeric, non-numeric, and trailing output variables.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)",
+    "JohnnyGuitarNVSE": "528",
+    "ShowOffNVSE Plugin": "184",
+    "SUP NVSE Plugin": "855",
+    "lStewieAl Tweaks": "1005"
+  },
+  "batches": [
+    {
+      "id": "w6_t1_sup_ar_setfloats",
+      "title": "Wave 6 Tier 1 - SUP Ar_SetFloatsFrom",
+      "extender": "SUP NVSE 855",
+      "required_plugins": [
+        "supNVSE.dll"
+      ],
+      "default_wait_ticks": 1,
+      "probes": [
+        {
+          "id": "w6_t1_13_sup_ar_setfloats",
+          "bucket": "A",
+          "extender": "SUP NVSE 855",
+          "required_plugins": [
+            "supNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": false,
+          "mutates_state": false,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-sup4.md",
+          "spec_line": 22,
+          "functions_tested": [
+            "Ar_SetFloatsFrom"
+          ],
+          "claim": "Verify SUP Ar_SetFloatsFrom behavior with numeric elements, non-numeric elements, and fewer array elements than output vars.",
+          "expected": "vals=(3.50,22.00,8.25,44.00)",
+          "script_lines": [
+            "array_var aIn = Ar_List 3.5, \"abc\", 8.25",
+            "float f1 = 11",
+            "float f2 = 22",
+            "float f3 = 33",
+            "float f4 = 44",
+            "Ar_SetFloatsFrom aIn (f1) (f2) (f3) (f4)",
+            "PrintToConsole \"PROBE|w6_t1_13_sup_ar_setfloats|vals=(%.2f,%.2f,%.2f,%.2f)\" f1 f2 f3 f4"
+          ]
+        }
+      ]
+    }
+  ]
+}

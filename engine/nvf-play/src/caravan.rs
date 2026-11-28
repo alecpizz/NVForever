@@ -28,11 +28,15 @@
 //! (as ShowCaravanMenu on that actor), `match`, `raise`, `accept`, `add`, `remove`,
 //! `randomize`, `play`, `auto` (the player's side plays by the opponent's rules from then
 //! on, help boxes close by themselves and the results go on after [`AUTO_RESULTS`]),
-//! `forfeit`, `help` (closes the help box), `continue`, `exit`. At exit, when the menu was asked for: "caravan
+//! `forfeit`, `help` (closes the help box), `continue`, `exit`, `tie:<value>` (the second
+//! track's caravans, NEW RENO and REDDING, rebuilt from each side's own deck to that value,
+//! a tie seen in game on 2026-11-15; test only). At exit, when the menu was asked for: "caravan
 //! summary: …".
 
+pub mod guide;
 pub mod screen;
 
+use fnv_util::words::{tr, trf};
 use crate::lockpick::Help;
 use crate::pause::{AidTime, Paused};
 use crate::script::{with_world, ScriptState};
@@ -69,6 +73,15 @@ pub struct OpenCaravan(pub CaravanRequest);
 
 #[derive(Resource, Default)]
 pub struct CaravanScreen(pub Option<Session>);
+
+/// The game's table drawn in 3D (nvforever `caravan_view.rs`): the picture the game screen
+/// shows in place of its flat planks and cards, laid out as [`screen::table_cards`] says
+/// so the names, values and outlines drawn over it fall on its cards. Present only while
+/// the table is built.
+#[derive(Resource)]
+pub struct CaravanView {
+    pub image: Handle<Image>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
@@ -185,7 +198,44 @@ pub struct Session {
     rng: ChaCha8Rng,
 }
 
+/// The Caravan guide on, kept with the settings as `caravan-tips`.
+static TIPS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn tips() -> bool {
+    TIPS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn set_tips(on: bool) {
+    TIPS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
 impl Session {
+    /// The guide's text for the table as it stands ([`guide::text`]), empty when the
+    /// guide is off or it is not the player's turn.
+    pub fn guide(&self) -> String {
+        // A tie in the sold range is said whatever the tips and whoever's turn it is.
+        let tie = self.game.as_ref().and_then(guide::tie_note);
+        let tip = self.tip();
+        match (tie, tip.is_empty()) {
+            (Some(t), true) => t,
+            (Some(t), false) => format!("{t} {tip}"),
+            (None, _) => tip,
+        }
+    }
+
+    /// The tips' text ([`guide::text`]), empty when they are off or it is not the
+    /// player's turn.
+    fn tip(&self) -> String {
+        let Some(g) = self.game.as_ref().filter(|_| tips() && self.players_turn()) else { return String::new() };
+        let shown = match &self.pick {
+            Pick::Place { moves, at } => moves.get(*at).copied(),
+            Pick::Track { tracks, at } => tracks.get(*at).map(|&track| Move::DiscardTrack { track }),
+            Pick::Hand => None,
+        };
+        let refused = self.hand_moves(self.hand).next().is_none();
+        guide::text(g, self.hand, shown.as_ref(), refused)
+    }
+
     pub fn fade(&self, now: f32) -> f32 {
         self.leaving.map_or(1.0, |(since, _)| (1.0 - (now - since) / LEAVE_SECONDS).clamp(0.0, 1.0))
     }
@@ -223,7 +273,7 @@ impl Session {
         crate::pad::MenuAt { code: Some(MENU_CARAVAN), tab }
     }
 
-    /// The hint for the keys `keys` on this screen ("W)", with a controller "A)").
+    /// The hint for the keys `keys` on this screen ("[W]", with a controller "[A]").
     pub fn hint(&self, keys: &[KeyCode]) -> String {
         crate::pad::hint(keys, self.stage_at())
     }
@@ -233,7 +283,7 @@ impl Session {
     pub fn hint_line(&self) -> String {
         use KeyCode::*;
         let parts: Vec<String> = match self.stage {
-            Stage::Deck => [("Randomize Caravan Deck", KeyS), ("Add", KeyW), ("Remove", KeyA), ("Play Caravan", KeyF)].iter().map(|(l, k)| format!("{l} {}", self.hint(&[*k]))).collect(),
+            Stage::Deck => [(tr("Randomize Caravan Deck"), KeyS), (tr("Add"), KeyW), (tr("Remove"), KeyA), (tr("Play Caravan"), KeyF)].iter().map(|(l, k)| format!("{l} {}", self.hint(&[*k]))).collect(),
             _ => self.buttons().into_iter().map(|(l, h, _, _)| format!("{l} {h}")).collect(),
         };
         let mut line = parts.join(", ");
@@ -249,10 +299,10 @@ impl Session {
         use KeyCode::*;
         match self.stage {
             Stage::Bet => vec![
-                ("Auto Match", self.hint(&[KeyW]), CaravanInput::AutoMatch, self.bet.can_match()),
-                ("Raise", self.hint(&[KeyA]), CaravanInput::Raise, self.bet.can_raise()),
-                ("Accept", self.hint(&[KeyF]), CaravanInput::Accept, self.bet.can_accept()),
-                ("Exit", self.hint(&[KeyR, Escape]), CaravanInput::Exit, true),
+                (tr("Auto Match"), self.hint(&[KeyW]), CaravanInput::AutoMatch, self.bet.can_match()),
+                (tr("Raise"), self.hint(&[KeyA]), CaravanInput::Raise, self.bet.can_raise()),
+                (tr("Accept"), self.hint(&[KeyF]), CaravanInput::Accept, self.bet.can_accept()),
+                (tr("Exit"), self.hint(&[KeyR, Escape]), CaravanInput::Exit, true),
             ],
             Stage::Play => {
                 let mine = self.players_turn();
@@ -262,10 +312,11 @@ impl Session {
                 let discard = mine && !matches!(self.pick, Pick::Track { .. });
                 let track = mine && !opening && g.is_some_and(|g| g.sides[PLAYER].caravans.iter().any(|c| !c.is_empty()));
                 vec![
-                    ("Select Card", self.hint(&[KeyW]), CaravanInput::Select, select),
-                    ("Discard Card", self.hint(&[KeyQ]), CaravanInput::Discard, discard),
-                    ("Discard Track", self.hint(&[KeyE]), CaravanInput::DiscardTrack, track),
-                    ("Cancel", self.hint(&[KeyR]), CaravanInput::Cancel, mine || self.game.as_ref().is_some_and(|g| g.phase != Phase::Over)),
+                    (tr("Select Card"), self.hint(&[KeyW]), CaravanInput::Select, select),
+                    (tr("Discard Card"), self.hint(&[KeyQ]), CaravanInput::Discard, discard),
+                    (tr("Discard Track"), self.hint(&[KeyE]), CaravanInput::DiscardTrack, track),
+                    (tr("Cancel"), self.hint(&[KeyR]), CaravanInput::Cancel, mine || self.game.as_ref().is_some_and(|g| g.phase != Phase::Over)),
+                    (if tips() { tr("Tips On") } else { tr("Tips Off") }, String::new(), CaravanInput::Tips, true),
                 ]
             }
             _ => Vec::new(),
@@ -322,6 +373,8 @@ pub enum CaravanInput {
     Forfeit,
     CloseHelp,
     Continue,
+    /// The guide on or off.
+    Tips,
 }
 
 #[derive(Resource, Default, Debug)]
@@ -351,6 +404,7 @@ enum AidStep {
     Open(CaravanRequest),
     Auto,
     Input(CaravanInput),
+    Tie(u32),
 }
 
 fn hex(s: &str) -> Option<u32> {
@@ -363,7 +417,7 @@ fn parse_aid(v: &str) -> Result<Vec<(f32, AidStep)>, String> {
         .map(|(t, what)| {
             let (op, arg) = what.split_once(':').unwrap_or((what, ""));
             let parts: Vec<&str> = arg.split(':').collect();
-            let bad = || format!("{what:?}: expected seed:<n>, caps:<n>, cards:<deck>, open:<actor>:<deck>[:<share>], match, raise, accept, add, remove, randomize, play, auto, forfeit, help, continue or exit");
+            let bad = || format!("{what:?}: expected seed:<n>, caps:<n>, cards:<deck>, open:<actor>:<deck>[:<share>], match, raise, accept, add, remove, randomize, play, auto, forfeit, help, continue, exit or tie:<value>");
             let num = |s: Option<&&str>| s.and_then(|s| s.trim().parse::<i64>().ok()).ok_or_else(bad);
             let step = match op {
                 "seed" => AidStep::Seed(num(parts.first())? as u64),
@@ -387,6 +441,7 @@ fn parse_aid(v: &str) -> Result<Vec<(f32, AidStep)>, String> {
                 "help" => AidStep::Input(CaravanInput::CloseHelp),
                 "continue" => AidStep::Input(CaravanInput::Continue),
                 "exit" => AidStep::Input(CaravanInput::Exit),
+                "tie" => AidStep::Tie(num(parts.first())?.clamp(1, 40) as u32),
                 _ => return Err(bad()),
             };
             Ok((t, step))
@@ -406,6 +461,19 @@ impl Plugin for CaravanPlugin {
             }
             Err(_) => Vec::new(),
         };
+        crate::settings::add_setting(
+            app,
+            crate::settings::Setting {
+                key: "caravan-tips",
+                group: crate::pause::GROUP_MENUS,
+                label: "Caravan tips",
+                note: "On: the Caravan table says what the chosen card does and why a card can't be played, and the menu has a Tips button. Off: only the game's short messages. Not in the original.",
+                switches: "",
+                get: |_| tips(),
+                set: |_, on| set_tips(on),
+                slider: None,
+            },
+        );
         app.init_resource::<CaravanScreen>()
             .init_resource::<CaravanStats>()
             .insert_resource(CaravanAid { steps, ..default() })
@@ -468,8 +536,62 @@ fn run_aid(time: AidTime, mut aid: ResMut<CaravanAid>, mut open: MessageWriter<O
             AidStep::Input(i) => {
                 input.write(i);
             }
+            AidStep::Tie(value) => {
+                let Some(g) = screen.0.as_mut().and_then(|s| s.game.as_mut()) else {
+                    warn!("caravan: test aid tie: no game on the table");
+                    continue;
+                };
+                let done = [PLAYER, OPPONENT].map(|side| tie_track(g, side, TIE_TRACK, value));
+                if done.iter().all(|&d| d) {
+                    info!("caravan: test aid: {} and {} set to {value}", guide::track_name(PLAYER, TIE_TRACK), guide::track_name(OPPONENT, TIE_TRACK));
+                } else {
+                    warn!("caravan: test aid tie: no cards in the decks make {value} (player {}, opponent {})", done[0], done[1]);
+                }
+            }
         }
     }
+}
+
+/// The track the `tie` aid step sets: NEW RENO against REDDING, as in an in-game frame [observed: buckallobill, in game, FNV 1.4.0.525].
+const TIE_TRACK: usize = 1;
+
+/// Test aid: `side`'s caravan on `track` rebuilt from two to four number cards of its own
+/// deck adding up to `value`; the caravan's old cards go to the bottom of the deck. False
+/// (nothing changed) when no such cards are left.
+fn tie_track(g: &mut Game, side: usize, track: usize, value: u32) -> bool {
+    let s = &mut g.sides[side];
+    let numbers: Vec<usize> = (0..s.deck.len()).filter(|&i| s.deck[i].rank.number().is_some()).collect();
+    let worth = |i: usize| s.deck[i].rank.number().unwrap_or(0);
+    let mut pick: Option<Vec<usize>> = None;
+    'search: for n in 2..=4usize {
+        let mut at: Vec<usize> = (0..n).collect();
+        while numbers.len() >= n {
+            if at.iter().map(|&k| worth(numbers[k])).sum::<u32>() == value {
+                pick = Some(at.iter().map(|&k| numbers[k]).collect());
+                break 'search;
+            }
+            // The next combination of `n` of the number cards, in order.
+            let Some(j) = (0..n).rev().find(|&j| at[j] < numbers.len() - n + j) else { break };
+            at[j] += 1;
+            let base = at[j];
+            for (o, a) in at[j + 1..].iter_mut().enumerate() {
+                *a = base + 1 + o;
+            }
+        }
+    }
+    let Some(mut pick) = pick else { return false };
+    pick.sort_unstable_by(|a, b| b.cmp(a));
+    let mut cards: Vec<Card> = pick.iter().map(|&i| s.deck.remove(i)).collect();
+    cards.reverse();
+    let old = std::mem::take(&mut s.caravans[track].cards);
+    for p in old {
+        s.deck.insert(0, p.card);
+        for f in p.faces {
+            s.deck.insert(0, f);
+        }
+    }
+    s.caravans[track].cards = cards.into_iter().map(|card| rules::Placed { card, faces: Vec::new() }).collect();
+    true
 }
 
 /// The games scripts asked for (ShowCaravanMenu), opened while playing (after the
@@ -627,7 +749,7 @@ fn caps_of(sim: &mut SimState, actor: FormId) -> (u32, Option<FormId>) {
 
 /// The line shown when the menu does not open [hypothesis: the words are NVForever's].
 pub fn refusal_line(owned: usize) -> String {
-    format!("You need at least {MIN_DECK} Caravan cards to play (you have {owned}).")
+    trf("You need at least {n} Caravan cards to play (you have {owned}).", &[("n", &MIN_DECK), ("owned", &owned)])
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -676,7 +798,7 @@ fn open(
     // The opponent's name as shown everywhere (`SimState::ref_name`: SetActorFullName,
     // the template's name).
     let base = sim.world.get(r.opponent).map(|s| s.base).unwrap_or(r.opponent);
-    let opponent_name = sim.ref_name(Some(&rt.game), r.opponent.0).or_else(|| sim.name(base)).or_else(|| sim.name(r.opponent)).unwrap_or("Opponent").to_string();
+    let opponent_name = sim.ref_name(Some(&rt.game), r.opponent.0).or_else(|| sim.name(base)).or_else(|| sim.name(r.opponent)).unwrap_or(tr("Opponent")).to_string();
     let forms = sim.forms;
     let purse = purse_of(&mut sim.world, forms, &[FormId::PLAYER_REF]);
     let funds = purse.worth();
@@ -834,14 +956,18 @@ fn keys(keys: crate::pad::ActionButtons<KeyCode>, wheel: Res<AccumulatedMouseScr
     if s.leaving.is_some() {
         return;
     }
-    if s.help.is_some() {
-        if keys.any_just_pressed([KeyCode::KeyE, KeyCode::Escape, KeyCode::Tab, KeyCode::Enter]) {
-            out.write(CaravanInput::CloseHelp);
-        }
+    // A help message closes on its own keys; the stage's other keys still act ([design]: a forfeit pressed under the opening's help was lost), and `apply` closes
+    // the message before acting.
+    let help = s.help.is_some();
+    const CLOSE: [KeyCode; 4] = [KeyCode::KeyE, KeyCode::Escape, KeyCode::Tab, KeyCode::Enter];
+    if help && keys.any_just_pressed(CLOSE) {
+        out.write(CaravanInput::CloseHelp);
         return;
     }
-    let any_pressed = keys.get_just_pressed().next().is_some();
-    for cmd in stage_inputs(s.stage, &s.better_keys, |k| keys.just_pressed(k), any_pressed, wheel.delta.y) {
+    // Under a help message its closing keys only close it (above), and no key counts as
+    // the results' "any key".
+    let any_pressed = !help && keys.get_just_pressed().next().is_some();
+    for cmd in stage_inputs(s.stage, &s.better_keys, |k| keys.just_pressed(k) && !(help && CLOSE.contains(&k)), any_pressed, wheel.delta.y) {
         out.write(cmd);
     }
 }
@@ -886,7 +1012,7 @@ fn apply(
     time: AidTime,
     mut stats: ResMut<CaravanStats>,
     mut sounds: MessageWriter<UiSound>,
-    bindings: Res<crate::bindings::Bindings>,
+    (bindings, mut commands): (Res<crate::bindings::Bindings>, Commands),
 ) {
     let now = time.elapsed_secs();
     let sound = |sounds: &mut MessageWriter<UiSound>, event| {
@@ -905,8 +1031,18 @@ fn apply(
             }
             continue;
         }
-        if s.leaving.is_some() || s.help.is_some() {
+        if s.leaving.is_some() {
             continue;
+        }
+        if s.help.is_some() {
+            // An action under a help message closes it and still acts; a message queued
+            // after it comes up in its place.
+            s.help = None;
+            info!("caravan: help message closed by {cmd:?}");
+            if !s.queued_help.is_empty() {
+                let next = s.queued_help.remove(0);
+                s.show_help(rt, next, &bindings);
+            }
         }
         match (s.stage, cmd) {
             (Stage::Bet, CaravanInput::AutoMatch) => {
@@ -967,13 +1103,19 @@ fn apply(
             }
             (Stage::Deck, CaravanInput::PlayDeck) => {
                 if s.deck.len() < MIN_DECK {
-                    s.status = Some(format!("Your Caravan deck needs at least {MIN_DECK} cards."));
+                    s.status = Some(trf("Your Caravan deck needs at least {n} cards.", &[("n", &MIN_DECK)]));
                     sound(&mut sounds, UiEvent::Refused);
                     continue;
                 }
                 start_game(s, rt, &mut sim, now, &bindings);
                 stats.games += 1;
                 sound(&mut sounds, UiEvent::Accepted);
+            }
+            (Stage::Play, CaravanInput::Tips) => {
+                set_tips(!tips());
+                info!("caravan: tips {}", if tips() { "on" } else { "off" });
+                commands.queue(crate::settings::keep);
+                sound(&mut sounds, UiEvent::Value { up: tips() });
             }
             (Stage::Play, CaravanInput::Forfeit) => forfeit(s, rt, &mut sim, now, &mut stats, &mut sounds),
             (Stage::Play, CaravanInput::Cancel) => match s.pick {
@@ -986,7 +1128,7 @@ fn apply(
                         forfeit(s, rt, &mut sim, now, &mut stats, &mut sounds);
                     } else {
                         s.forfeit_armed = true;
-                        s.status = Some("Press R) again to forfeit the game.".into());
+                        s.status = Some(trf("Press {key} again to forfeit the game.", &[("key", &s.hint(&[KeyCode::KeyR]))]));
                     }
                 }
                 _ => {}
@@ -1082,7 +1224,10 @@ fn player_input(s: &mut Session, rt: &mut crate::script::Runtime, sim: &mut SimS
     let choose_card = |s: &mut Session, i: usize, sounds: &mut MessageWriter<UiSound>| {
         let moves: Vec<Move> = s.hand_moves(i).collect();
         if moves.is_empty() {
-            s.status = Some("That card cannot be played now.".into());
+            // The card picked before goes back into the hand: only the refused card, the
+            // one in focus, stays raised [design].
+            s.pick = Pick::Hand;
+            s.status = Some(tr("That card cannot be played now.").into());
             sound(sounds, UiEvent::Refused);
         } else {
             s.status = None;
@@ -1288,15 +1433,16 @@ fn settle(s: &mut Session, rt: &mut crate::script::Runtime, sim: &mut SimState, 
     }
     rt.game.player.caravan.records.insert(opponent, record);
     s.record = record;
-    let words = match (winner, end) {
-        (PLAYER, End::Sold) => "You sold two of three caravans and win",
-        (PLAYER, End::OutOfCards) => "Your opponent is out of cards. You win",
-        (PLAYER, End::Forfeit) => "Your opponent gives up. You win",
-        (_, End::Sold) => "Your opponent sold two of three caravans. You lose",
-        (_, End::OutOfCards) => "You are out of cards. You lose",
-        (_, End::Forfeit) => "You forfeit. You lose",
+    // Each result one whole text, so a translation need not join pieces (#3146).
+    let with: &[(&str, &dyn std::fmt::Display)] = &[("ante", &ante)];
+    let line = match (winner, end) {
+        (PLAYER, End::Sold) => trf("You sold two of three caravans and win {ante} caps.", with),
+        (PLAYER, End::OutOfCards) => trf("Your opponent is out of cards. You win {ante} caps.", with),
+        (PLAYER, End::Forfeit) => trf("Your opponent gives up. You win {ante} caps.", with),
+        (_, End::Sold) => trf("Your opponent sold two of three caravans. You lose {ante} caps.", with),
+        (_, End::OutOfCards) => trf("You are out of cards. You lose {ante} caps.", with),
+        (_, End::Forfeit) => trf("You forfeit. You lose {ante} caps.", with),
     };
-    let line = format!("{words} {ante} caps.");
     info!("caravan: game over: {} wins ({end:?}); ante {ante}; record {}/{} against {}, net {}; on screen: {line:?}", side_name(winner), s.record.won, s.record.lost, s.opponent_name, s.record.net());
     s.status = Some(line);
     s.pick = Pick::Hand;
@@ -1447,6 +1593,24 @@ mod tests {
     }
 
     #[test]
+    fn the_tie_aid_builds_both_caravans_to_the_value_from_their_own_decks() {
+        use fnv_game::caravan::{Rank, Suit};
+        let deck = |base: u32| (0..30u32).map(|i| Card::new(FormId(base + i), Suit::Hearts, Rank::Num((i % 10 + 1) as u8))).collect::<Vec<_>>();
+        let mut g = Game::new(deck(0x100), deck(0x200), &mut ChaCha8Rng::seed_from_u64(7));
+        g.phase = Phase::War;
+        let before: usize = g.sides.iter().map(|s| s.deck.len()).sum();
+        assert!(tie_track(&mut g, PLAYER, TIE_TRACK, 24) && tie_track(&mut g, OPPONENT, TIE_TRACK, 24));
+        assert_eq!((g.sides[PLAYER].caravans[TIE_TRACK].value(), g.sides[OPPONENT].caravans[TIE_TRACK].value()), (24, 24));
+        assert!(g.sides[PLAYER].caravans[TIE_TRACK].cards.iter().all(|p| p.card.form.0 / 0x100 == 1), "the player's own cards");
+        assert!(guide::tie_note(&g).is_some_and(|n| n.starts_with("NEW RENO and REDDING are tied at 24")));
+        let after: usize = g.sides.iter().map(|s| s.deck.len() + s.caravans[TIE_TRACK].cards.len()).sum();
+        assert_eq!(after, before, "no card made or lost");
+        // Nothing adds up to it: nothing changes.
+        assert!(!tie_track(&mut g, PLAYER, TIE_TRACK, 41));
+        assert_eq!(parse_aid("30:tie:24").unwrap()[0].1, AidStep::Tie(24));
+    }
+
+    #[test]
     fn the_aid_reads_its_steps() {
         let s = parse_aid("1:seed:7,1:caps:500,2:cards:15D7A2,3:open:104C5A:15D7A2:0.4,4:match,5:accept,6:randomize,7:play,8:auto,9:forfeit,10:continue,11:exit").unwrap();
         assert_eq!(s[0], (1.0, AidStep::Seed(7)));
@@ -1575,19 +1739,26 @@ mod tests {
         // Track 1: player 24 vs opponent 24 (tied, neither winning).
         // Track 2: player 27 (bust > 26) vs opponent 5.
 
-        // Vanilla (highlight off, no preview): winning opponent 21 stays amber, bust 27 is red.
+        // The sold-range white (sRGB 1.0) and the winning white (`Color::WHITE`, linear) are the
+        // same 8-bit colour; compare them as shown.
+        let px = |c: Color| { let s = c.to_srgba(); [s.red, s.green, s.blue].map(|v| (v * 255.0).round() as u8) };
+        // Vanilla (highlight off, no preview): a value in the sold range (21) is white, as in
+        // the original (the ship's `value_colour`), bust 27 is red.
         let (t0, c0) = screen::value_display(&game, OPPONENT, 0, None, false);
-        assert_eq!((t0.as_str(), c0), ("21", crate::interface::amber(255.0)));
+        assert_eq!((t0.as_str(), px(c0)), ("21", px(Color::WHITE)));
         let (t2, c2) = screen::value_display(&game, PLAYER, 2, None, false);
         assert_eq!(t2, "27");
-        assert_ne!(c2, Color::WHITE);
+        assert_ne!(px(c2), px(Color::WHITE));
         assert_ne!(c2, crate::interface::amber(255.0));
 
-        // Highlight winning caravans on: opponent track 0 (21) is white; tied track 1 stays amber.
+        // Highlight winning caravans on: opponent track 0 (21) is white; tied track 1 (24) is
+        // white too, being in the sold range; an unsold value stays amber.
         let (t0w, c0w) = screen::value_display(&game, OPPONENT, 0, None, true);
-        assert_eq!((t0w.as_str(), c0w), ("21", Color::WHITE));
+        assert_eq!((t0w.as_str(), px(c0w)), ("21", px(Color::WHITE)));
         let (t1w, c1w) = screen::value_display(&game, PLAYER, 1, None, true);
-        assert_eq!((t1w.as_str(), c1w), ("24", crate::interface::amber(255.0)));
+        assert_eq!((t1w.as_str(), px(c1w)), ("24", px(Color::WHITE)));
+        let (t2o, c2o) = screen::value_display(&game, OPPONENT, 2, None, true);
+        assert_eq!((t2o.as_str(), c2o), ("5", crate::interface::amber(255.0)));
 
         // Preview move result: playing 6h on player track 0 turns 18 -> 24 (winning white!).
         let mut better = BetterCaravanConfig::parse(
@@ -1633,7 +1804,7 @@ mod tests {
 
         let prev = screen::active_preview(&session).expect("preview active");
         let (pt, pc) = screen::value_display(&game, PLAYER, 0, Some(&prev), true);
-        assert_eq!((pt.as_str(), pc), ("18->24", Color::WHITE));
+        assert_eq!((pt.as_str(), px(pc)), ("18->24", px(Color::WHITE)));
 
         // Preview disabled -> None.
         better.preview_move_result = false;

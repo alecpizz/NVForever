@@ -261,7 +261,7 @@ fn mcm_functions_stand_for_start_menu_traits() {
     let f = fixture();
     let mut g = game(&f);
     // MCM's child and grandchild count from 1 in file order, 0 stopping at the level
-    // above (menu-xml.md §10 [hypothesis, from MCM's files]): `1 1` is the first child's
+    // above (see docs/spec-notes/menu-xml.md §10): `1 1` is the first child's
     // first child, `0 0` the MCM rect.
     let src = MemSource::default().with(
         "menus\\start.xml",
@@ -675,10 +675,10 @@ fn barter_and_container_menu_click_handlers_support_wildcards_indices_and_remova
     let f = fixture();
     let mut g = game(&f);
 
-    // Keep Stewie plugin gate pinned at 945 while building #3184 menu-click consumers.
+    // Keep Stewie plugin gate pinned at 960 while building #3184 menu-click consumers.
     assert_eq!(
         g.run_query("Begin Function { }\nSetFunctionValue (GetPluginVersion \"lStewieAl's Tweaks\")\nEnd\n", RunCtx::default()).unwrap(),
-        XVal::Num(945.0),
+        XVal::Num(960.0),
     );
 
     let src = MemSource::default()

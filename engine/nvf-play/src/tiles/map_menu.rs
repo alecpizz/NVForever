@@ -996,6 +996,12 @@ fn write_world(ui: &mut Ui, s: &WorldShown, rows: &mut WorldRows) -> Result<(), 
                 let (len, angle) = path_line(from, to, s.usable);
                 ui.write_changed(row.tile, "user0", num_of(len));
                 ui.write_changed(row.tile, "rotateangle", num_of(angle));
+                // The start node's `clips` does not crop its line to the node's box: the
+                // original's line runs from the arrow to the far end, far past the node
+                // [observed: #4685's screenshot of the original's World Map]. The line is cut
+                // by the map's window above the node, as a list row's children are
+                // (`super::list::unclip_row_children`).
+                ui.write_changed(row.tile, fnv_ui::input::OUTSIDE_CLIP, Value::Num(1.0));
             }
         }
         _ => {
@@ -1037,6 +1043,45 @@ fn give_arrow_brightness(ui: &mut Ui, cursor: &str) {
 fn path_line(from: [f32; 2], to: [f32; 2], usable: Vec2) -> (f32, f32) {
     let d = Vec2::new((to[0] - from[0]) * usable.x, (to[1] - from[1]) * usable.y);
     (d.length(), d.y.atan2(d.x))
+}
+
+/// [documented: GECK wiki `clipwindow`] Under the map clip windows (`MM_Highlight_ClipWindow`,
+/// `MM_WorldMap_ClipWindow`, `MM_LocalMap_ClipWindow`), `<clips> 1 </clips>` on a descendant
+/// opts that tile into clipping by the enclosing `<clipwindow>` rather than self-clipping its
+/// own children. UI mods such as Vanilla UI Plus convert `MM_HighlightLocationName` into a
+/// centered `<rect>` with `<clips> 1 </clips>` and child `<text>` tiles (`original`,
+/// `VUI+Shadow`, `VUI+Outline`), and attach shadow children to `<clips> 1 </clips>` map markers.
+/// Because `fnv_ui::input::clips_children` treats `<clips>` as a self-clipper for legacy
+/// layouts, mark live direct children of `<clips>`-only descendants with
+/// [`fnv_ui::input::OUTSIDE_CLIP`] so they inherit the enclosing `<clipwindow>` instead of
+/// clipping off the left half of centered place names (as `super::list::unclip_row_children`
+/// does for list rows) [design].
+fn unclip_map_window_children(ui: &mut Ui) {
+    for path in [HIGHLIGHT_CLIP, WORLD_CLIP, LOCAL_CLIP] {
+        let Some(window) = resolve_tile(ui, path) else { continue };
+        if !ui.tile(window).get("clipwindow").is_some_and(Value::truthy) {
+            continue;
+        }
+        let mut stack: Vec<TileId> = ui.tile(window).children.clone();
+        while let Some(tile) = stack.pop() {
+            if !ui.is_live(tile) {
+                continue;
+            }
+            if ui.tile(tile).get("clipwindow").is_some_and(Value::truthy) {
+                continue;
+            }
+            let clips_only = ui.tile(tile).get("clips").is_some_and(Value::truthy);
+            let children = ui.tile(tile).children.clone();
+            if clips_only {
+                for &child in &children {
+                    if ui.is_live(child) {
+                        ui.write_changed(child, fnv_ui::input::OUTSIDE_CLIP, Value::Num(1.0));
+                    }
+                }
+            }
+            stack.extend(children);
+        }
+    }
 }
 
 /// The World Map's places, put right on every pass as the hints are: the file works the picture's
@@ -1661,6 +1706,17 @@ pub struct MapTiles {
     told: Option<(usize, Result<(), String>)>,
     written: Written,
 }
+impl MapTiles {
+    pub fn list_scroll(&self) -> Option<f64> {
+        self.written.shown.as_ref().filter(|s| s.tab >= data::QUESTS)?;
+        Some(self.written.views[self.written.list().index()].value)
+    }
+    pub(crate) fn scroll_list_by(&mut self, by: crate::pipboy::scrollbar::ScrollBy) -> bool {
+        if self.list_scroll().is_none() { return false; }
+        let view = self.written.view();
+        by.value(view.value, view.counts.most(), view.counts.visible).is_some_and(|to| view.scroll_to(to))
+    }
+}
 
 /// The tiles of [`required_paths`] for tab `tab`, or why the page cannot be drawn.
 fn check_file(ui: &Ui, cut: Option<&str>, tab: Option<usize>) -> Result<Vec<TileId>, String> {
@@ -1752,6 +1808,7 @@ pub(crate) fn page(ui: &mut Ui, new: Option<Shown>, late: bool, tiles: &mut MapT
         place_tabs(ui, &w.tabs);
         // The clip windows on before the panes read what clips them.
         super::item_menu::mark_menu(ui, MAP_MENU, &[QUESTS_LIST, NOTES_LIST, CHALLENGE_LIST, STATIONS_LIST]);
+        unclip_map_window_children(ui);
         if let Some(objectives) = resolve_tile(ui, OBJECTIVES) {
             list::unclip_row_children(ui, objectives, w.objectives.iter().map(|r| r.tile));
         }
@@ -2266,6 +2323,7 @@ fn rebuild_menu(game: &mut fnv_game::Game<'_>) {
 pub(crate) struct Feed {
     /// The page took input last frame, in this frame of the Pip-Boy.
     taking: Option<Frame>,
+    touch_drag: bool,
 }
 
 /// What the page's tile input reads of the Pip-Boy.
@@ -2276,6 +2334,9 @@ pub(crate) struct FeedPip<'w> {
     aid: Res<'w, PipBoyAid>,
     paused: Option<Res<'w, crate::pause::Paused>>,
     bindings: Option<Res<'w, crate::bindings::Bindings>>,
+    touch:Option<Res<'w,crate::pipboy::touch_items::TouchItems>>,
+    admission: crate::pipboy::touch_items::Admission<'w>,
+
 }
 
 /// What the page's tile input sends: where the hand-built page sends the same.
@@ -2299,12 +2360,32 @@ fn pane_part(piece: BarPiece) -> Option<BarPart> {
     })
 }
 
+pub(crate) fn touch_target(tiles:&MapTiles,ui:&Ui,menu:TileId,point:Vec2,data:&DataState)->Option<crate::pipboy::touch_scroll::NativeTarget>{
+    use crate::pipboy::touch_scroll::{NativeRow,NativeTarget};
+    NativeTarget::at(ui,menu,point,|tile|match data_tile(ui,&tiles.written,tile) {
+        Some(DataTile::Row(index))=> {let list=tiles.written.list().index();tiles.written.rows[list].get(index).map(|r|NativeRow::Data{list,key:r.key})},
+        Some(DataTile::Button(slot))=> {let shown=tiles.written.shown.as_ref()?;let hint=shown.hints.iter().find(|h|h.slot==slot)?;
+            Some(NativeRow::DataButton{kind:hint.kind as u8,list:shown.list.index(),group:shown.group,key:shown.selected.and_then(|i|shown.rows.get(i)).map(|r|r.key),context:data.touch_action_context(shown.tab)})},
+        _=>None,
+    },|_|None,|_|true)
+        .map(|target| target.with_control(|tile|matches!(data_tile(ui,&tiles.written,tile),Some(DataTile::ListBar(BarPiece::Marker)|DataTile::PaneBar(BarPiece::Marker)))))
+}
+pub(crate) fn touch_navigation(tiles:&MapTiles,ui:&Ui)->Vec<crate::pipboy::tab_swipe::Region> {
+    use crate::pipboy::tab_swipe::{native_region,Kind};
+    let title=ui.find_tile(TITLE);
+    tiles.pieces.iter().filter_map(|p| {
+        let kind=if Some(p.tile)==title {Kind::Sections}
+            else if matches!(data_tile(ui,&tiles.written,p.tile),Some(DataTile::Tab(_))) {Kind::Subtabs}
+            else {return None};
+        native_region(p,kind)
+    }).collect()
+}
 /// The page's tile input, on a frame it takes it ([`takes`]): see the module notes.
 pub(crate) fn feed(mut script: ResMut<ScriptState>, switch: Res<TileMenus>, from: FeedPip, mut tiles: ResMut<MapTiles>, devices: Devices, mut out: FeedOut, mut state: Local<Feed>) {
     if !switch.map {
         return;
     }
-    let FeedPip { pip, screen, aid, paused, bindings } = from;
+    let FeedPip { pip, screen, aid, paused, bindings, touch, admission } = from;
     let Some(rt) = script.rt.as_mut() else { return };
     let game = &mut rt.game;
     let over_data = pip.open() && pip.page == Page::Data && modal_over(game.menu);
@@ -2333,14 +2414,24 @@ pub(crate) fn feed(mut script: ResMut<ScriptState>, switch: Res<TileMenus>, from
     };
     // With Controller chosen the hand-built page ignores the mouse pointer; so does this one.
     let controller = bindings.as_ref().is_some_and(|b| b.device == crate::bindings::InputDevice::Controller);
-    let pointer = screen.as_ref().and_then(|s| s.pointer).filter(|_| !controller);
+    let mut mobile=crate::pipboy::touch_scroll::native_frame(touch.as_deref(),&devices.mouse);
+    if !admission.allows_contact(touch.as_ref().and_then(|t|t.contact_id())) { mobile=Default::default(); }
+    if mobile.tap {
+        let target=mobile.at.and_then(|at|touch_target(&tiles,&game.ui_tree,menu,at,data));
+        mobile.tap=touch.as_ref().is_some_and(|t|t.native_release_valid(target));
+    }
+    if mobile.control && mobile.started {
+        let target=mobile.at.and_then(|at|touch_target(&tiles,&game.ui_tree,menu,at,data));
+        mobile.started=target.is_some_and(|t|t.control()) && touch.as_ref().is_some_and(|t|t.native_release_valid(target));
+    }
+    let pointer = mobile.at.or_else(||screen.as_ref().and_then(|s| s.pointer)).filter(|_| !controller);
     let at = pointer.map(|p| (f64::from(p.x), f64::from(p.y)));
     if state.taking != Some(pip.frame) {
-        *state = Feed { taking: Some(pip.frame) };
+        *state = Feed { taking: Some(pip.frame), touch_drag: false };
     }
     let aid_press = aid.click == 1 && !aid.right;
-    let held = aid_press || devices.mouse.pressed(MouseButton::Left);
-    let mut input = fnv_ui::input::Input { at, press: aid_press || devices.mouse.just_pressed(MouseButton::Left), ..Default::default() };
+    let held = mobile.held || aid_press || devices.mouse.pressed(MouseButton::Left);
+    let mut input = fnv_ui::input::Input { at, press: mobile.press() || aid_press || devices.mouse.just_pressed(MouseButton::Left), ..Default::default() };
     let pad_menu = crate::pad::MenuAt { code: Some(fnv_game::game::menus::MAP), tab: pip.tab() };
     let physical = frame_keys(&mut input, &devices, game, pad_menu);
     let report = fnv_game::ui_input::step(game, &[menu], &input, &fnv_ui::input::no_measure);
@@ -2358,9 +2449,10 @@ pub(crate) fn feed(mut script: ResMut<ScriptState>, switch: Res<TileMenus>, from
         .collect();
     let over = report.over.map(|(from, to)| (from.and_then(|t| data_tile(ui, w, t)), to.and_then(|t| data_tile(ui, w, t))));
     let hints: Vec<(Slot, ButtonKind)> = w.shown.as_ref().map(|s| s.hints.iter().map(|h| (h.slot, h.kind)).collect()).unwrap_or_default();
-    if !held {
+    if !held || (state.touch_drag && !mobile.control) {
         tiles.drag = None;
         tiles.pane_drag = None;
+        state.touch_drag = false;
     }
     let mut row_acted = false;
     let mut pressed_marker = false;
@@ -2384,6 +2476,7 @@ pub(crate) fn feed(mut script: ResMut<ScriptState>, switch: Res<TileMenus>, from
                 pressed_marker = true;
                 let list_tile = resolve_tile(ui, tiles.written.list().path());
                 tiles.drag = at.filter(|_| held && by_pointer).zip(list_tile).and_then(|((_, y), l)| list::marker_grab(ui, menu, l, y));
+                state.touch_drag = mobile.control && tiles.drag.is_some();
             }
             DataTile::ListBar(piece) => {
                 let value = tiles.written.view().value;
@@ -2395,6 +2488,7 @@ pub(crate) fn feed(mut script: ResMut<ScriptState>, switch: Res<TileMenus>, from
                 pressed_marker = true;
                 let pane = tiles.written.shown.as_ref().map_or(&Pane::None, |s| &s.pane);
                 tiles.pane_drag = at.filter(|_| held && by_pointer).and_then(|(_, y)| pane_grab(ui, menu, pane, y));
+                state.touch_drag = mobile.control && tiles.pane_drag.is_some();
             }
             DataTile::PaneBar(piece) => {
                 if let Some(part) = pane_part(piece) {
@@ -2411,7 +2505,7 @@ pub(crate) fn feed(mut script: ResMut<ScriptState>, switch: Res<TileMenus>, from
             data.push_act(Act::PaneTo(v as f32));
         }
     }
-    if let Some((was, is)) = over {
+    if let Some((was, is)) = over.filter(|_| !mobile.control) {
         let w = &tiles.written;
         // Off the selected row: no longer boxed, as the hand-built row's pointer leaving.
         if let Some(DataTile::Row(j)) = was.filter(|_| was != is) {
@@ -2488,6 +2582,7 @@ pub(crate) fn setup(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("map_menu/tab_swipe_tests.rs");
     use crate::pipboy::frame::Hint;
     use fnv_ui::MemSource;
 
@@ -2676,7 +2771,7 @@ mod tests {
     }
 
     fn x_hint() -> HintShown {
-        HintShown { slot: Slot::X, kind: ButtonKind::ShowLocation, word: "Look There".into(), key: "X)".into(), dim: false }
+        HintShown { slot: Slot::X, kind: ButtonKind::ShowLocation, word: "Look There".into(), key: "[X]".into(), dim: false }
     }
 
     /// Quests `n` of them, the first active and the last done, `sel` selected and boxed, with `objectives`
@@ -2757,12 +2852,12 @@ mod tests {
         assert_eq!((at(&ui, &button_path("MM_ButtonA"), "visible"), at(&ui, &button_path("MM_ButtonY"), "visible")), (0.0, 0.0));
         let x = button_path("MM_ButtonX");
         assert_eq!((at(&ui, &x, "visible"), at(&ui, &x, "target")), (1.0, 1.0));
-        assert_eq!((words(&ui, &x, "string"), words(&ui, &x, "_PCButtonText")), ("Look There".to_string(), "X)".to_string()));
+        assert_eq!((words(&ui, &x, "string"), words(&ui, &x, "_PCButtonText")), ("Look There".to_string(), "[X]".to_string()));
         // Measured and checked: three rows whole, the objectives' window from what clips them.
         assert_eq!((t.written.counted.rows, t.written.counted.rows_in_clip), (3, 3));
         let pane = t.written.counted.pane.expect("the objectives' window");
         assert_eq!((pane.min.x, pane.min.y, pane.width(), pane.height()), (490.0, 240.0, 380.0, 200.0));
-        assert!(describe(&t.written).contains("tab quests, 3 rows, \"Quest 1\" selected, 2 objectives, hints: X Look There X)"), "{}", describe(&t.written));
+        assert!(describe(&t.written).contains("tab quests, 3 rows, \"Quest 1\" selected, 2 objectives, hints: X Look There [X]"), "{}", describe(&t.written));
     }
 
     #[test]
@@ -2822,7 +2917,7 @@ mod tests {
         // A controller's set: A then X, whatever their order; a dim hint is no target.
         let (mut ui, mut t) = (tree(), MapTiles::default());
         let mut s = shown(2, 1, 0);
-        s.hints = vec![x_hint(), HintShown { slot: Slot::A, kind: ButtonKind::MakeActive, word: "Pick".into(), key: "A)".into(), dim: true }];
+        s.hints = vec![x_hint(), HintShown { slot: Slot::A, kind: ButtonKind::MakeActive, word: "Pick".into(), key: "[A]".into(), dim: true }];
         run(&mut ui, Some(s), &mut t).unwrap();
         let a = button_path("MM_ButtonA");
         assert_eq!((at(&ui, &a, "visible"), at(&ui, &a, "target"), words(&ui, &a, "string")), (1.0, 0.0, "Pick".to_string()));
@@ -2910,7 +3005,7 @@ mod tests {
             rows: (0..n).map(|i| RowShown { key: 500 + i as u32, text: format!("Item {i}"), filled: false, done: list == ListKind::Challenges && i == 1 }).collect(),
             selected: (n > 0).then_some(sel),
             pane,
-            hints: vec![hint(Slot::X, ButtonKind::NotesFilter, "Fewer", "X)"), hint(Slot::Y, ButtonKind::Challenges, "Feats", "R)")],
+            hints: vec![hint(Slot::X, ButtonKind::NotesFilter, "Fewer", "[X]"), hint(Slot::Y, ButtonKind::Challenges, "Feats", "[R]")],
             ..shown(0, 0, 0)
         }
     }
@@ -2949,8 +3044,8 @@ mod tests {
         assert_eq!((pane.min.x, pane.min.y, pane.width(), pane.height()), (500.0, 245.0, 360.0, 150.0));
         // The hints: the filter on X, the challenges toggle on Y.
         assert_eq!((words(&ui, &button_path("MM_ButtonX"), "string"), words(&ui, &button_path("MM_ButtonY"), "string")), ("Fewer".to_string(), "Feats".to_string()));
-        assert_eq!(words(&ui, &button_path("MM_ButtonY"), "_PCButtonText"), "R)");
-        assert!(describe(&t.written).contains("tab misc notes, 3 rows, \"Item 1\" selected, text, hints: X Fewer X), Y Feats R)"), "{}", describe(&t.written));
+        assert_eq!(words(&ui, &button_path("MM_ButtonY"), "_PCButtonText"), "[R]");
+        assert!(describe(&t.written).contains("tab misc notes, 3 rows, \"Item 1\" selected, text, hints: X Fewer [X], Y Feats [R]"), "{}", describe(&t.written));
         // Further than it can go: held at its end; a page and the wheel are the pane's (data).
         s.pane_first = 500.0;
         run(&mut ui, Some(s), &mut t).unwrap();
@@ -3403,6 +3498,11 @@ mod tests {
         assert!((trait_of(&ui, lines[0].tile, "user0") - 100.0).abs() < 1e-3);
         assert!((trait_of(&ui, lines[0].tile, "rotateangle") - std::f64::consts::PI).abs() < 1e-6);
         assert!(trait_of(&ui, lines[1].tile, "rotateangle").abs() < 1e-6);
+        // #4685: each line is cut by the map's window, not by its 6-wide start node's box.
+        for l in lines {
+            let clip = super::super::layout::layout(&ui, l.tile, &|_, _, _| (0.0, 0.0), true).into_iter().find(|i| i.tile == l.tile).unwrap().clip.expect("cut by the window");
+            assert!(clip.width > 100.0 && clip.height > 100.0, "the line's clip is the map's window, not the node: {clip:?}");
+        }
         // The arrow: the player's place and heading, shown; its brightness the painter's default,
         // which the file does not give and the nodes and lines copy; its zoom the file's.
         assert_eq!((at(&ui, WORLD_CURSOR, "_x"), at(&ui, WORLD_CURSOR, "_y"), at(&ui, WORLD_CURSOR, "rotateangle"), at(&ui, WORLD_CURSOR, "visible")), (0.5, 0.5, f64::from(data::arrow_turn(0.25)), 1.0));
@@ -4006,7 +4106,7 @@ mod tests {
 
     #[test]
     fn the_prepared_page_is_read_as_the_tile_page_writes_it() {
-        let hint = |kind, word: &'static str, dim| data::Button { hint: Hint::new(word, "K)".into(), dim), kind };
+        let hint = |kind, word: &'static str, dim| data::Button { hint: Hint::new(word, "[K]".into(), dim), kind };
         let row = |text: &str, mark, done| data::Row { text: text.into(), mark, done };
         let view = data::View {
             tab: data::QUESTS,
@@ -4033,6 +4133,54 @@ mod tests {
         let text = Prepared { view: data::View { body: Body::List { rows: Vec::new(), first: 0, boxed: None, right: Right::Text { text: "x".into(), first: 0.0 } }, ..view }, keys: Vec::new(), ..p };
         assert_eq!(Shown::of(&text, true), Err("the right pane is not the tab's".to_string()));
     }
+    #[test]
+    fn native_data_button_release_keeps_its_original_selected_record_and_action() {
+        use bevy::{prelude::*, input::{InputPlugin, touch::{TouchInput, TouchPhase}}};
+        use crate::pipboy::{self, touch_items::TouchItems};
+        #[derive(Resource, Default)] struct Seen(Vec<Act>);
+        #[derive(Resource)] struct Repaint(Option<bool>);
+        fn project(mut touch: ResMut<TouchItems>) { touch.project(Some); }
+        fn change(mut change: ResMut<Repaint>, touch: Res<TouchItems>, mut script: ResMut<ScriptState>, mut tiles: ResMut<MapTiles>) {
+            if touch.pointer_frame().tap {
+                if let Some(kind_change) = change.0.take() {
+                    let mut drawing = tiles.written.shown.as_ref().unwrap().clone();
+                    if kind_change { drawing.hints[0].kind = ButtonKind::NotesFilter; } else { drawing.selected = Some(1); }
+                    let menu = run(&mut script.rt.as_mut().unwrap().game.ui_tree, Some(drawing), &mut tiles).unwrap(); tiles.shown = Some(menu);
+                }
+            }
+        }
+        fn read(mut data: ResMut<DataState>, mut seen: ResMut<Seen>) { seen.0.extend(data.take_touch_test_actions().into_iter().filter(|a| matches!(a, Act::Button(_)))); }
+        for kind_change in [false, true] {
+            let (mut ui, mut tiles) = (tree(), MapTiles::default()); let menu = run(&mut ui, Some(shown(2,0,2)), &mut tiles).unwrap(); tiles.shown = Some(menu);
+            let hits = fnv_ui::input::hit_candidates(&ui, menu, &fnv_ui::input::no_measure);
+            let region = hits.iter().find(|h| matches!(data_tile(&ui, &tiles.written, h.under), Some(DataTile::Button(Slot::X)))).unwrap().region();
+            let point = Vec2::new((region.left+region.width*0.5) as f32, (region.top+region.height*0.5) as f32);
+            let button = fnv_ui::input::hit(&ui, &[menu], (point.x as f64, point.y as f64), &fnv_ui::input::no_measure).unwrap().tile;
+            let mut script = ScriptState::over_no_plugins(); { let game = &mut script.rt.as_mut().unwrap().game; game.ui_files = Some(Box::new(MemSource::default())); game.ui_tree = ui; game.menu = Some(fnv_game::game::menus::MAP); }
+            let mut pip = PipBoy::default(); pip.phase = pipboy::Phase::Up; pip.page = Page::Data; pip.tabs[Page::Data.index()] = data::QUESTS;
+            let mut app = App::new(); app.add_plugins((MinimalPlugins, InputPlugin))
+                .init_resource::<TouchItems>().init_resource::<DataState>().init_resource::<pipboy::PipBoyAid>().init_resource::<pipboy::PointerMoved>()
+                .init_resource::<Seen>().insert_resource(Repaint(Some(kind_change)))
+                .add_message::<PipBoyInput>().add_message::<TabHovered>()
+                .insert_resource(script).insert_resource(tiles).insert_resource(pip)
+                .insert_resource(TileMenus { map: true, ..Default::default() });
+            let camera = app.world_mut().spawn_empty().id();
+            app.insert_resource(PipBoyScreen { image: Handle::default(), camera, on_model: false, pointer: None, scale: 1. })
+                .add_plugins(pipboy::touch_scroll::TouchPointerPlugin)
+                .add_systems(Update, (change, feed, read).chain()).add_systems(Last, project);
+            app.update();
+            let send = |app: &mut App, id, phase| { assert!(app.world_mut().resource_mut::<TouchItems>().event(&TouchInput { window: Entity::PLACEHOLDER, id, phase, position: point, force: None }, 100)); };
+            send(&mut app, 203, TouchPhase::Started); app.update(); app.update();
+            send(&mut app, 203, TouchPhase::Ended); for _ in 0..4 { app.update(); }
+            assert!(app.world().resource::<Repaint>().0.is_none()); assert!(app.world().resource::<Seen>().0.is_empty());
+            let ui = &app.world().resource::<ScriptState>().rt.as_ref().unwrap().game.ui_tree;
+            assert_eq!(fnv_ui::input::hit(ui, &[menu], (point.x as f64,point.y as f64), &fnv_ui::input::no_measure).unwrap().tile, button, "the same native button tile survives the repaint");
+            send(&mut app, 204, TouchPhase::Started); send(&mut app, 204, TouchPhase::Ended); for _ in 0..4 { app.update(); }
+            assert_eq!(app.world().resource::<Seen>().0, vec![Act::Button(if kind_change {ButtonKind::NotesFilter} else {ButtonKind::ShowLocation})]);
+        }
+    }
+
+    include!("map_menu/touch_map_tests.rs");
 
     #[test]
     fn hotrect_scrollbar_and_nested_objectives_list_stay_on_tiles() {
@@ -4154,5 +4302,39 @@ mod tests {
         let (mut ui_local, mut t_local) = (tree_changed(with_local), MapTiles::default());
         run(&mut ui_local, Some(local(None, 1.0)), &mut t_local).unwrap();
         assert!(t_local.pieces.iter().all(|p| !matches!(&p.look, Look::Text { string, .. } if string == "Scout Alpha")));
+    }
+
+    #[test]
+    fn centered_highlight_location_name_rect_with_clips_uses_highlight_clipwindow() {
+        // Modded map_menu.xml (e.g. Vanilla UI Plus `VUI+\outline_rect.xml`) turns
+        // `MM_HighlightLocationName` into a `<rect>` with `<clips>&true;</clips>`, `<locus>1</locus>`,
+        // centered at `parent.width / 2`, containing centered `<text>` children (`original`, `VUI+Shadow`).
+        let modded = |x: String| {
+            with_world(x).replace(
+                r#"<text name="MM_HighlightLocationName"><x>80</x><y>170</y><string><copy src="parent()" trait="_Title"/></string></text>"#,
+                r#"<rect name="MM_HighlightLocationName"><locus>1</locus><clips>&true;</clips><justify>&center;</justify><x><copy src="parent()" trait="width"/><div>2</div></x><y>170</y><width><copy src="child(original)" trait="width"/></width><height><copy src="child(original)" trait="height"/></height><string><copy src="parent()" trait="_Title"/></string>
+                    <text name="original"><string><copy src="parent()" trait="string"/></string><justify>&center;</justify><clips>&true;</clips></text>
+                    <text name="VUI+Shadow"><x>1.5</x><y>1.5</y><string><copy src="sibling(original)" trait="string"/></string><justify>&center;</justify><clips>&true;</clips></text>
+                  </rect>"#,
+            )
+        };
+        let (mut ui, mut t) = (tree_changed(modded), MapTiles::default());
+        let mut place = marker(10, [0.5, 0.5], true);
+        place.name = "Trading Shoppe".into();
+        let s = world(1.0, [0.5, 0.5], vec![place]);
+        run(&mut ui, Some(s), &mut t).unwrap();
+        let orig = ui.find_tile("MapMenu/GLOW_BRANCH/MM_MainRect/MM_Highlight_ClipWindow/MM_MapHighlightBox/MM_HighlightLocationName/original").unwrap();
+        let shadow = ui.find_tile("MapMenu/GLOW_BRANCH/MM_MainRect/MM_Highlight_ClipWindow/MM_MapHighlightBox/MM_HighlightLocationName/VUI+Shadow").unwrap();
+        let orig_piece = t.pieces.iter().find(|p| p.tile == orig).expect("original location label piece");
+        let shadow_piece = t.pieces.iter().find(|p| p.tile == shadow).expect("shadow location label piece");
+        let clip = orig_piece.clip.expect("label stays clipped to MM_Highlight_ClipWindow");
+        assert_eq!((clip.left, clip.top, clip.width, clip.height), (40.0, 90.0, 855.0, 500.0));
+        assert_eq!(shadow_piece.clip, Some(clip));
+        // Centered text starts half its width to the left of the highlight center (40 + 427.5 = 467.5),
+        // so the entire left half of the place name sits well inside MM_Highlight_ClipWindow.
+        let center_x = 40.0 + 855.0 / 2.0;
+        assert!(orig_piece.rect.width > 100.0, "expected measured text width, got {}", orig_piece.rect.width);
+        assert!(orig_piece.rect.left < center_x - 50.0, "left half should extend left of center: left={}, center={}", orig_piece.rect.left, center_x);
+        assert!(orig_piece.rect.left >= clip.left && orig_piece.rect.left + orig_piece.rect.width <= clip.left + clip.width);
     }
 }

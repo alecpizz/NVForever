@@ -129,6 +129,10 @@ version = "2.3"
 [dependencies.indexmap]
 version = "2"
 
+[dependencies.bytemuck]
+version = "1"
+features = ["derive"]
+
 [dependencies.nonmax]
 version = "0.5"
 

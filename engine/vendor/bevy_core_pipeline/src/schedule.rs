@@ -125,6 +125,14 @@ struct CameraWindows(EntityHashSet);
 #[reflect(from_reflect = false)]
 pub struct RootNonCameraView(#[reflect(ignore)] pub InternedScheduleLabel);
 
+/// NVForever hosted shadow views (2026-11-25, engine/vendor/README.md "hosted shadow
+/// views"): a [`RootNonCameraView`] that a camera's schedule draws this frame, so
+/// [`camera_driver`] does not run a schedule for it. `bevy_pbr` sets it on the point and
+/// spot lights' shadow views while the game holds their maps (light.rs
+/// `nvf_host_shadow_views`); nothing else does.
+#[derive(Clone, Copy, Component, Debug, Default)]
+pub struct NvfHostedView;
+
 /// The default entry point for camera driven rendering added to the root [`bevy_render::renderer::RenderGraph`]
 /// schedule. This system iterates over all cameras in the world, executing their associated
 /// rendering schedules defined by the [`bevy_render::camera::CameraRenderGraph`] component.
@@ -139,7 +147,9 @@ pub fn camera_driver(
 ) {
     // Gather up all cameras and auxiliary views not associated with a camera.
     let root_views: Vec<_> = {
-        let mut auxiliary_views = world.query_filtered::<Entity, With<RootNonCameraView>>();
+        // NVForever hosted shadow views: not those a camera's schedule draws.
+        let mut auxiliary_views =
+            world.query_filtered::<Entity, (With<RootNonCameraView>, Without<NvfHostedView>)>();
         let sorted = world.resource::<SortedCameras>();
         auxiliary_views
             .iter(world)

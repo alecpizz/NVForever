@@ -13,6 +13,7 @@
 //! renderer-side icon drawing.
 
 use crate::game::menus;
+use fnv_ui::expr::{Arg, Op, OpKind, Src};
 use fnv_ui::{xml::Node, Source, TileId, Ui};
 
 /// Canonical VFS path of ySI's XML fragment.
@@ -27,6 +28,11 @@ pub const YSI_NO_TAG_TEMPLATE: &str = "ySINoTag";
 pub const YSI_IMAGE_TILE: &str = "ySIImage";
 /// Private trait tracking which template built an instantiated [`YSI_IMAGE_TILE`] child.
 const YSI_TEMPLATE_TRAIT: &str = "_ysi_template";
+/// Private trait recording a row's `ListItemText` base `x` prior to ySI icon spacing: the
+/// file's literal value, or the file's own operators when `x` is an expression.
+const YSI_BASE_X_TRAIT: &str = "_ysi_base_x";
+/// Private trait holding how far an expression-driven `ListItemText/x` is moved right.
+const YSI_X_SHIFT_TRAIT: &str = "_ysi_x_shift";
 
 /// Resolved ySI sorting tag, icon texture filename, and XML template name for an item form
 /// [design: `docs/spec-notes/ysi-filename.md`].
@@ -41,7 +47,12 @@ pub struct YsiItemDisplay {
 }
 
 /// Picks the icon template name: explicit non-empty rule template, else `ySIDefault` when
-/// tagged/icon-bearing or `ySINoTag` otherwise [design: `docs/spec-notes/ysi-filename.md`].
+/// tagged/icon-bearing or `ySINoTag` otherwise [documented: ySI - Sorting Ycons v1.4b
+/// (Nexus Mods 74358), shipped `menus/ySI/ySI.xml` and `menus/ySI/ySI.json` declare the
+/// `ySIDefault` and `ySINoTag` template names (no yUI/ySI DLL or source consulted);
+/// hypothesis: unprobed row-rendering fallback from an omitted rule template to
+/// `ySIDefault`/`ySINoTag` (note `ySIGetTrait "template"` returns `""` in yUI v1.4d per
+/// `w4e_02_ysi_metadata_traits`)].
 pub fn row_template_or_default(template: Option<&str>, has_icon_or_tag: bool) -> String {
     if let Some(t) = template.map(str::trim).filter(|s| !s.is_empty()) {
         return t.to_string();
@@ -69,8 +80,12 @@ pub fn menu_has_ysi(ui: &Ui, tile: TileId) -> bool {
 /// Menu class code of `HUDMainMenu` (`fnv_ui::value::MENU_CLASSES`).
 const HUD_MENU_CODE: u16 = 1004;
 
-/// Menus that host `menus/ySI/ySI.xml` when present in the VFS [design:
-/// `docs/spec-notes/ysi-ui-injection.md`].
+/// Menus that host `menus/ySI/ySI.xml` when present in the VFS [documented: ySI - Sorting
+/// Ycons v1.4b (Nexus Mods 74358), shipped `menus/ySI/ySI.xml` (no yUI/ySI DLL or source
+/// consulted); observed: `BarterMenu` injection (`barter(mm=1053,ysi=1,pip=0)`, i.e.
+/// `_ySI=1`, `_ySIPipBoy=0`) in `w4e_05_ysi_ini_precedence_and_gating`
+/// (`tools/capture/nvse/catalogs/wave4e_mods.json`, #3803); hypothesis: remaining target
+/// menu list (`docs/spec-notes/ysi-ui-injection.md`)].
 pub const TARGET_MENUS: &[(u16, &str)] = &[
     (HUD_MENU_CODE, "HUDMainMenu"),
     (menus::INVENTORY, "InventoryMenu"),
@@ -103,6 +118,15 @@ fn has_direct_child(ui: &Ui, parent: TileId, name: &str) -> Option<TileId> {
         .iter()
         .copied()
         .find(|&c| ui.is_live(c) && ui.tile(c).name.eq_ignore_ascii_case(name))
+}
+
+fn direct_children(ui: &Ui, parent: TileId, name: &str) -> Vec<TileId> {
+    ui.tile(parent)
+        .children
+        .iter()
+        .copied()
+        .filter(|&c| ui.is_live(c) && ui.tile(c).name.eq_ignore_ascii_case(name))
+        .collect()
 }
 
 fn has_template(ui: &Ui, tile: TileId, name: &str) -> bool {
@@ -158,6 +182,63 @@ pub fn publish_for_menu(ui: &mut Ui, files: &dyn Source, root: TileId, class_cod
         return false;
     }
     ui.inject_text(files, &menu_name, &text)
+}
+
+/// Re-align a row's existing `ySIImage/x` after `ui.update()` has evaluated expression-driven
+/// `ListItemText/x` / `_ysi_base_x` and `ySI` spacing traits on freshly created rows [design].
+///
+/// Returns `true` if `ySIImage/x` was changed.
+pub fn sync_row_icon_x(ui: &mut Ui, row_tile: TileId) -> bool {
+    if !ui.is_live(row_tile) {
+        return false;
+    }
+    let Some(icon_tile) = has_direct_child(ui, row_tile, YSI_IMAGE_TILE) else {
+        return false;
+    };
+    let Some(text_tile) = has_direct_child(ui, row_tile, "ListItemText") else {
+        return false;
+    };
+    let root = ui.root_of(row_tile);
+    let ysi_rect = has_direct_child(ui, root, YSI_ROOT_TILE);
+    let ysi_num = |trait_name: &str| {
+        ysi_rect
+            .and_then(|r| ui.tile(r).get(trait_name))
+            .map(fnv_ui::Value::num)
+    };
+    let icon_num = |trait_name: &str| ui.tile(icon_tile).get(trait_name).map(fnv_ui::Value::num);
+
+    let has_icon = !ui
+        .tile(icon_tile)
+        .get(YSI_TEMPLATE_TRAIT)
+        .is_some_and(|v| v.text().eq_ignore_ascii_case(YSI_NO_TAG_TEMPLATE));
+    let blanks_on = ysi_num("_ySIBlanks").is_none_or(|v| v != 0.0);
+    let width = if has_icon || blanks_on {
+        ysi_num("_ySIWidth")
+            .or_else(|| icon_num("width"))
+            .unwrap_or(0.0)
+            .max(0.0)
+    } else {
+        0.0
+    };
+    let space_left = ysi_num("_ySISpaceLeft")
+        .or_else(|| icon_num("user0"))
+        .unwrap_or(0.0);
+
+    let base_x = ui
+        .tile(text_tile)
+        .get(YSI_BASE_X_TRAIT)
+        .or_else(|| ui.tile(text_tile).get("x"))
+        .map_or(0.0, fnv_ui::Value::num);
+    let want_x = if width > 0.0 {
+        base_x + space_left
+    } else {
+        base_x
+    };
+    if ui.tile(icon_tile).get("x").map(fnv_ui::Value::num) == Some(want_x) {
+        return false;
+    }
+    ui.set_trait(icon_tile, "x", fnv_ui::Value::Num(want_x));
+    true
 }
 
 /// Safely instantiate a ySI icon template (such as `ySIDefault` or `ySINoTag`) under
@@ -226,29 +307,37 @@ pub fn apply_row_icon(
         None
     };
 
+    let existing_images = direct_children(ui, row_tile, YSI_IMAGE_TILE);
     let Some(template_name) = chosen_template else {
-        if let Some(existing) = has_direct_child(ui, row_tile, YSI_IMAGE_TILE) {
-            ui.set_trait(existing, "visible", fnv_ui::Value::Num(0.0));
+        for (idx, existing) in existing_images.into_iter().enumerate() {
+            if idx == 0 {
+                ui.set_trait(existing, "visible", fnv_ui::Value::Num(0.0));
+            } else {
+                ui.unload_tile(existing);
+            }
         }
         return false;
     };
 
-    if let Some(existing) = has_direct_child(ui, row_tile, YSI_IMAGE_TILE) {
-        let same_tpl = ui
-            .tile(existing)
-            .get(YSI_TEMPLATE_TRAIT)
-            .is_some_and(|v| v.text().eq_ignore_ascii_case(&template_name));
-        if !same_tpl {
+    let mut kept = None;
+    for existing in existing_images {
+        let same_tpl = kept.is_none()
+            && ui
+                .tile(existing)
+                .get(YSI_TEMPLATE_TRAIT)
+                .is_some_and(|v| v.text().eq_ignore_ascii_case(&template_name));
+        if same_tpl {
+            kept = Some(existing);
+        } else {
             ui.unload_tile(existing);
         }
     }
 
-    let tile = if let Some(existing) = has_direct_child(ui, row_tile, YSI_IMAGE_TILE) {
+    let tile = if let Some(existing) = kept {
         existing
     } else {
-        let row_path = ui.path_of(row_tile);
         let Some(created) =
-            ui.add_code_tile_from_template(files, &row_path, &template_name, Some(YSI_IMAGE_TILE))
+            ui.add_code_tile_from_template_under(files, row_tile, &template_name, Some(YSI_IMAGE_TILE))
         else {
             return false;
         };
@@ -260,7 +349,118 @@ pub fn apply_row_icon(
         ui.set_trait(tile, "filename", fnv_ui::Value::Str(filename.to_string()));
         ui.set_trait(tile, "visible", fnv_ui::Value::Num(1.0));
     }
+    position_row_icon(ui, row_tile, tile, icon_path.is_some());
     true
+}
+
+/// Position `ySIImage`'s `x` and shift `ListItemText`'s `x` according to the
+/// `ySI` rect's `_ySIWidth` / `_ySISpaceLeft` (`user0`) / `_ySISpaceRight` (`user1`) /
+/// `_ySIBlanks` traits [documented: Sorting Icons 1.4b package, `menus/ySI/ySI.xml`: the
+/// icon's `x` is "set in code", `user0` is the "additional space left between equip square
+/// and icon" and `user1` the "additional space left between icon and text"; no ySI/yUI DLL
+/// or source code was consulted]. A literal `ListItemText/x` is shifted idempotently via
+/// the private `_ysi_base_x` [design]. An expression-driven `ListItemText/x` (UI overhauls
+/// that place the text from the font and the equip square, such as VUI+) keeps the file's
+/// operators: they move to `_ysi_base_x` and `x` becomes that plus `_ysi_x_shift`, so the
+/// text moves past the icon once however often the row is written [design].
+fn position_row_icon(ui: &mut Ui, row_tile: TileId, icon_tile: TileId, has_icon: bool) {
+    let Some(text_tile) = has_direct_child(ui, row_tile, "ListItemText") else {
+        return;
+    };
+    let root = ui.root_of(row_tile);
+    let ysi_rect = has_direct_child(ui, root, YSI_ROOT_TILE);
+    let ysi_num = |trait_name: &str| {
+        ysi_rect
+            .and_then(|r| ui.tile(r).get(trait_name))
+            .map(fnv_ui::Value::num)
+    };
+    let icon_num = |trait_name: &str| ui.tile(icon_tile).get(trait_name).map(fnv_ui::Value::num);
+
+    let blanks_on = ysi_num("_ySIBlanks").is_none_or(|v| v != 0.0);
+    let width = if has_icon || blanks_on {
+        ysi_num("_ySIWidth")
+            .or_else(|| icon_num("width"))
+            .unwrap_or(0.0)
+            .max(0.0)
+    } else {
+        0.0
+    };
+    let space_left = ysi_num("_ySISpaceLeft")
+        .or_else(|| icon_num("user0"))
+        .unwrap_or(0.0);
+    let space_right = ysi_num("_ySISpaceRight")
+        .or_else(|| icon_num("user1"))
+        .unwrap_or(0.0);
+
+    let (icon_x, text_shift) = if width > 0.0 {
+        (space_left, space_left + width + space_right)
+    } else {
+        (0.0, 0.0)
+    };
+    let base_x = shift_list_text(ui, text_tile, text_shift);
+    ui.set_trait(icon_tile, "x", fnv_ui::Value::Num(base_x + icon_x));
+}
+
+/// The operators of a shifted expression-driven `ListItemText/x`: its own expression
+/// (kept in `_ysi_base_x`) plus `_ysi_x_shift`.
+fn shifted_x_ops() -> Vec<Op> {
+    let me = |name: &str| Arg::Ref { src: Src::Me, name: name.to_string() };
+    vec![
+        Op { kind: OpKind::Copy, arg: me(YSI_BASE_X_TRAIT) },
+        Op { kind: OpKind::Add, arg: me(YSI_X_SHIFT_TRAIT) },
+    ]
+}
+
+/// Moves `ListItemText` (`text_tile`) `shift` units right of its base place, and answers
+/// the base place: the file's literal `x` (kept in `_ysi_base_x`), or for an expression the
+/// value the file's operators work out. Writing the same shift again changes nothing.
+fn shift_list_text(ui: &mut Ui, text_tile: TileId, shift: f64) -> f64 {
+    let x_expr = ui
+        .tile(text_tile)
+        .trait_index("x")
+        .and_then(|idx| ui.tile(text_tile).traits[idx].expr.clone());
+    match x_expr {
+        Some(ops) => {
+            if ops != shifted_x_ops() {
+                // Seed `_ysi_base_x` with the already-evaluated `x` so `ySIImage/x` lands
+                // at the right spot on the first frame (before the next `ui.update()`
+                // evaluates `_ysi_base_x`), then move the file's operators there and wrap
+                // `x` to add `_ysi_x_shift`.
+                let initial = ui.tile(text_tile).get("x").cloned().unwrap_or(fnv_ui::Value::Num(0.0));
+                ui.set_trait(text_tile, YSI_BASE_X_TRAIT, initial);
+                ui.set_trait_expr(text_tile, YSI_BASE_X_TRAIT, ops);
+                ui.set_trait_expr(text_tile, "x", shifted_x_ops());
+            }
+            ui.set_trait(text_tile, YSI_X_SHIFT_TRAIT, fnv_ui::Value::Num(shift));
+            ui.tile(text_tile).get(YSI_BASE_X_TRAIT).map_or(0.0, fnv_ui::Value::num)
+        }
+        None => {
+            let base_x = match ui.tile(text_tile).get(YSI_BASE_X_TRAIT) {
+                Some(saved) => saved.num(),
+                None => {
+                    let initial = ui.tile(text_tile).get("x").map_or(0.0, fnv_ui::Value::num);
+                    ui.set_trait(text_tile, YSI_BASE_X_TRAIT, fnv_ui::Value::Num(initial));
+                    initial
+                }
+            };
+            ui.set_trait(text_tile, "x", fnv_ui::Value::Num(base_x + shift));
+            base_x
+        }
+    }
+}
+
+/// Takes a row's `ySIImage` off (icons switched off, `yUI.ini` `bAddInventoryIcons=0`) and
+/// puts its `ListItemText` back at its base place. Nothing for a row without one.
+pub fn remove_row_icon(ui: &mut Ui, row_tile: TileId) {
+    let Some(icon) = has_direct_child(ui, row_tile, YSI_IMAGE_TILE) else {
+        return;
+    };
+    ui.unload_tile(icon);
+    if let Some(text_tile) = has_direct_child(ui, row_tile, "ListItemText") {
+        if ui.tile(text_tile).get(YSI_BASE_X_TRAIT).is_some() {
+            shift_list_text(ui, text_tile, 0.0);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -426,5 +626,88 @@ mod tests {
             .count();
         assert_eq!(images, 1);
         assert_eq!(ui.get_string("InventoryMenu/Row/ySIImage/filename").as_deref(), Some("icons\\untagged_item.dds"));
+    }
+
+    #[test]
+    fn apply_row_icon_positions_icon_and_shifts_literal_list_text_idempotently() {
+        let menu_xml = r#"<menu name="InventoryMenu"><class>&InventoryMenu;</class>
+          <rect name="RowLiteral"><text name="ListItemText"><x>40</x><string>Item</string></text></rect>
+          <rect name="RowExpr"><text name="ListItemText"><x><copy>55</copy></x><string>ExprItem</string></text></rect>
+        </menu>"#;
+        let ysi_xml = r#"
+<rect name="ySI">
+  <_ySI> 1 </_ySI>
+  <_ySIBlanks> 1 </_ySIBlanks>
+  <_ySIWidth> 32 </_ySIWidth>
+  <_ySIHeight> 32 </_ySIHeight>
+  <_ySISpaceLeft> -5 </_ySISpaceLeft>
+  <_ySISpaceRight> 5 </_ySISpaceRight>
+</rect>
+<template name="ySIDefault">
+  <image name="ySIImage">
+    <filename> icons\default.dds </filename>
+    <width> <copy src="ySI" trait="_ySIWidth"/> </width>
+    <height> <copy src="ySI" trait="_ySIHeight"/> </height>
+    <user0> <copy src="ySI" trait="_ySISpaceLeft"/> </user0>
+    <user1> <copy src="ySI" trait="_ySISpaceRight"/> </user1>
+    <x> 0 </x>
+    <visible> 1 </visible>
+  </image>
+</template>
+<template name="ySINoTag">
+  <image name="ySIImage">
+    <filename> icons\blank.dds </filename>
+    <width> <copy src="ySI" trait="_ySIWidth"/> <onlyif src="ySI" trait="_ySIBlanks"/> </width>
+    <height> <copy src="ySI" trait="_ySIHeight"/> </height>
+    <user0> <copy src="ySI" trait="_ySISpaceLeft"/> </user0>
+    <user1> <copy src="ySI" trait="_ySISpaceRight"/> </user1>
+    <x> 0 </x>
+    <visible> 1 </visible>
+  </image>
+</template>
+"#;
+        let src = MemSource::default()
+            .with("menus/inv.xml", menu_xml)
+            .with(YSI_XML_PATH, ysi_xml);
+        let mut ui = Ui::new();
+        let inv = ui.load_menu(&src, "menus/inv.xml").unwrap();
+        assert!(publish_for_menu(&mut ui, &src, inv, Some(menus::INVENTORY)));
+
+        let tagged = YsiItemDisplay {
+            tag: Some("(a01)".into()),
+            icon: Some("icons\\pistol.dds".into()),
+            template: YSI_DEFAULT_TEMPLATE.into(),
+        };
+        let row_lit = ui.find_tile("InventoryMenu/RowLiteral").unwrap();
+        let row_expr = ui.find_tile("InventoryMenu/RowExpr").unwrap();
+
+        // An expression-driven row: the file's operators keep working out the base place
+        // (55) and the text moves past the icon: 55 + (-5) + 32 + 5 = 87, the icon at
+        // 55 + (-5) = 50. (Before, the text stayed at 55 and the icon drew over it.)
+        // Calling apply_row_icon before ui.update() must not freeze the base at the
+        // unevaluated 0.0.
+        assert_eq!(ui.get_float("InventoryMenu/RowExpr/ListItemText/x"), Some(0.0));
+        assert!(apply_row_icon(&mut ui, &src, row_expr, Some(&tagged)));
+        ui.update();
+        assert_eq!(ui.get_float("InventoryMenu/RowExpr/ListItemText/_ysi_base_x"), Some(55.0));
+        assert_eq!(ui.get_float("InventoryMenu/RowExpr/ListItemText/x"), Some(87.0));
+        assert!(apply_row_icon(&mut ui, &src, row_expr, Some(&tagged)));
+        ui.update();
+        assert_eq!(ui.get_float("InventoryMenu/RowExpr/ySIImage/x"), Some(50.0));
+        assert_eq!(ui.get_float("InventoryMenu/RowExpr/ListItemText/x"), Some(87.0));
+
+        // Repeated calls are idempotent: icon x = 40 + (-5) = 35, text x = 40 - 5 + 32 + 5 = 72.
+        assert!(apply_row_icon(&mut ui, &src, row_lit, Some(&tagged)));
+        assert!(apply_row_icon(&mut ui, &src, row_lit, Some(&tagged)));
+        ui.update();
+        assert_eq!(ui.get_float("InventoryMenu/RowLiteral/ySIImage/x"), Some(35.0));
+        assert_eq!(ui.get_float("InventoryMenu/RowLiteral/ListItemText/x"), Some(72.0));
+
+        // Disabling _ySIBlanks restores literal ListItemText/x to its original 40 on untagged rows.
+        ui.set_float("InventoryMenu/ySI/_ySIBlanks", 0.0);
+        ui.update();
+        assert!(apply_row_icon(&mut ui, &src, row_lit, None));
+        ui.update();
+        assert_eq!(ui.get_float("InventoryMenu/RowLiteral/ListItemText/x"), Some(40.0));
     }
 }

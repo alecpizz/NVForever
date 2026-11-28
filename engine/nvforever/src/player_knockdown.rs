@@ -64,9 +64,28 @@ pub struct PlayerKnockdown {
     /// Knockdowns shown and get-up clips played, for the exit report.
     shown: u32,
     clips: u32,
+    /// Co-op: another player revived this one where the body lies (`coop.rs`). The next
+    /// frame knocks the player down in that pose, so they get up from it, the camera
+    /// following the body.
+    pub revived: bool,
+    /// The knockdown being started is that revive's.
+    reviving: bool,
 }
 
 impl PlayerKnockdown {
+    /// Revived in co-op, the body still lies: about to get up (`coop.rs`; the others'
+    /// copies of this player wait for it, `coop/revive.rs`).
+    pub fn revive_lying(&self) -> bool {
+        self.revived || self.reviving || self.down.as_ref().is_some_and(|d| d.revive && matches!(d.phase, Phase::Lying))
+    }
+
+    /// The body lies, about to get up: knocked down and not yet rising. Co-op tells the
+    /// others (`flag::LYING`), whose copies of this player get up when it does
+    /// (`coop/revive.rs`).
+    pub fn lying(&self) -> bool {
+        self.revive_lying() || self.down.as_ref().is_some_and(|d| matches!(d.phase, Phase::Lying))
+    }
+
     /// The body lies as a ragdoll: `player_body.rs` leaves it alone.
     pub fn ragdolled(&self) -> bool {
         self.down.as_ref().is_some_and(|d| matches!(d.phase, Phase::Lying) && d.body.is_some())
@@ -91,8 +110,13 @@ struct Down {
     real: f32,
     /// The camera as it was when the player fell: it stays there while the body lies.
     held: Option<Transform>,
+    /// A co-op revive: the camera follows the body from this side (game space, flat,
+    /// unit), and its last place.
+    chase: Option<(Vec2, Option<Transform>)>,
     /// The side the body was seen lying on.
     face_up: Option<bool>,
+    /// A co-op revive's knockdown.
+    revive: bool,
 }
 
 impl Down {
@@ -192,8 +216,19 @@ fn watch(
 ) {
     let me = FormId::PLAYER_REF;
     let Some(rt) = script.as_deref_mut().and_then(|s| s.rt.as_mut()) else { return };
-    let knocked = rt.game.knockout(me);
     let kd = &mut *kd;
+    // Revived in co-op: down again at once, in the pose the body lies in (no shove), to
+    // get up from it. Not while still dead or the death camera still has the body. Only
+    // `coop.rs` sets `revived`, so single player never comes here [design].
+    if kd.revived && !rt.game.is_dead(me) && !death.down() {
+        kd.revived = false;
+        if kd.down.is_none() && rt.game.knock_down(me, None, [0.0; 3]) {
+            kd.reviving = true;
+            kd.outside_before = false;
+            info!("player knockdown: revived where the body lies: the player gets up from it");
+        }
+    }
+    let knocked = rt.game.knockout(me);
     // Killed while down, or the knockdown gone (a load, ResurrectActor): let go.
     if kd.down.is_some() && (rt.game.is_dead(me) || death.down() || knocked.is_none()) {
         let d = kd.down.take().expect("checked");
@@ -255,7 +290,18 @@ fn watch(
         kd.shown += 1;
         // The camera as the player fell (the eye in first person): it stays there.
         let held = cams.single().ok().copied();
-        kd.down = Some(Down { was_first: was_first && body.is_some(), outside: !was_first, body, phase: Phase::Lying, real: 0.0, held, face_up: None });
+        // A co-op revive: followed from the side the camera already looks from.
+        let reviving = std::mem::take(&mut kd.reviving);
+        let from_camera = || {
+            let pelvis = body.as_ref().and_then(|(_, rig)| bone_at(rig, &globals, "Bip01 Pelvis"))?;
+            let (c, p) = (space::to_game(held?.translation), space::to_game(pelvis));
+            Some(Vec2::new(c[0] - p[0], c[1] - p[1]))
+        };
+        let chase = reviving.then(from_camera).flatten().or(reviving.then_some(Vec2::NEG_Y)).filter(|_| body.is_some()).map(|back| (back.try_normalize().unwrap_or(Vec2::NEG_Y), None));
+        if chase.is_some() {
+            info!("player knockdown: a revive: the camera follows the body");
+        }
+        kd.down = Some(Down { was_first: was_first && body.is_some(), outside: !was_first, body, phase: Phase::Lying, real: 0.0, held, chase, face_up: None, revive: reviving });
         return;
     }
     let d = kd.down.as_mut().expect("checked");
@@ -360,14 +406,42 @@ fn watch(
     }
 }
 
-/// While the body lies, hold the camera where it was when the player fell (see the
-/// module notes); while the player gets up, leave it to the third-person camera.
-fn follow(mut kd: ResMut<PlayerKnockdown>, mut cams: Query<&mut Transform, With<PlayerCamera>>) {
+/// How far behind the revived body and above its middle the camera follows it, game
+/// units [design].
+pub const CHASE_BACK: f32 = 170.0;
+pub const CHASE_UP: f32 = 70.0;
+/// How quickly the following camera closes on its place (per second) [design].
+const CHASE_RATE: f32 = 5.0;
+
+/// While the body lies, hold the camera where it was when the player fell, and while the
+/// player gets up leave it to the third-person camera; a co-op revive is followed
+/// throughout (see the module notes).
+fn follow(real: Res<Time<Real>>, mut kd: ResMut<PlayerKnockdown>, mut phys: ResMut<PhysState>, globals: Query<&GlobalTransform>, mut cams: Query<&mut Transform, With<PlayerCamera>>) {
     let Some(d) = kd.down.as_mut() else { return };
+    let Ok(mut t) = cams.single_mut() else { return };
+    // A co-op revive is followed through the getting up too.
+    if let Some((back, last)) = d.chase.as_mut() {
+        // Between the pelvis and the head: on the ground while the body lies, the chest
+        // once it stands.
+        let bones = d.body.as_ref().and_then(|(_, rig)| Some((bone_at(rig, &globals, "Bip01 Pelvis")?, bone_at(rig, &globals, "Bip01 Head")?)));
+        let Some((pelvis, head)) = bones else { return };
+        let pelvis = (pelvis + head) * 0.5;
+        let p = space::to_game(pelvis);
+        let at = space::to_bevy([p[0] + back.x * CHASE_BACK, p[1] + back.y * CHASE_BACK, p[2] + CHASE_UP]);
+        let at = crate::death_cam::clear(&mut phys, pelvis, at);
+        let want = Transform::from_translation(at).looking_at(pelvis, Vec3::Y);
+        let k = 1.0 - (-real.delta_secs() * CHASE_RATE).exp();
+        let from = last.unwrap_or(*t);
+        let out = Transform { translation: from.translation.lerp(want.translation, k), rotation: from.rotation.slerp(want.rotation, k).normalize(), scale: Vec3::ONE };
+        if out.translation.is_finite() && out.rotation.is_finite() {
+            *last = Some(out);
+            *t = out;
+        }
+        return;
+    }
     if !matches!(d.phase, Phase::Lying) {
         return;
     }
-    let Ok(mut t) = cams.single_mut() else { return };
     match d.held {
         Some(h) => *t = h,
         None => d.held = Some(*t),

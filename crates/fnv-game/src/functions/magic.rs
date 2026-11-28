@@ -7,6 +7,7 @@
 use super::{none, yes, Args, Ctx};
 use crate::game::{Game, InstKey};
 use fnv_script::vm::Value;
+use fnv_sim::FormId;
 
 fn magic_item(g: &Game, a: &Args) -> Result<fnv_sim::FormId, String> {
     let s = a.form(0)?;
@@ -27,6 +28,10 @@ pub fn add_spell(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
     g.sync_actor_effects(r);
     if let Some(x) = g.extra.get_mut(&r) {
         x.dispelled.retain(|&d| d != s);
+    }
+    if r == FormId::PLAYER_REF && g.story_counts(ctx) && !g.extra.get(&r).is_some_and(|x| x.spells.contains(&s)) {
+        g.coop_story.record_spell(s, true);
+        tracing::info!("co-op story: {} gave the player spell {}", ctx.unit, g.data.name(s));
     }
     g.add_spell(r, s);
     // An ability added to an actor out of the loaded area waits for it, and a listed one
@@ -50,6 +55,10 @@ pub fn remove_spell(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> 
     let r = ctx.subject_or_player();
     let s = a.form(0)?;
     g.sync_actor_effects(r);
+    if r == FormId::PLAYER_REF && g.story_counts(ctx) && g.extra.get(&r).is_some_and(|x| x.spells.contains(&s)) {
+        g.coop_story.record_spell(s, false);
+        tracing::info!("co-op story: {} took spell {} from the player", ctx.unit, g.data.name(s));
+    }
     if let Some(e) = g.extra.get_mut(&r) {
         e.spells.retain(|&x| x != s);
         e.dispelled.retain(|&x| x != s);
@@ -83,14 +92,19 @@ pub fn dispel(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
     let ability = g.effects.iter().any(|e| e.target == r && e.source == s && g.is_ability_effect(e));
     let worn: Vec<_> = g.effects.iter().filter(|e| e.target == r && e.source == s).filter_map(|e| e.worn).collect();
     if ability || !worn.is_empty() {
+        let mut recorded_dispel = false;
         let x = g.extra.entry(r).or_default();
         if ability && !x.dispelled.contains(&s) {
             x.dispelled.push(s);
+            recorded_dispel = true;
         }
         for i in worn {
             if !x.worn_dispelled.contains(&i) {
                 x.worn_dispelled.push(i);
             }
+        }
+        if recorded_dispel {
+            g.note_dispelled_ability(r);
         }
     }
     let drop_ids: Vec<u32> = g

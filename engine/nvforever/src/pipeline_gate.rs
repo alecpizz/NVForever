@@ -154,7 +154,7 @@ fn waited_for(state: &CachedPipelineState) -> bool {
 }
 
 /// The errors Bevy tries again [design: bevy_render 0.20.1 `process_pipeline`].
-fn retried(e: &ShaderCacheError) -> bool {
+pub(crate) fn retried(e: &ShaderCacheError) -> bool {
     matches!(e, ShaderCacheError::ShaderNotLoaded(_) | ShaderCacheError::ShaderImportNotYetAvailable)
 }
 
@@ -310,7 +310,7 @@ fn log_each(cache: Res<PipelineCache>, mut seen: Local<Vec<(Instant, bool)>>, mu
                         let name: &str = match s {
                             bevy::shader::ShaderDefVal::Bool(s, _) | bevy::shader::ShaderDefVal::Int(s, _) | bevy::shader::ShaderDefVal::UInt(s, _) => s,
                         };
-                        matches!(name, "PIPBOY_SCREEN" | "ADD_LINEAR" | "FIRST_PERSON_DEPTH" | "HAS_PREVIOUS_SKIN" | "PREPASS_PIPELINE" | "TERRAIN_HEIGHT_BLEND" | "TERRAIN_ANTI_TILING" | "TERRAIN_PARALLAX" | "TERRAIN_SEPARATE") || name.starts_with("BLEND_")
+                        matches!(name, "PIPBOY_SCREEN" | "ADD_LINEAR" | "FIRST_PERSON_DEPTH" | "HAS_PREVIOUS_SKIN" | "PREPASS_PIPELINE" | "TERRAIN_HEIGHT_BLEND" | "TERRAIN_ANTI_TILING" | "TERRAIN_PARALLAX" | "TERRAIN_SEPARATE" | "NVF_CLOUD_VOLUME") || name.starts_with("BLEND_")
                     };
                     let fragment: Vec<_> = d.fragment.iter().flat_map(|f| f.shader_defs.iter()).filter(interesting).collect();
                     info!("pipeline {i} shader-defs: {fragment:?}: {}", label(&p.descriptor));

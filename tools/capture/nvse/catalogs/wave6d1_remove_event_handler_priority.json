@@ -1,0 +1,92 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6d1_remove_event_handler_priority",
+  "description": "Wave 6D-1 strictly read-only console-only clean-room probe catalog verifying xNVSE RemoveEventHandler priority filtering (non-zero priority removes only that priority; priority 0 removes all priorities).",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)",
+    "lStewieAl's Tweaks": "1005"
+  },
+  "batches": [
+    {
+      "id": "w6d1_remove_event_handler_priority",
+      "title": "Wave 6D-1 - RemoveEventHandler Priority Filter",
+      "extender": "xNVSE 6.4.9 + JIP LN 57.30",
+      "required_plugins": [
+        "jip_nvse.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6d1_02_remove_event_handler_priority",
+          "bucket": "A",
+          "extender": "xNVSE 6.4.9",
+          "required_plugins": [
+            "jip_nvse.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-events.md",
+          "spec_line": 147,
+          "functions_tested": [
+            "SetEventHandlerAlt",
+            "RemoveEventHandler",
+            "GetEventHandlers"
+          ],
+          "claim": "Verify RemoveEventHandler honors \"priority\"::n (removing only that priority) vs \"priority\"::0 / omitted (removing all priorities), plus filter-specific removal and 0/1 return.",
+          "expected": "RemoveEventHandler \"priority\"::5 removes only priority 5 (leaving 10 and 1 intact); \"priority\"::0 removes remaining; removing absent returns 0.",
+          "script_lines": [
+            "ref cb = CompileScript \"nvseprobe_s_w6d1_02_cb.gek\"",
+            "Player.AuxVarSetFlt \"*w6d1_02_n\" 0",
+            "SetEventHandlerAlt \"W6D1_RemPrio\" cb \"priority\"::10",
+            "SetEventHandlerAlt \"W6D1_RemPrio\" cb \"priority\"::5",
+            "SetEventHandlerAlt \"W6D1_RemPrio\" cb \"priority\"::1",
+            "int r5 = RemoveEventHandler \"W6D1_RemPrio\" cb \"priority\"::5",
+            "int r5b = RemoveEventHandler \"W6D1_RemPrio\" cb \"priority\"::5",
+            "array_var aAfter5 = GetEventHandlers \"W6D1_RemPrio\"",
+            "int h10 = ar_HasKey aAfter5 10",
+            "int h5 = ar_HasKey aAfter5 5",
+            "int h1 = ar_HasKey aAfter5 1",
+            "DispatchEventAlt \"W6D1_RemPrio\"",
+            "int nAfter5 = Player.AuxVarGetFlt \"*w6d1_02_n\"",
+            "int r0 = RemoveEventHandler \"W6D1_RemPrio\" cb \"priority\"::0",
+            "array_var aAfter0 = GetEventHandlers \"W6D1_RemPrio\"",
+            "int sz0 = ar_Size aAfter0",
+            "SetEventHandlerAlt \"W6D1_RemPrio\" cb 1::100 \"priority\"::3",
+            "SetEventHandlerAlt \"W6D1_RemPrio\" cb 1::200 \"priority\"::3",
+            "int rf1 = RemoveEventHandler \"W6D1_RemPrio\" cb 1::100",
+            "Player.AuxVarSetFlt \"*w6d1_02_n\" 0",
+            "DispatchEventAlt \"W6D1_RemPrio\" 100",
+            "int n100 = Player.AuxVarGetFlt \"*w6d1_02_n\"",
+            "DispatchEventAlt \"W6D1_RemPrio\" 200",
+            "int n200 = Player.AuxVarGetFlt \"*w6d1_02_n\"",
+            "int rAll = RemoveEventHandler \"W6D1_RemPrio\" cb",
+            "int rMiss = RemoveEventHandler \"W6D1_RemPrio\" cb",
+            "PrintToConsole \"PROBE|w6d1_02_remove_event_handler_priority|r5=%g,%g|keys=%g,%g,%g|n=%g|r0=%g,sz0=%g|rf=%g,n100=%g,n200=%g|end=%g,%g\" r5 r5b h10 h5 h1 nAfter5 r0 sz0 rf1 n100 n200 rAll rMiss"
+          ],
+          "helper_scripts": {
+            "nvseprobe_s_w6d1_02_cb.gek": [
+              "begin Function {}",
+              "Player.AuxVarSetFlt \"*w6d1_02_n\" ((Player.AuxVarGetFlt \"*w6d1_02_n\") + 1)"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

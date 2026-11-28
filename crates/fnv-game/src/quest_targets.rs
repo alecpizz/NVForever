@@ -32,8 +32,16 @@ impl Game<'_> {
     /// with no reference (none set, or one the load order lacks) is left out.
     pub fn check_quest_targets(&mut self, quest: FormId) -> Vec<TargetCheck> {
         let data = self.data;
-        let (Some(def), Some(state)) = (data.quests.get(&quest), self.quests.get(&quest)) else { return Vec::new() };
-        let open: Vec<i32> = state.objectives.iter().filter(|(_, o)| o.displayed && !o.completed).map(|(i, _)| *i).collect();
+        let Some(def) = data.quests.get(&quest) else { return Vec::new() };
+        // A co-op guest's: the host's objectives (`Game::coop_host_quest`).
+        let open: Vec<i32> = match &self.coop_host_quest {
+            Some(h) if self.coop_guest && h.quest == quest => h.objectives.iter().filter(|(_, done)| !**done).map(|(i, _)| *i).collect(),
+            _ if self.coop_guest => return Vec::new(),
+            _ => {
+                let Some(state) = self.quests.get(&quest) else { return Vec::new() };
+                state.objectives.iter().filter(|(_, o)| o.displayed && !o.completed).map(|(i, _)| *i).collect()
+            }
+        };
         let mut out = Vec::new();
         for objective in open {
             // The scripts' target list when they changed it (`crate::nvse_jip10`): a

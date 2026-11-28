@@ -153,7 +153,60 @@ impl NameMenu {
     }
 }
 
-/// Spawn the box under `root` (a full-screen node that centres its child).
+/// Root layout for the name/text-input menu: centered on desktop; anchored near the top
+/// of the viewport when an on-screen soft keyboard is active (Android) so the IME does
+/// not cover the input box or the Ok button.
+pub(crate) fn root_node(soft_keyboard: bool) -> Node {
+    Node {
+        position_type: PositionType::Absolute,
+        width: Val::Percent(100.0),
+        height: Val::Percent(100.0),
+        justify_content: JustifyContent::Center,
+        align_items: if soft_keyboard { AlignItems::FlexStart } else { AlignItems::Center },
+        padding: if soft_keyboard { UiRect::top(Val::Percent(8.0)) } else { UiRect::ZERO },
+        ..default()
+    }
+}
+
+/// [design: docs/design/android.md] Clamp the name/text-input box scale and apply safe-area
+/// padding when `menu_scale > 1.0` or safe insets are non-zero. With a soft keyboard active,
+/// keeps the box and its Ok button in the upper half of the viewport above the IME.
+/// Returns `None` at `menu_scale <= 1.0` with zero safe insets so desktop stays untouched.
+pub(crate) fn fit_layout(
+    menu_scale: f32,
+    view_px: Vec2,
+    safe: crate::touch_safe_area::SafeInsets,
+    size: Vec2,
+    soft_keyboard: bool,
+) -> Option<(f32, UiRect)> {
+    let content_w = size.x + 2.0 * BEHIND + 32.0;
+    let content_h = size.y + 2.0 * BEHIND + 32.0;
+    if !soft_keyboard {
+        return crate::interface::fit_centered_box(menu_scale, view_px, safe, content_w, content_h);
+    }
+    let scale = if menu_scale.is_finite() && menu_scale > 0.0 { menu_scale } else { 1.0 };
+    let view_w = if view_px.x.is_finite() && view_px.x > 1.0 { view_px.x } else { 1280.0 };
+    let view_h = if view_px.y.is_finite() && view_px.y > 1.0 { view_px.y } else { 720.0 };
+    let clean = |v: f32, cap: f32| if v.is_finite() { v.clamp(0.0, cap) } else { 0.0 };
+    let (l, r) = (clean(safe.left, view_w * 0.45), clean(safe.right, view_w * 0.45));
+    let (t, b) = (clean(safe.top, view_h * 0.45), clean(safe.bottom, view_h * 0.45));
+    let has_safe = l > 0.5 || t > 0.5 || r > 0.5 || b > 0.5;
+    if scale <= 1.0 && !has_safe {
+        return None;
+    }
+    let px_per_u1 = view_h / 960.0;
+    let safe_w_u1 = (view_w - l - r).max(1.0) / px_per_u1;
+    let safe_h_px = (view_h - t - b).max(1.0);
+    let top_px = t + 0.08 * safe_h_px;
+    let ime_budget_px = (view_h * 0.50 - top_px).max(safe_h_px * 0.36);
+    let ime_budget_u1 = ime_budget_px / px_per_u1;
+    let max_scale = (safe_w_u1 / content_w.max(1.0)).min(ime_budget_u1 / (size.y + BEHIND + 16.0).max(1.0));
+    let draw_scale = scale.min(max_scale).max(0.1);
+    let pad = UiRect { left: Val::Px(l), right: Val::Px(r), top: Val::Px(top_px), bottom: Val::Px(b) };
+    Some((draw_scale, pad))
+}
+
+/// Spawn the box under `root` (a full-screen node that places its child).
 pub fn spawn(root: &mut ChildSpawnerCommands, m: &NameMenu, c: &mut Ctx) {
     let bright = amber(255.0);
     let size = m.size();
@@ -207,5 +260,34 @@ mod tests {
         assert_eq!(m.text, "A");
         m.type_text(&"b".repeat(60));
         assert_eq!(m.text.chars().count(), chargen::NAME_MAX_CHARS);
+    }
+
+    #[test]
+    fn android_soft_keyboard_places_text_entry_box_in_upper_viewport() {
+        let desktop = root_node(false);
+        assert_eq!(desktop.align_items, AlignItems::Center);
+        assert_eq!(desktop.padding.top, Val::Px(0.0));
+        let android = root_node(true);
+        assert_eq!(android.align_items, AlignItems::FlexStart);
+        let Val::Percent(top_pct) = android.padding.top else { panic!("expected percent top padding") };
+        assert!(top_pct <= 10.0, "box starts near top of viewport: {top_pct}%");
+        let box_pct = BOX.y / 960.0 * 100.0;
+        assert!(top_pct + box_pct < 40.0, "box and Ok button stay well above the bottom 50% soft keyboard area");
+    }
+
+    #[test]
+    fn high_menu_scale_keeps_name_box_and_ok_button_inside_safe_area_and_above_ime() {
+        use crate::touch_safe_area::SafeInsets;
+        let safe = SafeInsets { left: 40.0, top: 12.0, right: 40.0, bottom: 24.0 };
+        assert_eq!(fit_layout(1.0, Vec2::new(1600.0, 900.0), SafeInsets::default(), BOX, false), None);
+        for view in [Vec2::new(1280.0, 720.0), Vec2::new(960.0, 540.0), Vec2::new(2400.0, 1080.0)] {
+            for scale in [1.25f32, 1.5, 2.0] {
+                let (s, pad) = fit_layout(scale, view, safe, BOX, true).expect("clamped");
+                let px_per_u = (view.y / 960.0) * s;
+                let Val::Px(top_px) = pad.top else { panic!("expected px top") };
+                assert!(BOX.x * px_per_u <= view.x - safe.left - safe.right + 0.5, "width @ {view:?} {scale}");
+                assert!(top_px + BOX.y * px_per_u <= view.y * 0.52, "Ok stays above soft keyboard @ {view:?} {scale}");
+            }
+        }
     }
 }

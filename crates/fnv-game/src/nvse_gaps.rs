@@ -266,7 +266,13 @@ impl Game<'_> {
     /// before, rank after) on a gain, (perk) on a loss [observed: plugins3, Toughness
     /// gave (Toughness, 0, 1) and then Toughness].
     pub(crate) fn perk_event(&mut self, perk: FormId, gained: bool, before: u8, after: u8) {
-        let hs: Vec<XVal> = self.gaps.perk_handlers.iter().filter(|(add, _, p)| *add == gained && p.is_none_or(|p| p == perk)).map(|(_, f, _)| f.clone()).collect();
+        let hs: Vec<XVal> = self
+            .gaps
+            .perk_handlers
+            .iter()
+            .filter(|(add, _, p)| *add == gained && p.is_none_or(|p| p == perk || crate::functions::list_members(self, p).contains(&perk)))
+            .map(|(_, f, _)| f.clone())
+            .collect();
         for f in hs {
             let args = if gained { vec![XVal::Ref(perk.0), XVal::Num(f64::from(before)), XVal::Num(f64::from(after))] } else { vec![XVal::Ref(perk.0)] };
             if let Err(error) = self.run_function(&f, None, args, None, RunCtx::default()) {
@@ -276,15 +282,19 @@ impl Game<'_> {
     }
 
     /// JohnnyGuitar's actor value change handlers on a change of one of the player's
-    /// values: (code, old value, new value), rounded to whole numbers unless the handler
-    /// was set with flag bit 0 [documented: SetOnActorValueChangeEventHandler]
-    /// (`functions::actor` tells them).
+    /// values: (code, old value, new value), truncated to whole numbers unless the
+    /// handler was set with flag bit 0 [documented: SetOnActorValueChangeEventHandler;
+    /// observed 2026-11-24: `200.0 -> 199.4` fires `200.0 -> 199.0` and `199.4 -> 198.8`
+    /// fires `199.0 -> 198.0`] (`functions::actor` tells them).
     pub(crate) fn av_event(&mut self, _actor: FormId, code: u16, old: f64, new: f64) {
         let hs: Vec<(XVal, bool)> = self.gaps.av_handlers.iter().filter(|(_, c, _)| c.is_none_or(|c| c == code)).map(|(f, _, exact)| (f.clone(), *exact)).collect();
         let was = std::mem::replace(&mut self.gaps.av_telling, true);
         for (f, exact) in hs {
-            let v = |x: f64| XVal::Num(if exact { x } else { x.round() });
-            let args = vec![XVal::Num(f64::from(code)), v(old), v(new)];
+            let (o, n) = if exact { (old, new) } else { (old.trunc(), new.trunc()) };
+            if !exact && o == n {
+                continue;
+            }
+            let args = vec![XVal::Num(f64::from(code)), XVal::Num(o), XVal::Num(n)];
             if let Err(error) = self.run_function(&f, None, args, None, RunCtx::default()) {
                 self.handler_failed("JohnnyGuitar actor value handler".into(), error);
             }
@@ -295,7 +305,13 @@ impl Game<'_> {
     /// JohnnyGuitar's quest handlers on a quest starting or stopping: (quest)
     /// [documented: SetJohnnyOnStartQuestEventHandler; hypothesis: the arguments].
     pub(crate) fn quest_event(&mut self, quest: FormId, started: bool) {
-        let hs: Vec<XVal> = self.gaps.quest_handlers.iter().filter(|(s, _, q)| *s == started && q.is_none_or(|q| q == quest)).map(|(_, f, _)| f.clone()).collect();
+        let hs: Vec<XVal> = self
+            .gaps
+            .quest_handlers
+            .iter()
+            .filter(|(s, _, q)| *s == started && q.is_none_or(|q| q == quest || crate::functions::list_members(self, q).contains(&quest)))
+            .map(|(_, f, _)| f.clone())
+            .collect();
         for f in hs {
             if let Err(error) = self.run_function(&f, None, vec![XVal::Ref(quest.0)], None, RunCtx::default()) {
                 self.handler_failed("JohnnyGuitar quest handler".into(), error);
@@ -640,7 +656,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
             XVal::Ref(match slot {
                 Some(EffectSlot::Added { back, at }) => g.added_effect(f, back, at).map_or(0, |e| e.effect.0),
                 Some(EffectSlot::Own(r)) => {
-                    let e = g.data.effect_items.get(&f).and_then(|l| l.get(r));
+                    let e = g.data.effect_items.get(&g.unclone(f)).and_then(|l| l.get(r));
                     e.map_or(0, |e| g.gaps.effect_bases.get(&(f, r)).copied().unwrap_or(e.effect).0)
                 }
                 None => 0,
@@ -651,6 +667,9 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         "setntheffectbase" => {
             use crate::nvse_jip14::EffectSlot;
             let (Some(f), Some(b)) = (form(args, 0), form(args, 2)) else { return Some(Ok(zero)) };
+            if g.data.sig(g.unclone(b)) != Some(*b"MGEF") {
+                return Some(Ok(XVal::Ref(0)));
+            }
             match usize::try_from(num(args, 1, -1.0) as i64).ok().and_then(|i| g.effect_slot(f, i)) {
                 Some(EffectSlot::Own(r)) => {
                     g.gaps.effect_bases.insert((f, r), b);
@@ -722,7 +741,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         "setjohnnyonaddperkeventhandler" | "setjohnnyonremoveperkeventhandler" => {
             let add = name == "setjohnnyonaddperkeventhandler";
             let Some(f) = args.get(1).cloned() else { return Some(Ok(zero)) };
-            let perk = form(args, 3);
+            let perk = form(args, 3).filter(|&id| id != FormId(0x0000_003B));
             g.gaps.perk_handlers.retain(|(a, h, p)| !(*a == add && *h == f && *p == perk));
             if num(args, 0, 1.0) != 0.0 {
                 g.gaps.perk_handlers.push((add, f, perk));
@@ -1168,11 +1187,14 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         // #2040: 16 in the start cell 0xDEB16, where the loaded actors are 20 with 4
         // disabled Golden Geckos; hypothesis: the same at level 3].
         "getactorsbyprocessinglevel" => {
-            let high = g.package_actors();
+            let level = num(args, 0, -1.0) as i64;
             let on = |r: &FormId| g.world.is_enabled(*r).unwrap_or(false);
-            let actors: Vec<XVal> = match num(args, 0, -1.0) as i64 {
-                0 => high.iter().filter(|r| on(r)).map(|r| XVal::Ref(r.0)).collect(),
-                3 => g.world.placed.refs.iter().filter(|(r, p)| matches!(&p.sig, b"ACHR" | b"ACRE") && !high.contains(r) && on(r)).map(|(r, _)| XVal::Ref(r.0)).collect(),
+            let actors: Vec<XVal> = match level {
+                0 => loaded_processing_actors(g).into_iter().filter(|r| on(r)).map(|r| XVal::Ref(r.0)).collect(),
+                3 => {
+                    let high = loaded_processing_actors(g);
+                    g.world.placed.refs.iter().filter(|(r, p)| matches!(&p.sig, b"ACHR" | b"ACRE") && !high.contains(r) && on(r)).map(|(r, _)| XVal::Ref(r.0)).collect()
+                }
                 _ => Vec::new(),
             };
             if actors.is_empty() { zero } else { list(g, actors) }
@@ -1665,11 +1687,19 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         // CELL DATA flags bit by bit [observed: gaps3, Doc's house (Interior, Public)
         // reads 1 0 0 0].
         // 0-7 DATA, 8-16 the lighting template inherit flags (LNAM bits 0-8)
-        // [documented: the page's table; hypothesis: LNAM's order]; SetCellFlag's change
-        // first (`crate::nvse_jip8`).
+        // [documented: GECK wiki GetCellFlag; hypothesis: LNAM's order]; SetCellFlag's change
+        // first (`crate::nvse_jip8`). Require a CELL form so non-CELL records with a DATA or
+        // LNAM subrecord (such as WRLD, #3757) return 0 rather than leaking their own flags
+        // [documented: GECK wiki GetCellFlag takes `cell:ref`; hypothesis: original JIP LN
+        // return on a WRLD with bit 0 set pending runtime probe].
         "getcellflag" => {
-            let c = form(args, 0).unwrap_or(FormId(0));
+            let Some(c) = form(args, 0).filter(|&f| g.data.sig(g.unclone(f)) == Some(*b"CELL")) else {
+                return Some(Ok(zero));
+            };
             let k = num(args, 1, -1.0);
+            if !(0.0..=16.0).contains(&k) || k.fract() != 0.0 {
+                return Some(Ok(zero));
+            }
             let (sub, k) = if k >= 8.0 { ("LNAM", k - 8.0) } else { ("DATA", k) };
             let flags = crate::nvse::record_value(g, c, sub, "").and_then(|v| v.num().ok()).unwrap_or(0.0);
             bit(flags, k)
@@ -1926,6 +1956,47 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
     };
     Some(Ok(v))
 }
+
+/// Actors currently in the loaded cells (`GetActorsByProcessingLevel 0`): placed `ACHR`/`ACRE`
+/// whose current cell is in `loaded_cells` (including actors moved or walked into a loaded cell)
+/// and live created actors in `loaded_cells`, in FormID order. Unlike `Game::package_actors`,
+/// this excludes actors in unloaded cells that previously chose a package.
+fn loaded_processing_actors(g: &Game) -> std::collections::BTreeSet<FormId> {
+    let mut out = std::collections::BTreeSet::new();
+    if g.loaded_cells.is_empty() {
+        return out;
+    }
+    let placed = g.world.placed;
+    let forms = g.world.forms;
+    let is_placed_actor = |r: FormId| placed.get(r).is_some_and(|p| matches!(&p.sig, b"ACHR" | b"ACRE"));
+    for c in &g.loaded_cells {
+        if let Some(refs) = placed.by_cell.get(c) {
+            for &r in refs {
+                if is_placed_actor(r) {
+                    out.insert(r);
+                }
+            }
+        }
+    }
+    for (r, s) in g.world.changed() {
+        if !s.cell.is_some_and(|c| g.loaded_cells.contains(&c)) {
+            continue;
+        }
+        if r >= FormId::FIRST_DYNAMIC {
+            if !s.deleted() && crate::ai::is_actor_base(forms, s.base) {
+                out.insert(r);
+            }
+        } else if is_placed_actor(r) {
+            out.insert(r);
+        }
+    }
+    out.retain(|&r| g.cell_of(r).is_some_and(|c| g.loaded_cells.contains(&c)));
+    out
+}
+
+#[cfg(test)]
+#[path = "nvse_gaps_proc_level_tests.rs"]
+mod proc_level_tests;
 
 #[cfg(test)]
 mod tests {

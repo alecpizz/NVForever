@@ -726,4 +726,78 @@ mod tests {
             db.get(Uuid::parse_str("03000000260900008888000000010001").unwrap())
         );
     }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn gamesir_hid_3537_100e_windows_mapping() {
+        let mut db = MappingDb::new();
+        db.add_included_mappings();
+
+        for uuid_str in [
+            "03000000-3735-0000-0e10-000000000000",
+            "05000000-3735-0000-0e10-000000000000",
+        ] {
+            let uuid = Uuid::parse_str(uuid_str).unwrap();
+            let line = db
+                .get(uuid)
+                .unwrap_or_else(|| panic!("expected bundled Windows mapping for {uuid_str}"));
+            let parsed = Mapping::parse_sdl_mapping(line, &BUTTONS, &AXES).unwrap();
+            assert_eq!(parsed.name(), "GameSir Controller");
+            assert_eq!(parsed.map(&BUTTONS[0]), Some(AxisOrBtn::Btn(Button::South)));
+            assert_eq!(parsed.map(&BUTTONS[1]), Some(AxisOrBtn::Btn(Button::East)));
+            assert_eq!(parsed.map(&BUTTONS[3]), Some(AxisOrBtn::Btn(Button::West)));
+            assert_eq!(parsed.map(&BUTTONS[4]), Some(AxisOrBtn::Btn(Button::North)));
+            assert_eq!(
+                parsed.map(&BUTTONS[6]),
+                Some(AxisOrBtn::Btn(Button::LeftTrigger))
+            );
+            assert_eq!(
+                parsed.map(&BUTTONS[7]),
+                Some(AxisOrBtn::Btn(Button::RightTrigger))
+            );
+            assert_eq!(
+                parsed.map(&BUTTONS[8]),
+                Some(AxisOrBtn::Btn(Button::LeftTrigger2))
+            );
+            assert_eq!(
+                parsed.map(&BUTTONS[9]),
+                Some(AxisOrBtn::Btn(Button::RightTrigger2))
+            );
+            assert_eq!(
+                parsed.map(&BUTTONS[10]),
+                Some(AxisOrBtn::Btn(Button::Select))
+            );
+            assert_eq!(
+                parsed.map(&BUTTONS[11]),
+                Some(AxisOrBtn::Btn(Button::Start))
+            );
+            assert_eq!(parsed.map(&BUTTONS[12]), Some(AxisOrBtn::Btn(Button::Mode)));
+            assert_eq!(
+                parsed.map(&BUTTONS[13]),
+                Some(AxisOrBtn::Btn(Button::LeftThumb))
+            );
+            assert_eq!(
+                parsed.map(&BUTTONS[14]),
+                Some(AxisOrBtn::Btn(Button::RightThumb))
+            );
+            assert_eq!(
+                parsed.map(&AXES[0]),
+                Some(AxisOrBtn::Axis(Axis::LeftStickX))
+            );
+            assert_eq!(
+                parsed.map(&AXES[1]),
+                Some(AxisOrBtn::Axis(Axis::LeftStickY))
+            );
+            assert_eq!(
+                parsed.map(&AXES[3]),
+                Some(AxisOrBtn::Axis(Axis::RightStickX))
+            );
+            assert_eq!(
+                parsed.map(&AXES[4]),
+                Some(AxisOrBtn::Axis(Axis::RightStickY))
+            );
+            assert_eq!(parsed.map(&AXES[2]), None);
+            assert_eq!(parsed.map(&AXES[5]), None);
+        }
+    }
 }

@@ -241,6 +241,47 @@ shipped as a binary only (README), so its inner workings are known only from the
   in front the ratio fell to 1.00 with the mode on and status `eOk` (fork-notes
   `fg-spike-results.md`).
 
+### Queue parallelism
+
+Sources: Streamline at tag v2.14.16 (`include/sl_dlss_g.h`, and `docs/ProgrammingGuideDLSS_G.md`,
+whose header says "Version 2.14.16"), and NVIDIA's sample NVIDIA-RTX/Streamline_Sample at tag
+v2.14.16, commit 94da85b6594e6c5109e84f995f5969811014c71f (MIT), read 2026-11-24.
+
+- [documented] `DLSSGOptions::queueParallelismMode` (added with `kStructVersion3`) sets "the level
+  of client and DLSSG queue parallelism to use for performance gain - must be same for all
+  viewports" (`sl_dlss_g.h:110-112`). Its type `DLSSGQueueParallelismMode` is an
+  `enum class : uint32_t` with no explicit values (`:55-66`): `eBlockPresentingClientQueue` (0,
+  the default), in which the "client's presenting queue is blocked until DLSSG workload execution
+  completes" (`:57`), and `eBlockNoClientQueues` (1), "only supported on Vulkan presently" (a D3D
+  client gets the default), which "helps achieve maximum performance benefit from queue-level
+  paralleism in Vulkan during DLSS-G processing" (`:59-64`).
+- [documented] In `eBlockNoClientQueues` the client must wait on
+  `DLSSGState::inputsProcessingCompletionFence` and its value "before it can modify or destroy the
+  tagged resources input to DLSS-G enabled for the corresponding previously presented frame on any
+  client queue" (`:61-63`). `DLSSGState` holds the fence (`void* inputsProcessingCompletionFence`)
+  and `uint64_t lastPresentInputsProcessingCompletionFenceValue`; with this mode the wait is
+  "always required for VK" (DG §15.1, `ProgrammingGuideDLSS_G.md:894-900`), and the client calls `slDLSSGGetState` "on
+  the present thread to retrieve the fence value for the inputs consumed by FG, on which client
+  would wait in the frame it would modify those inputs" (`sl_dlss_g.h:170-177`). Neither the
+  header nor the guide names the Vulkan object behind the `void*`.
+- [documented] DG §17.0 (`ProgrammingGuideDLSS_G.md:963-967`): the mode "may offer extra performance gains depending on the
+  workload"; "Gains are most apparent in GPU-limited applications that use multiple queues for
+  submissions", and highly CPU-limited applications may see smaller gains.
+- [documented] NVIDIA's sample waits on the fence as a timeline `VkSemaphore` with that value on
+  its graphics queue: `SLWrapper::QueueGPUWaitOnSyncObjectSet` calls
+  `queueWaitForSemaphore(nvrhi::CommandQueue::Graphics, reinterpret_cast<VkSemaphore>(syncObj),
+  syncObjVal)` on Vulkan (`src/SLWrapper.cpp:250-279`, the call at `:276`). `RenderScene` queues it
+  when DLSS-G was on the last frame, "before any of the inputs are modified in the subsequent
+  command list submission", if the value is 0 or above the last one waited on
+  (`src/StreamlineSample.cpp:828-836`). Its comment calls the wait "redundant until SL DLSS FG
+  allows SMSCG but done for now for demonstration purposes" (`:834`).
+- [observed, RTX 5090, driver 621.24, 2026-11-23] At 3840x2160, DLSS Quality, 4x, no frame limit,
+  Display sync Off: 96.5 real / 385 presented frames a second with `eBlockNoClientQueues` against
+  91.0 / 364 with the default (+6%), latency within noise, no present errors (design:
+  [dlss-frame-generation](../design/dlss-frame-generation.md) "Queue parallelism"). [hypothesis]
+  NVForever submits on one queue, so the gain comes from the next frame's work running beside
+  DLSS-G's own queues rather than from other queues of the game's.
+
 ## NVIDIA's updater
 
 - [documented] In production builds, `slInit` reads the cached server manifest and asks for an

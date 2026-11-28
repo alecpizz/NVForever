@@ -31,7 +31,7 @@
 //! The output's picture and its effects (2026-10-19) [documented: `RM_ItemIcon` at the
 //! list box's left plus 22, 472 down, 256 square; the item stats display's EffectsInfo
 //! card in `RM_ItemData`; hypothesis: the effects text as the Pip-Boy's ITEMS page writes
-//! it, under the WG and VAL cards]: the first output's ICON, and an aid item's own effects
+//! it, under the weight and value cards]: the first output's ICON, and an aid item's own effects
 //! or an apparel's or a weapon's enchantment's ("HP +40, RAD -10").
 //!
 //! The look [documented: the original's `menus\recipe_menu.xml`, layout in its units:
@@ -46,7 +46,8 @@
 //! prompt), `shot` (a screenshot `recipe_menu.png` in the working folder). Open the menu through a script, e.g. the console aid's `player.craft
 //! WorkbenchRecipes`.
 
-use crate::interface::{amber, bc_supported, face, plain_font, set_line, u, Face};
+use crate::interface::{amber, bc_supported, face, plain_font, u};
+use crate::menu::readability::Typeface as Face;
 use crate::menu::look::ROWS_BAR_W;
 use crate::menu::model::keep_in_view;
 use crate::pause::AidTime;
@@ -100,6 +101,9 @@ const ROW_FONT: usize = 2;
 
 pub struct CraftingPlugin;
 
+#[derive(SystemSet,Debug,Clone,Copy,PartialEq,Eq,Hash)]
+pub(crate) struct NormalInput;
+
 impl Plugin for CraftingPlugin {
     fn build(&self, app: &mut App) {
         let mut aid = Vec::new();
@@ -115,7 +119,7 @@ impl Plugin for CraftingPlugin {
         app.init_resource::<RecipeMenu>()
             .add_message::<RecipeInput>()
             .insert_resource(RecipeAid(aid))
-            .add_systems(Update, (scripts_open, (keys, draw).chain().run_if(in_state(PlayState::Menu))).chain().in_set(PlaySet::Ui))
+            .add_systems(Update, (scripts_open, (keys.in_set(NormalInput), draw).chain().run_if(in_state(PlayState::Menu))).chain().in_set(PlaySet::Ui))
             .add_systems(OnExit(PlayState::Menu), close)
             .add_systems(Update, forget_closed.in_set(PlaySet::Ui));
     }
@@ -130,6 +134,20 @@ struct RecipeAid(Vec<(f32, String)>);
 pub struct RecipeMenu(pub Option<Open>);
 
 impl RecipeMenu {
+    pub(crate) fn normal_same_session(&self,category:FormId,station:Option<FormId>,filter:usize,
+        selected:usize,quantity:Option<(i32,i32)>)->bool {
+        self.0.as_ref().is_some_and(|o|o.category==category && o.station==station && o.filter==filter
+            && o.selected==selected && o.quantity==quantity)
+    }
+    pub(crate) fn normal_guard(&self)->Option<crate::menu::normal_services::Guard> {
+        self.0.as_ref()?.normal_guard()
+    }
+    pub(crate) fn normal_matches(&self,guard:&crate::menu::normal_services::Guard)->bool {
+        let Some(o)=self.0.as_ref() else{return false};
+        let crate::menu::normal_services::Guard::Workbench {category,station,filter,view}=guard else{return false};
+        *category==o.category && *station==o.station && *filter==o.filter
+            && o.drawn.as_ref().is_some_and(|v|v.normal_matches(view))
+    }
     /// [design, #2403 / file refs] Logical recipe navigation and ingredient outcomes;
     /// `Open::navigated` and pointer/redraw bookkeeping are deliberately excluded.
     pub fn progress(&self) -> Option<impl std::fmt::Debug + '_> {
@@ -144,6 +162,8 @@ impl RecipeMenu {
 /// the keys and the hand-built buttons.
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecipeInput {
+    /// Internal once-only request from the ordinary finger adapter.
+    CommitNormal(u64),
     /// The pointer came onto the row at this place.
     Hover(usize),
     /// A click on the row at this place, not the selected one.
@@ -172,6 +192,22 @@ pub struct Open {
     pub(crate) navigated: u32,
 }
 
+impl Open {
+    pub(crate) fn normal_guard(&self)->Option<crate::menu::normal_services::Guard> {
+        Some(crate::menu::normal_services::Guard::Workbench {category:self.category,station:self.station,
+            filter:self.filter,view:Box::new(self.drawn.as_ref()?.clone())})
+    }
+    pub(crate) fn normal_native_guard(&self)->Option<crate::menu::normal_services::Guard> {
+        let mut guard=self.normal_guard()?;
+        if let crate::menu::normal_services::Guard::Workbench {view,..}=&mut guard {view.quantity=None;}
+        Some(guard)
+    }
+    pub(crate) fn normal_owner_matches(&self,guard:Option<&crate::menu::normal_services::Guard>)->bool {
+        matches!(guard,Some(crate::menu::normal_services::Guard::Workbench {category,station,filter,..})
+            if *category==self.category && *station==self.station && *filter==self.filter)
+    }
+}
+
 /// How many times the player can make `r` with what it has: the fewest of each
 /// ingredient's count over what one making takes (no positive ingredients: once).
 pub fn times_possible(r: &RecipeDef, have: impl Fn(FormId) -> i64) -> u32 {
@@ -189,12 +225,13 @@ pub fn times_possible(r: &RecipeDef, have: impl Fn(FormId) -> i64) -> u32 {
 struct RecipeRoot;
 
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
-enum RecipeButton {
+pub(crate) enum RecipeButton {
     Row(usize),
     Accept,
     Exit,
     Left,
     Right,
+    Title,
 }
 
 /// A row of the list.
@@ -204,6 +241,8 @@ pub(crate) struct RowView {
     pub(crate) label: String,
     /// Can be made now.
     pub(crate) ready: bool,
+    /// Resolved ySI tag/icon/template for this recipe's representative item (`None` when ySI is inactive).
+    pub(crate) ysi: Option<fnv_game::ui_ysi::YsiItemDisplay>,
 }
 
 /// Everything the menu shows: drawn again when it changes.
@@ -212,7 +251,7 @@ pub(crate) struct View {
     title: String,
     pub(crate) rows: Vec<RowView>,
     /// The subcategories the arrows go through, by name.
-    filters: usize,
+    pub(crate) filters: usize,
     /// The subcategory's record name while it filters the list.
     pub(crate) subcategory: Option<String>,
     /// The recipes the filter leaves out.
@@ -227,6 +266,8 @@ pub(crate) struct View {
     pub(crate) skill_record: Option<String>,
     /// The ingredient, its name, have, need.
     pub(crate) ingredients: Vec<(FormId, String, u32, u32)>,
+    /// Resolved ySI display per ingredient row (parallel to `ingredients`, empty when ySI is inactive).
+    pub(crate) ingredient_ysi: Vec<Option<fnv_game::ui_ysi::YsiItemDisplay>>,
     pub(crate) weight: Option<f32>,
     pub(crate) value: Option<i32>,
     /// The first output's picture and effects.
@@ -236,6 +277,16 @@ pub(crate) struct View {
     quantity: Option<(i32, i32)>,
     /// The names the hints use (`crate::pad::labels`).
     labels: crate::pad::Labels,
+}
+
+impl View {
+    pub(crate) fn normal_quantity(&self)->Option<(i32,i32)> {self.quantity}
+    pub(crate) fn normal_matches(&self,other:&Self)->bool {
+        self.rows==other.rows && self.filters==other.filters
+            && self.subcategory==other.subcategory && self.filtered==other.filtered && self.selected==other.selected
+            && self.skill.as_ref().map(|(_,have,need)|(*have,*need))==other.skill.as_ref().map(|(_,have,need)|(*have,*need))
+            && self.ingredients==other.ingredients && self.quantity==other.quantity
+    }
 }
 
 /// The recipe's label: its name, and the number made after it when more than one and the
@@ -277,7 +328,7 @@ fn lacks(rt: &mut crate::script::Runtime, r: &RecipeDef) -> Vec<fnv_game::crafti
     missing(r, 1, |_| skill, |i| counts.iter().find(|c| c.0 == i).map_or(0, |c| c.1))
 }
 
-/// An output's weight as the WG card says it.
+/// An output's weight as the weight card says it.
 pub(crate) fn weight_text(w: f32) -> String {
     format!("{w:.1}").trim_end_matches(".0").to_string()
 }
@@ -343,11 +394,31 @@ pub(crate) fn view(rt: &mut crate::script::Runtime, sim: &mut SimState, open: &O
         let mut listed: Vec<(&RecipeDef, bool)> = all.into_iter().filter(|r| filter.is_none_or(|f| r.subcategory == Some(f))).map(|r| (r, lacks(rt, r).is_empty())).collect();
         listed.sort_by_key(|&(_, ready)| !ready);
         let shown: Vec<&RecipeDef> = listed.iter().map(|l| l.0).collect();
-        let rows: Vec<RowView> = listed.iter().map(|&(r, ready)| RowView { recipe: r.form, label: label(r), ready }).collect();
+        let ysi_on = rt.game.ysi_active();
+        let rows: Vec<RowView> = listed
+            .iter()
+            .map(|&(r, ready)| {
+                let ysi = if ysi_on {
+                    // [design] Breakdown recipes (1 ingredient, >1 outputs) show the
+                    // ingredient's icon; other recipes show the first output's icon,
+                    // falling back to the recipe form itself.
+                    let rep = if r.ingredients.len() == 1 && r.outputs.len() > 1 {
+                        r.ingredients.first().map(|x| x.0)
+                    } else {
+                        r.outputs.first().map(|x| x.0)
+                    }
+                    .unwrap_or(r.form);
+                    rt.game.ysi_item_display(rep)
+                } else {
+                    None
+                };
+                RowView { recipe: r.form, label: label(r), ready, ysi }
+            })
+            .collect();
         let selected = open.selected.min(rows.len().saturating_sub(1));
         let subcategory = filter.map(|_| subs[open.filter - 1].0.clone());
         let title = match filter {
-            None => "RECIPES".to_string(),
+            None => crate::pipboy::labels::built_in_label("sRecipes").to_uppercase(),
             Some(_) => subs[open.filter - 1].0.to_uppercase(),
         };
         let chosen = shown.get(selected).copied();
@@ -355,15 +426,21 @@ pub(crate) fn view(rt: &mut crate::script::Runtime, sim: &mut SimState, open: &O
         let made_at = chosen.and_then(|r| r.category).and_then(|c| data.recipe_categories.get(&c)).map_or_else(String::new, |c| c.name.clone());
         let skill = chosen.and_then(|r| r.skill).map(|(av, level)| (skill_name(av).to_string(), fnv_game::functions::actor_value_capped(&mut rt.game, FormId::PLAYER_REF, av).max(0.0).floor() as u32, level));
         let skill_record = chosen.and_then(|r| r.skill).map(|(av, _)| fnv_game::chargen::skill_name(&rt.game, av));
-        let ingredients = chosen.map(|r| r.ingredients.iter().map(|&(i, n)| (i, name(i), have(rt, i).max(0) as u32, recipe_count(n))).collect()).unwrap_or_default();
+        let ingredients: Vec<(FormId, String, u32, u32)> = chosen.map(|r| r.ingredients.iter().map(|&(i, n)| (i, name(i), have(rt, i).max(0) as u32, recipe_count(n))).collect()).unwrap_or_default();
+        let ingredient_ysi = if ysi_on {
+            ingredients.iter().map(|(id, _, _, _)| rt.game.ysi_item_display(*id)).collect()
+        } else {
+            Vec::new()
+        };
         let item = chosen.and_then(|r| r.outputs.first()).and_then(|o| match forms.get(o.0).map(|b| &b.data) {
             Some(fnv_sim::forms::BaseData::Item(it)) => Some((it.weight, it.value, it.icon.clone())),
             _ => None,
         });
         let (weight, value, icon) = item.map_or((None, None, None), |i| (i.0, i.1, i.2));
-        let first = keep_in_view(open.first, selected, rows.len(), ROWS);
+        let first = if open.pointer_pick {open.first.min(rows.len().saturating_sub(1))}
+            else {keep_in_view(open.first, selected, rows.len(), ROWS)};
         let filtered = known - rows.len();
-        View { title, rows, filters: subs.len(), subcategory, filtered, selected, first, made_at, skill, skill_record, ingredients, weight, value, icon, effects: None, quantity: open.quantity, labels: crate::pad::labels() }
+        View { title, rows, filters: subs.len(), subcategory, filtered, selected, first, made_at, skill, skill_record, ingredients, ingredient_ysi, weight, value, icon, effects: None, quantity: open.quantity, labels: crate::pad::labels() }
     })
 }
 
@@ -409,6 +486,11 @@ type AmountPress = (&'static PointerState, &'static bevy::ui::RelativeCursorPosi
 /// The records the effects line is read from.
 type EffectForms = crate::pipboy::stats::read::Forms;
 
+fn filter_step(open:&mut Open,filters:usize,by:i32) {
+    open.filter=if by<0 {(open.filter+filters-1)%filters}else{(open.filter+1)%filters};
+    open.selected=0;
+}
+
 #[allow(clippy::too_many_arguments)]
 fn keys(
     keys: crate::pad::ActionButtons<KeyCode>,
@@ -426,9 +508,11 @@ fn keys(
     mut moved: MessageReader<bevy::window::CursorMoved>,
     mut asked: MessageReader<RecipeInput>,
     mut commands: Commands,
+    (mut normal,preferences):(crate::menu::normal_services::Commits,crate::maintenance_touch::Requests),
 ) {
     let keys = keys.snapshot();
     let asked: Vec<RecipeInput> = asked.read().copied().collect();
+    let normal_tokens:Vec<_>=asked.iter().filter_map(|a|if let RecipeInput::CommitNormal(t)=a {Some(*t)}else{None}).collect();
     // Only a pointer that moves takes the selection: the rows drawn when the menu opens
     // (or redrawn) under a resting pointer leave the keys' choice alone (as `crate::menu`).
     let pointer_moved = moved.read().count() > 0;
@@ -468,12 +552,33 @@ fn keys(
                 to = crate::menu::model::amount_at(p.x + 0.5, most);
             }
         }
+        let wasd = rt.game.tweaks.wasd_as_arrow_keys;
         let wheel = scroll.as_ref().map_or(0.0, |s| s.delta.y);
         if keys.any_just_pressed([KeyCode::ArrowRight, KeyCode::KeyD]) || wheel > 0.0 || act("more") {
             to += 1;
         }
-        if keys.just_pressed(KeyCode::ArrowLeft) || wheel < 0.0 || act("less") {
+        let less_keys: &[KeyCode] = if wasd { &[KeyCode::ArrowLeft, KeyCode::KeyA] } else { &[KeyCode::ArrowLeft] };
+        if keys.any_just_pressed(less_keys.iter().copied()) || wheel < 0.0 || act("less") {
             to -= 1;
+        }
+        let other_changed=to!=amount || make || back;
+        let mut normal_confirmed=false;
+        for &token in &normal_tokens {
+            // Existing physical/script prompt intent wins over an older proposal.
+            if other_changed {normal.discard(token);continue}
+            let live=view(rt,&mut sim,open);
+            let current=crate::menu::normal_services::Guard::Workbench {category:open.category,
+                station:open.station,filter:open.filter,view:Box::new(live)};
+            if let Some(crate::menu::normal_services::Action::Amount(action))=
+                normal.resolve(token,&current,&rt.game,preferences.enabled()) {
+                match action {
+                    Command::Amount(value)=>to=value,
+                    Command::AmountStep(by)=>to=to.saturating_add(by),
+                    Command::AmountOk=>{make=true;normal_confirmed=true;},
+                    Command::AmountCancel=>back=true,
+                    _=>{},
+                }
+            }
         }
         let to = to.clamp(1, most.max(1));
         if to != amount {
@@ -486,12 +591,18 @@ fn keys(
             sounds.write(UiSound { menu: UiMenu::Recipe, event: UiEvent::Back });
             return;
         }
-        if keys.any_just_pressed([KeyCode::KeyA, KeyCode::Enter, KeyCode::NumpadEnter]) || make || act("accept") {
+        let qty_accept: &[KeyCode] = if wasd {
+            &[KeyCode::Enter, KeyCode::NumpadEnter, KeyCode::Space]
+        } else {
+            &[KeyCode::KeyA, KeyCode::Enter, KeyCode::NumpadEnter]
+        };
+        if keys.any_just_pressed(qty_accept.iter().copied()) || make || act("accept") {
             open.quantity = None;
             let chosen = v.rows.get(open.selected.min(v.rows.len().saturating_sub(1))).map(|r| r.recipe);
             if let Some(recipe) = chosen.and_then(|f| rt.game.data.recipes.get(&f)) {
                 make_recipe(rt, &mut sim, recipe, to as u32, &mut sounds, corner.as_deref_mut());
                 follow_made(rt, &mut sim, open, recipe.form);
+                if normal_confirmed {open.pointer_pick=false;}
             }
             open.drawn = None;
         }
@@ -510,6 +621,7 @@ fn keys(
     // The menu drawn from its tiles asks what the hand-built buttons would.
     for input in asked {
         match input {
+            RecipeInput::CommitNormal(_)=>{},
             RecipeInput::Hover(r) => {
                 open.selected = r;
                 open.pointer_pick = true;
@@ -534,22 +646,47 @@ fn keys(
         open.pointer_pick = false;
         open.navigated = open.navigated.wrapping_add(1);
     }
+    let wasd = rt.game.tweaks.wasd_as_arrow_keys;
     let filters = v.filters + 1;
-    if keys.just_pressed(KeyCode::ArrowRight) || clicked == Some(RecipeButton::Right) || act("filter") {
-        open.filter = (open.filter + 1) % filters;
-        open.selected = 0;
+    let right_keys: &[KeyCode] = if wasd { &[KeyCode::ArrowRight, KeyCode::KeyD] } else { &[KeyCode::ArrowRight] };
+    let left_keys: &[KeyCode] = if wasd { &[KeyCode::ArrowLeft, KeyCode::KeyA] } else { &[KeyCode::ArrowLeft] };
+    if keys.any_just_pressed(right_keys.iter().copied()) || clicked == Some(RecipeButton::Right) || clicked == Some(RecipeButton::Title) || act("filter") {
+        filter_step(open,filters,1);
     }
-    if keys.just_pressed(KeyCode::ArrowLeft) || clicked == Some(RecipeButton::Left) {
-        open.filter = (open.filter + filters - 1) % filters;
-        open.selected = 0;
+    if keys.any_just_pressed(left_keys.iter().copied()) || clicked == Some(RecipeButton::Left) {
+        filter_step(open,filters,-1);
     }
     if let Some(RecipeButton::Row(r)) = clicked {
         open.selected = r;
     }
+    // All pre-existing selection/filter controls have run. Resolve the typed
+    // request against current requirements and ingredient counts here, directly
+    // before the original quantity/make/close consumers below.
+    for token in normal_tokens {
+        let live=view(rt,&mut sim,open);
+        let current=crate::menu::normal_services::Guard::Workbench {category:open.category,
+            station:open.station,filter:open.filter,view:Box::new(live)};
+        let action=normal.resolve(token,&current,&rt.game,preferences.enabled());
+        let crate::menu::normal_services::Guard::Workbench {view:live,..}=current else{continue};
+        use crate::menu::normal_services::Action;
+        match action {
+            Some(Action::Workbench(RecipeInput::Select(i)|RecipeInput::Hover(i))) if i<live.rows.len()=>{
+                open.selected=i;open.pointer_pick=true;open.drawn=None;
+            }
+            Some(Action::Workbench(RecipeInput::Filter(by)))=>filter_step(open,live.filters+1,by),
+            Some(Action::Workbench(RecipeInput::Accept))=>clicked=Some(RecipeButton::Accept),
+            Some(Action::Workbench(RecipeInput::Exit))=>clicked=Some(RecipeButton::Exit),
+            Some(Action::Browse(0,by))=>{
+                open.first=(open.first as i64).saturating_add(by).clamp(0,live.rows.len().saturating_sub(1) as i64) as usize;
+                open.pointer_pick=true;open.drawn=None;
+            }
+            _=>{},
+        }
+    }
     if open.filter != before.1 {
         open.pointer_pick = false;
     }
-    open.first = keep_in_view(open.first, open.selected, n, ROWS);
+    if !open.pointer_pick {open.first = keep_in_view(open.first, open.selected, n, ROWS);}
     if (open.selected, open.filter) != before {
         sounds.write(UiSound { menu: UiMenu::Recipe, event: if open.filter != before.1 { UiEvent::Switch } else { UiEvent::Focus } });
     }
@@ -559,7 +696,12 @@ fn keys(
         next.set(crate::repair::after_close(&rt.game));
         return;
     }
-    if keys.any_just_pressed([KeyCode::KeyA, KeyCode::Enter, KeyCode::NumpadEnter]) || clicked == Some(RecipeButton::Accept) || act("accept") {
+    let accept_keys: &[KeyCode] = if wasd {
+        &[KeyCode::Enter, KeyCode::NumpadEnter, KeyCode::Space]
+    } else {
+        &[KeyCode::KeyA, KeyCode::Enter, KeyCode::NumpadEnter]
+    };
+    if keys.any_just_pressed(accept_keys.iter().copied()) || clicked == Some(RecipeButton::Accept) || act("accept") {
         let chosen = v.rows.get(open.selected.min(n.saturating_sub(1))).map(|r| r.recipe);
         let Some(recipe) = chosen.and_then(|f| rt.game.data.recipes.get(&f)) else { return };
         // Any can be made: how many? (module notes)
@@ -616,12 +758,14 @@ fn make_recipe(rt: &mut crate::script::Runtime, sim: &mut SimState, recipe: &Rec
             }
         }
         let mut added = Vec::new();
-        // The player's tweak: weapons and armour come out at a condition of the
-        // player's Repair [design: docs/design/tweaks.md].
-        let condition = rt.game.tweaks.repair_scales_crafting.then(|| {
-            let repair = fnv_game::functions::actor_value_capped(&mut rt.game, FormId::PLAYER_REF, fnv_game::actor_values::REPAIR) as f32;
-            fnv_game::tweaks::crafted_condition(repair)
-        });
+        // The player's tweaks: Repair-scaled condition (`bRepairScalesCraftingCondition`)
+        // or fixed crafted condition percentage (`fCraftedItemHealthPct`) [design: docs/design/tweaks.md].
+        let repair = if rt.game.tweaks.repair_scales_crafting {
+            fnv_game::functions::actor_value_capped(&mut rt.game, FormId::PLAYER_REF, fnv_game::actor_values::REPAIR) as f32
+        } else {
+            0.0
+        };
+        let condition = fnv_game::tweaks::crafted_output_condition(&rt.game.tweaks, repair);
         for &(i, k) in &recipe.outputs {
             let count = recipe_count(k).saturating_mul(times).min(i32::MAX as u32);
             if count == 0 {
@@ -631,7 +775,7 @@ fn make_recipe(rt: &mut crate::script::Runtime, sim: &mut SimState, recipe: &Rec
             match condition.filter(|c| worn && *c < 1.0) {
                 Some(c) => {
                     rt.game.world.add_item_at_condition(FormId::PLAYER_REF, i, count as i32, Some(c)).map_err(|e| format!("{e:?}"))?;
-                    info!("recipe menu: made at {:.0} % condition (Repair tweak)", c * 100.0);
+                    info!("recipe menu: made at {:.0} % condition (crafting condition tweak)", c * 100.0);
                 }
                 None => {
                     rt.game.world.add_item(FormId::PLAYER_REF, i, count as i32).map_err(|e| format!("{e:?}"))?;
@@ -685,16 +829,16 @@ struct RecipeLook {
 
 fn text(p: &mut ChildSpawnerCommands, f: &Face, s: &str, x: f32, top: f32, c: Color) {
     if let Some(line) = f.font.lines(s, None).into_iter().next() {
-        set_line(p, f, &line, x, top + f.font.size * 0.8, c);
+        crate::menu::readability::line(p,f,&line,Vec2::new(x,top+f.font.size*0.8*f.scale),f.scale,c);
     }
 }
 
 fn wrapped(p: &mut ChildSpawnerCommands, f: &Face, s: &str, x: f32, top: f32, width: f32, c: Color) -> f32 {
-    let lines = f.font.lines(s, Some(width));
+    let lines = f.font.lines(s, Some(width/f.scale));
     for (i, line) in lines.iter().enumerate() {
-        set_line(p, f, line, x, top + f.font.size * (0.8 + i as f32 * 0.9), c);
+        crate::menu::readability::line(p,f,line,Vec2::new(x,top+f.font.size*(0.8+i as f32*0.9)*f.scale),f.scale,c);
     }
-    lines.len().max(1) as f32 * f.font.size * 0.9
+    lines.len().max(1) as f32 * f.font.size * 0.9*f.scale
 }
 
 fn at(x: f32, y: f32, w: f32, h: f32) -> Node {
@@ -719,33 +863,80 @@ fn brackets(p: &mut ChildSpawnerCommands, x: f32, y: f32, w: f32, bottom: f32, t
     rule(p, x + w - LINE, bottom - 40.0, LINE, 40.0);
 }
 
+fn recipe_row_height(face:&Face,label:&str)->f32 {
+    let wrap=(BOX_WIDTH-15.0-ROWS_BAR_W-52.0)/face.scale;
+    let lines=face.font.lines(label,Some(wrap)).len().max(1);
+    ((ROW.max(face.font.size*0.9*lines as f32+12.0))*face.scale).max(ROW)
+}
+fn recipe_window(look:&RecipeLook,v:&View,follow:bool)->std::ops::Range<usize> {
+    let heights:Vec<_>=v.rows.iter().map(|r|recipe_row_height(&look.row,&r.label)).collect();
+    let mut first=if follow {v.first.min(v.selected)}else{v.first}.min(heights.len());
+    loop {
+        let mut used=0.0;let mut end=first;
+        while end<heights.len() && used+heights[end]<=ROWS as f32*ROW {used+=heights[end];end+=1;}
+        if !follow || v.selected<end || end>=heights.len() || first>=v.selected {
+            return first..end.max(first+1).min(heights.len());
+        }
+        first+=1;
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-fn spawn(commands: &mut Commands, look: &RecipeLook, v: &View, words: &[String; 2], kit: &mut crate::menu::look::Kit, data: Option<&GameData>, images: &mut Assets<Image>, bc: bool, glyphs: &crate::pad::PadGlyphs) {
+fn spawn(commands: &mut Commands, look: &RecipeLook, presentation:(&View,crate::menu::normal_services::Guard), words: &[String; 2], kit: &mut crate::menu::look::Kit, data: Option<&GameData>, images: &mut Assets<Image>, bc: bool, glyphs: &crate::pad::PadGlyphs) {
+    let (v,guard)=presentation;
     let left = Node { position_type: PositionType::Absolute, left: Val::Percent(50.0), margin: UiRect::left(u(-MAIN.x / 2.0)), top: crate::interface::from_top((960.0 - MAIN.y) / 2.0, 0.5), width: u(MAIN.x), height: u(MAIN.y), ..default() };
-    commands.spawn((RecipeRoot, Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, GlobalZIndex(crate::interface::TOP_MENU_Z), crate::interface::top_menu_backing())).with_children(|root| {
+    commands.spawn((RecipeRoot, crate::menu::normal_services::Rendered::new(guard,look.row.scale), Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, GlobalZIndex(crate::interface::TOP_MENU_Z), crate::interface::top_menu_backing())).with_children(|root| {
         root.spawn(left).with_children(|m| {
             let bright = color(Shade::Bright);
             // The list's box: "◀ RECIPES ▶" in the top line.
-            let tw = look.title.font.width(&v.title);
+            let tw = look.title.width(&v.title);
             brackets(m, ITEMS_AT.x, ITEMS_AT.y, BOX_WIDTH, ITEMS_AT.y + 480.0, (25.0, 50.0 + tw + 40.0));
+            // Spawn the title hit zone first so left/right arrow buttons sit above it in UiStack.
+            m.spawn((Button, RecipeButton::Title, at(ITEMS_AT.x + 50.0, ITEMS_AT.y - 28.0, (tw + 4.0).max(80.0), 56.0))).with_children(|t| text(t, &look.title, &v.title, 0.0, 0.0, bright));
             if let Some((l, r)) = &look.arrows {
-                m.spawn((Button, RecipeButton::Left, at(ITEMS_AT.x + 30.0, ITEMS_AT.y - 17.0, 17.5, 35.0), ImageNode { color: amber(255.0), ..ImageNode::new(l.clone()) }));
-                m.spawn((Button, RecipeButton::Right, at(ITEMS_AT.x + 55.0 + tw, ITEMS_AT.y - 17.0, 17.5, 35.0), ImageNode { color: amber(255.0), ..ImageNode::new(r.clone()) }));
-            }
-            m.spawn(at(ITEMS_AT.x + 50.0, ITEMS_AT.y - 28.0, tw + 4.0, 56.0)).with_children(|t| text(t, &look.title, &v.title, 0.0, 0.0, bright));
-            // The rows from the first shown.
-            for (k, (i, r)) in v.rows.iter().enumerate().skip(v.first).take(ROWS).enumerate() {
-                let (line, fill) = highlight_colors();
-                let chosen = i == v.selected;
-                let node = Node { border: UiRect::all(u(LINE)), ..at(ITEMS_AT.x + 5.0, LIST_TOP + k as f32 * ROW, BOX_WIDTH - 15.0 - ROWS_BAR_W, ROW) };
-                m.spawn((Button, RecipeButton::Row(i), node, BorderColor::all(if chosen { line } else { Color::NONE }), BackgroundColor(if chosen { fill } else { Color::NONE }))).with_children(|row| {
-                    text(row, &look.row, &r.label, 40.0, 6.0, if r.ready { bright } else { amber(NOT_READY) });
+                let hit_w = 52.0;
+                let hit_h = 52.0;
+                let dx = (hit_w - 17.5) * 0.5;
+                let dy = (hit_h - 35.0) * 0.5;
+                m.spawn((Button, RecipeButton::Left, at(ITEMS_AT.x + 30.0 - dx, ITEMS_AT.y - 17.0 - dy, hit_w, hit_h))).with_children(|btn| {
+                    btn.spawn((at(dx, dy, 17.5, 35.0), ImageNode { color: amber(255.0), ..ImageNode::new(l.clone()) }));
+                });
+                m.spawn((Button, RecipeButton::Right, at(ITEMS_AT.x + 55.0 + tw - dx, ITEMS_AT.y - 17.0 - dy, hit_w, hit_h))).with_children(|btn| {
+                    btn.spawn((at(dx, dy, 17.5, 35.0), ImageNode { color: amber(255.0), ..ImageNode::new(r.clone()) }));
                 });
             }
+            // The rows from the first shown.
+            let shown=recipe_window(look,v,false);
+            m.spawn(Node {overflow:Overflow::clip(),..at(ITEMS_AT.x+5.0,LIST_TOP,BOX_WIDTH-15.0-ROWS_BAR_W,ROWS as f32*ROW)}).with_children(|list| {
+            let mut y=0.0;
+            for i in shown.clone() {
+                let r=&v.rows[i];
+                let height=recipe_row_height(&look.row,&r.label);
+                let (line, fill) = highlight_colors();
+                let chosen = i == v.selected;
+                let node = Node { border: UiRect::all(u(LINE)), ..at(0.0, y, BOX_WIDTH - 15.0 - ROWS_BAR_W, height) };
+                let tint = if r.ready { bright } else { amber(NOT_READY) };
+                let row_icon = r
+                    .ysi
+                    .as_ref()
+                    .and_then(|d| d.icon.as_deref())
+                    .and_then(|path| {
+                        let full = format!("textures\\{}", path.trim_start_matches("textures\\").trim_start_matches("Textures\\"));
+                        data.and_then(|d| crate::interface::texture(&full, d, images, bc)).map(|x| x.0)
+                    });
+                list.spawn((Button, RecipeButton::Row(i), node, BorderColor::all(if chosen { line } else { Color::NONE }), BackgroundColor(if chosen { fill } else { Color::NONE }))).with_children(|row| {
+                    if let Some(img) = row_icon {
+                        row.spawn((at(10.0, 14.0*look.row.scale, 24.0, 24.0), ImageNode { color: tint, ..ImageNode::new(img) }));
+                    }
+                    wrapped(row, &look.row, &r.label, 40.0, 6.0*look.row.scale, BOX_WIDTH-15.0-ROWS_BAR_W-52.0, tint);
+                });
+                y+=height;
+            }
+            });
             // The scroll bar, right of the rows, when they do not all fit (owner's request
             // 2026-10-26; drawn as the container menu's).
             let bar = (ITEMS_AT.x + BOX_WIDTH - 5.0 - ROWS_BAR_W, LIST_TOP, ROWS as f32 * ROW);
-            crate::menu::look::spawn_rows_bar(m, kit, data, images, bc, glyphs, bar, v.rows.len(), v.first, ROWS);
+            crate::menu::look::spawn_rows_bar(m, kit, data, images, bc, glyphs, bar, v.rows.len(), v.first, shown.len());
             if v.rows.is_empty() {
                 m.spawn(at(ITEMS_AT.x + 5.0, LIST_TOP, BOX_WIDTH, ROW)).with_children(|t| text(t, &look.row, "No recipes", 40.0, 6.0, color(Shade::Dim)));
             }
@@ -756,7 +947,7 @@ fn spawn(commands: &mut Commands, look: &RecipeLook, v: &View, words: &[String; 
                     m.spawn((at(ICON_AT.x, ICON_AT.y, ICON_SIZE, ICON_SIZE), ImageNode { color: amber(255.0), ..ImageNode::new(img) }));
                 }
             }
-            // Its effects, under the WG and VAL cards.
+            // Its effects, under the weight and value cards.
             if let Some(e) = v.effects.as_deref() {
                 m.spawn(at(340.0, 690.0, 290.0, 100.0)).with_children(|t| {
                     text(t, &look.row, "EFFECTS", 6.0, 0.0, bright);
@@ -766,33 +957,56 @@ fn spawn(commands: &mut Commands, look: &RecipeLook, v: &View, words: &[String; 
             // The output's weight and value.
             let wg = v.weight.map_or("--".to_string(), weight_text);
             let val = v.value.map_or("--".to_string(), |x| x.to_string());
-            for (k, (name, s)) in [("WG", wg), ("VAL", val)].into_iter().enumerate() {
+            // The cards' words: the item stats display's settings, as the Pip-Boy's cards
+            // read them [design, #4495: in place of the abbreviations read from the
+            // original's screen].
+            let words = ["sInventoryWeightUpper", "sInventoryValue"].map(crate::pipboy::labels::built_in_label);
+            for (k, (name, s)) in [(words[0], wg), (words[1], val)].into_iter().enumerate() {
                 let x = 340.0 + k as f32 * 150.0;
                 rule(m, x, 640.0, 140.0, LINE);
                 rule(m, x + 140.0 - LINE, 640.0, LINE, 30.0);
                 m.spawn(at(x, 645.0, 140.0, 50.0)).with_children(|t| {
                     text(t, &look.row, name, 6.0, 0.0, bright);
-                    let w = look.row.font.width(&s);
+                    let w = look.row.width(&s);
                     text(t, &look.row, &s, 130.0 - w, 0.0, bright);
                 });
             }
             // The recipe's box.
             let rx = RIGHT_AT.x;
-            let mw = look.title.font.width("Made at ...");
+            // The titles are the settings recipe_menu.xml names (`sMadeAt`,
+            // `sSkillRequirement`, `sIngredients`; the list's `sRecipes`): the load order's
+            // text, else NVForever's own label [design, #4495: in place of the words read
+            // from the original's screen].
+            let [made_at, skill_needed, ingredients] =
+                ["sMadeAt", "sSkillRequirement", "sIngredients"].map(crate::pipboy::labels::built_in_label);
+            let mw = look.title.width(made_at);
             brackets(m, rx, RIGHT_AT.y, BOX_WIDTH, RIGHT_AT.y + 515.0, (25.0, 50.0 + mw + 20.0));
             m.spawn(at(rx, RIGHT_AT.y - 28.0, BOX_WIDTH, 600.0)).with_children(|b| {
-                text(b, &look.title, "Made at ...", 50.0, 0.0, bright);
+                text(b, &look.title, made_at, 50.0, 0.0, bright);
                 text(b, &look.value, &v.made_at, 60.0, 78.0, bright);
                 if let Some((name, have, need)) = &v.skill {
-                    text(b, &look.title, "Skill Requirement", 50.0, 128.0, bright);
+                    text(b, &look.title, skill_needed, 50.0, 128.0, bright);
                     let ok = have >= need;
                     text(b, &look.value, &format!("{name} ({have}/{need})"), 60.0, 188.0, if ok { bright } else { amber(NOT_READY) });
                 }
-                text(b, &look.title, "Ingredients", 50.0, 238.0, bright);
+                text(b, &look.title, ingredients, 50.0, 238.0, bright);
                 let mut y = 298.0;
-                for (_, name, have, need) in &v.ingredients {
+                for (idx, (_, name, have, need)) in v.ingredients.iter().enumerate() {
                     let ok = have >= need;
-                    y += wrapped(b, &look.row, &format!("{name} ({have}/{need})"), 110.0, y, 340.0, if ok { bright } else { amber(NOT_READY) }) + 8.0;
+                    let tint = if ok { bright } else { amber(NOT_READY) };
+                    if let Some(img) = v
+                        .ingredient_ysi
+                        .get(idx)
+                        .and_then(|d| d.as_ref())
+                        .and_then(|d| d.icon.as_deref())
+                        .and_then(|path| {
+                            let full = format!("textures\\{}", path.trim_start_matches("textures\\").trim_start_matches("Textures\\"));
+                            data.and_then(|d| crate::interface::texture(&full, d, images, bc)).map(|x| x.0)
+                        })
+                    {
+                        b.spawn((at(78.0, y + 2.0, 24.0, 24.0), ImageNode { color: tint, ..ImageNode::new(img) }));
+                    }
+                    y += wrapped(b, &look.row, &format!("{name} ({have}/{need})"), 110.0, y, 340.0, tint) + 8.0;
                 }
             });
             // Accept and Exit [observed: "Accept  A)", "Exit  X)"].
@@ -801,8 +1015,11 @@ fn spawn(commands: &mut Commands, look: &RecipeLook, v: &View, words: &[String; 
             let accept = format!("Accept  {}", crate::pad::hint_as(&[KeyCode::KeyA], hint_at, v.labels));
             let exit = format!("Exit  {}", crate::pad::hint_as(&[KeyCode::KeyX, KeyCode::Escape], hint_at, v.labels));
             for (k, (label, b, on)) in [(accept.as_str(), RecipeButton::Accept, ready), (exit.as_str(), RecipeButton::Exit, true)].into_iter().enumerate() {
-                let w = crate::pad::hint_width(&look.row, label, glyphs);
-                m.spawn((Button, b, at(rx + BOX_WIDTH - w - 10.0, BUTTONS_TOP + k as f32 * 48.0, w + 10.0, 44.0))).with_children(|t| {
+                let w = crate::pad::hint_width(&look.row, label, glyphs)*look.row.scale;
+                let step=48.0*look.row.scale;
+                let y=BUTTONS_TOP+k as f32*step-2.0*(step-48.0);
+                m.spawn((Button, b, at(rx + BOX_WIDTH - w - 10.0, y, w + 10.0, 44.0*look.row.scale))).with_children(|t| {
+                    let _units=crate::interface::units_at(crate::interface::unit_scale()*look.row.scale);
                     crate::pad::set_hint(t, &look.row, label, 0.0, look.row.font.size * 0.8, if on { bright } else { amber(NOT_READY) }, glyphs);
                 });
             }
@@ -845,6 +1062,8 @@ pub(crate) fn view_with_effects(rt: &mut crate::script::Runtime, sim: &mut SimSt
 /// (`crate::pad::labels`), once it has been spawned.
 type WasTiled = Option<(Option<(i32, i32)>, crate::pad::Labels)>;
 
+type DrawState<'s>=(Local<'s,Option<EffectForms>>,Local<'s,Option<crate::menu::look::Kit>>,Local<'s,u64>);
+
 /// What the tiled sheet's prompt shows now: the amount and the hints' names, so a switch
 /// of controller (Auto button style: an Xbox pad, then a PlayStation one) spawns it again
 /// as the hand-built menu's `View::labels` does [design].
@@ -860,51 +1079,66 @@ fn draw(
     script: Option<ResMut<ScriptState>>,
     mut sim: ResMut<SimState>,
     roots: Query<Entity, With<RecipeRoot>>,
-    look: Option<Res<RecipeLook>>,
+    look: Option<ResMut<RecipeLook>>,
     data: Option<Res<GameData>>,
     mut images: ResMut<Assets<Image>>,
     formats: Option<Res<CompressedImageFormatSupport>>,
     glyphs: Res<crate::pad::PadGlyphs>,
     play: Option<Res<crate::PlayWorld>>,
-    (mut forms, mut kit): (Local<Option<EffectForms>>, Local<Option<crate::menu::look::Kit>>),
+    (mut forms, mut kit,mut painted_revision): DrawState,
     // The tile writer's decision, and the prompt the sheet was last spawned with.
     (tiles, mut was_tiled): (Option<Res<crate::tiles::recipe_menu::RecipeTiles>>, Local<WasTiled>),
+    (readability,mut previous_size):(Option<Res<crate::menu_readability::MenuReadability>>,Local<f32>),
 ) {
     let Some(open) = menu.0.as_mut() else { return };
-    let Some(look) = look else {
+    let Some(mut look) = look else {
         let bc = bc_supported(formats.as_deref());
         let font = |n: usize, images: &mut Assets<Image>| face(crate::pipboy::frame::FONTS[n - 1], plain_font(30.0, 14.0), data.as_deref(), images, bc);
         let pic = |p: &str, images: &mut Assets<Image>| data.as_deref().and_then(|d| crate::interface::texture(p, d, images, bc)).map(|x| x.0);
         let arrows = pic("textures\\interface\\main\\main_arrow_left.dds", &mut images).zip(pic("textures\\interface\\main\\main_arrow_right.dds", &mut images));
-        commands.insert_resource(RecipeLook { title: font(TITLE_FONT, &mut images), value: font(VALUE_FONT, &mut images), row: font(ROW_FONT, &mut images), arrows });
+        commands.insert_resource(RecipeLook { title: font(TITLE_FONT, &mut images).into(), value: font(VALUE_FONT, &mut images).into(), row: font(ROW_FONT, &mut images).into(), arrows });
         return;
     };
     let Some(rt) = script.and_then(|s| s.into_inner().rt.as_mut()) else { return };
+    let text_size=crate::menu::readability::size(readability.as_deref(),crate::menu_readability::MenuKind::Workbench);
+    let resized=*previous_size!=text_size;*previous_size=text_size;
+    if look.row.scale!=text_size {look.title.scale=text_size;look.value.scale=text_size;look.row.scale=text_size;}
     // GetRecipeMenuCategory and GetRecipeMenuSelection (`fnv_game::nvse_jip12`), before
     // the tiled sheet may return.
-    let shown = view(rt, &mut sim, open);
+    let mut shown = view(rt, &mut sim, open);
     rt.game.set_recipe_menu(Some((Some(open.category), shown.rows.get(shown.selected).map(|r| r.recipe))));
     // Drawn from its tiles: only a sheet taking the pointer, and the prompt, which stays
     // hand-built (`crate::tiles::menus::quantity_tiled`). Its `drawn` is the tile writer's.
-    if tiles.is_some_and(|t| t.menu.is_some()) {
+    if let Some(tiles)=tiles.as_ref().filter(|t|t.menu.is_some()) {
+        // The native list's writer owns its painted revision. The prompt itself
+        // is drawn here after input, so publish this same current view as its
+        // source even when its amount just changed earlier in this frame.
+        if let Some(old)=open.drawn.as_mut().filter(|old|
+            old.rows.get(old.selected).map(|r|r.recipe)==shown.rows.get(shown.selected).map(|r|r.recipe)) {
+            shown.effects=old.effects.take();
+        }
+        let revision=tiles.normal_revision();
         let key = tiled_key(open.quantity);
-        if *was_tiled == Some(key) && !roots.is_empty() {
+        if *was_tiled == Some(key) && !roots.is_empty() && !resized && *painted_revision==revision {
+            open.drawn=Some(shown);
             return;
         }
-        *was_tiled = Some(key);
+        *was_tiled = Some(key);*painted_revision=revision;
         for e in &roots {
             commands.entity(e).despawn();
         }
         let bc = bc_supported(formats.as_deref());
         let kit = kit.get_or_insert_with(|| crate::menu::look::Kit::load(data.as_deref(), &mut images, bc));
+        kit.set_text_size(text_size);
         let words = crate::menu::look::quantity_words(Some(&rt.game));
         let full = Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() };
-        commands.spawn((RecipeRoot, full, GlobalZIndex(crate::interface::TOP_MENU_Z))).with_children(|root| {
+        commands.spawn((RecipeRoot, crate::menu::normal_services::Rendered::new(crate::menu::normal_services::Guard::Workbench {category:open.category,station:open.station,filter:open.filter,view:Box::new(shown.clone())},text_size), full, GlobalZIndex(crate::interface::TOP_MENU_Z))).with_children(|root| {
             root.spawn(crate::tiles::menus::modal_sheet());
             if let Some(quantity) = open.quantity {
                 spawn_prompt(root, quantity, &words, kit, data.as_deref(), &mut images, bc, &glyphs);
             }
         });
+        open.drawn=Some(shown);
         return;
     }
     // Back from the tiles: the sheet alone stands, so the hand-built menu is drawn again.
@@ -914,17 +1148,20 @@ fn draw(
     if forms.is_none() {
         *forms = play.as_ref().map(|p| crate::pipboy::stats::read::Forms::new(p.lo, p.schema));
     }
-    let v = view_with_effects(rt, &mut sim, open, forms.as_mut());
-    if open.drawn.as_ref() == Some(&v) && !roots.is_empty() {
+    let mut v = view_with_effects(rt, &mut sim, open, forms.as_mut());
+    if open.drawn.as_ref() == Some(&v) && !roots.is_empty() && !resized {
         return;
     }
+    // Measure row windows only for an actual repaint, not every idle menu frame.
+    v.first=recipe_window(&look,&v,!open.pointer_pick).start;open.first=v.first;
     for e in &roots {
         commands.entity(e).despawn();
     }
     let bc = bc_supported(formats.as_deref());
     let kit = kit.get_or_insert_with(|| crate::menu::look::Kit::load(data.as_deref(), &mut images, bc));
+        kit.set_text_size(text_size);
     let words = crate::menu::look::quantity_words(Some(&rt.game));
-    spawn(&mut commands, &look, &v, &words, kit, data.as_deref(), &mut images, bc, &glyphs);
+    spawn(&mut commands, &look, (&v,crate::menu::normal_services::Guard::Workbench {category:open.category,station:open.station,filter:open.filter,view:Box::new(v.clone())}), &words, kit, data.as_deref(), &mut images, bc, &glyphs);
     if v.effects.is_some() && open.drawn.as_ref().is_none_or(|d| d.selected != v.selected) {
         info!("recipe menu: {} effects: {}", v.rows.get(v.selected).map_or("", |r| r.label.as_str()), v.effects.as_deref().unwrap_or(""));
     }
@@ -983,7 +1220,7 @@ pub fn report_progress_fixture(step: usize) -> RecipeMenu {
     }
     o.drawn = Some(View {
         title: String::new(),
-        rows: (0..20).map(|i| RowView { recipe: FormId(100 + i), label: format!("Synthetic recipe {i}"), ready: true }).collect(),
+        rows: (0..20).map(|i| RowView { recipe: FormId(100 + i), label: format!("Synthetic recipe {i}"), ready: true, ysi: None }).collect(),
         filters: 1,
         subcategory: None,
         filtered: 0,
@@ -993,6 +1230,7 @@ pub fn report_progress_fixture(step: usize) -> RecipeMenu {
         skill: None,
         skill_record: None,
         ingredients: vec![(FormId(43), "Synthetic ingredient".into(), if step >= 6 { 2 } else { 3 }, 1)],
+        ingredient_ysi: Vec::new(),
         weight: None,
         value: None,
         icon: None,

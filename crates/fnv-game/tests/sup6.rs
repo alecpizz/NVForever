@@ -97,7 +97,7 @@ fn the_mouse() {
 fn the_cursor_traits() {
     let f = fixture();
     let mut g = game(&f);
-    // At rest: alpha 255, white, the arrow's size [hypothesis].
+    // At rest: alpha 255, white, the arrow's size (see docs/spec-notes/ext-sup6.md).
     assert_eq!(n(&mut g, "GetCursorTrait 0"), 255.0);
     assert_eq!(n(&mut g, "GetCursorTrait 1"), 32.0);
     q(&mut g, "SetCursorTrait 0 100");
@@ -128,13 +128,21 @@ fn the_cursor_traits() {
 fn the_debug_texts() {
     let f = fixture();
     let mut g = game(&f);
-    q(&mut g, "DebugTextCreate \"MyDebugText1\" 100 100 \"My Text\"");
+    // Fresh create returns 1; duplicate name updates x, y, and text in place (preserving
+    // zoom, matching the documented page) while returning -1 [observed:
+    // w4c_b4_03_sup6_bobbypin_debugtext: dt(1,-1)].
+    assert_eq!(n(&mut g, "DebugTextCreate \"MyDebugText1\" 100 100 \"My Text\""), 1.0);
+    q(&mut g, "DebugTextSetZoom \"MyDebugText1\" 24");
+    assert_eq!(n(&mut g, "DebugTextCreate \"MyDebugText1\" 200 250 \"Updated\""), -1.0);
+    let updated = g.sup.debug_texts["MyDebugText1"].clone();
+    assert_eq!((updated.x, updated.y, updated.text.as_str(), updated.zoom), (200.0, 250.0, "Updated", 24.0));
     assert_eq!(n(&mut g, "DebugTextExists \"MyDebugText1\""), 1.0);
     q(&mut g, "DebugTextSetPos \"MyDebugText1\" 600 700\nDebugTextSetString \"MyDebugText1\" \"My New Text\"\nDebugTextSetZoom \"MyDebugText1\" 20");
     let t = g.sup.debug_texts["MyDebugText1"].clone();
     assert_eq!((t.x, t.y, t.text.as_str(), t.zoom), (600.0, 700.0, "My New Text", 20.0));
     q(&mut g, "DebugTextDestroy \"MyDebugText1\"");
     assert_eq!(n(&mut g, "DebugTextExists \"MyDebugText1\""), 0.0);
+    assert_eq!(n(&mut g, "DebugTextCreate \"MyDebugText1\" 50 60 \"Recreated\""), 1.0);
 }
 
 #[test]

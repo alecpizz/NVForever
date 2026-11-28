@@ -174,6 +174,10 @@ impl Stack {
 #[serde(into = "BTreeMap<FormId, StackRepr>", from = "BTreeMap<FormId, StackRepr>")]
 pub struct Inventory {
     items: BTreeMap<FormId, Stack>,
+    /// Sorted list of equipped item base FormIDs (one entry per equipped group, in FormID
+    /// order), kept in sync on mutations so `equipped_iter()` / `equipped()` /
+    /// `is_equipped()` run in O(equipped) instead of scanning every stack in `items` [design].
+    equipped_forms: Vec<FormId>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -314,6 +318,30 @@ impl Inventory {
         Inventory::default()
     }
 
+    /// Synchronize `self.equipped_forms` for a single `item` after a mutation that may
+    /// have added, removed, merged, or toggled equipped groups on `item` [design].
+    fn sync_equipped(&mut self, item: FormId) {
+        let want = self
+            .items
+            .get(&item)
+            .map_or(0, |s| s.groups.iter().filter(|g| g.0.equipped).count());
+        let start = self.equipped_forms.partition_point(|&f| f < item);
+        let mut end = start;
+        while end < self.equipped_forms.len() && self.equipped_forms[end] == item {
+            end += 1;
+        }
+        let have = end - start;
+        if have == want {
+            return;
+        }
+        if want > have {
+            let add = want - have;
+            self.equipped_forms.splice(end..end, std::iter::repeat_n(item, add));
+        } else {
+            self.equipped_forms.drain((start + want)..end);
+        }
+    }
+
     /// Add `n` (> 0) of `item` without extra data; returns the new total.
     pub fn add(&mut self, item: FormId, n: i32) -> i32 {
         self.add_extra(item, n, Extra::default())
@@ -324,7 +352,11 @@ impl Inventory {
         debug_assert!(n > 0);
         let s = self.items.entry(item).or_default();
         s.add(extra, n);
-        s.total()
+        let total = s.total();
+        if extra.equipped {
+            self.sync_equipped(item);
+        }
+        total
     }
 
     /// Remove up to `n` of `item`; returns the groups removed.
@@ -339,6 +371,9 @@ impl Inventory {
         let out = s.take(n.max(0), pick);
         if s.groups.is_empty() {
             self.items.remove(&item);
+        }
+        if out.iter().any(|g| g.0.equipped) {
+            self.sync_equipped(item);
         }
         out
     }
@@ -389,6 +424,9 @@ impl Inventory {
         s.groups[i].1 -= 1;
         s.groups.retain(|g| g.1 > 0);
         s.add(Extra { live: true, equipped: false, ..e }, 1);
+        if e.equipped {
+            self.sync_equipped(item);
+        }
         true
     }
 
@@ -410,10 +448,14 @@ impl Inventory {
     pub fn take_live(&mut self, item: FormId) -> bool {
         let Some(s) = self.items.get_mut(&item) else { return false };
         let Some(g) = s.groups.iter_mut().find(|g| g.0.live) else { return false };
+        let was_equipped = g.0.equipped;
         g.1 -= 1;
         s.groups.retain(|g| g.1 > 0);
         if s.groups.is_empty() {
             self.items.remove(&item);
+        }
+        if was_equipped {
+            self.sync_equipped(item);
         }
         true
     }
@@ -431,6 +473,9 @@ impl Inventory {
             g.1 -= 1;
             s.groups.retain(|g| g.1 > 0);
             s.add(Extra { live: false, ..e }, 1);
+            if e.equipped {
+                self.sync_equipped(item);
+            }
         }
         self.live_count(item)
     }
@@ -453,12 +498,24 @@ impl Inventory {
         self.items.iter().flat_map(|(&k, s)| s.groups.iter().map(move |&(e, n)| (k, e, n)))
     }
 
-    pub fn equipped(&self) -> Vec<FormId> {
-        self.groups().filter(|g| g.1.equipped).map(|g| g.0).collect()
+    /// Zero-allocation iterator over equipped item base FormIDs (in FormID then group order).
+    #[inline]
+    pub fn equipped_iter(&self) -> impl Iterator<Item = FormId> + '_ {
+        self.equipped_forms.iter().copied()
     }
 
+    #[inline]
+    pub fn equipped(&self) -> Vec<FormId> {
+        self.equipped_forms.clone()
+    }
+
+    #[inline]
     pub fn is_equipped(&self, item: FormId) -> bool {
-        self.items.get(&item).is_some_and(|s| s.groups.iter().any(|g| g.0.equipped))
+        if self.equipped_forms.len() <= 16 {
+            self.equipped_forms.contains(&item)
+        } else {
+            self.equipped_forms.binary_search(&item).is_ok()
+        }
     }
 
     /// The unequipped unit [`Inventory::set_equipped_at`] takes among those `pick` names:
@@ -518,6 +575,7 @@ impl Inventory {
         s.groups[i].1 -= 1;
         s.groups.retain(|g| g.1 > 0);
         s.add(Extra { equipped: true, ..e }, 1);
+        self.sync_equipped(item);
         true
     }
 
@@ -533,6 +591,7 @@ impl Inventory {
         for (e, n) in eq {
             s.add(Extra { equipped: true, ..f(e) }, n);
         }
+        self.sync_equipped(item);
         true
     }
 
@@ -545,6 +604,9 @@ impl Inventory {
         g.1 -= 1;
         s.groups.retain(|g| g.1 > 0);
         s.add(Extra { condition: (condition < 1.0).then_some(condition.max(0.0)), ..from }, 1);
+        if from.equipped {
+            self.sync_equipped(item);
+        }
         true
     }
 
@@ -557,6 +619,9 @@ impl Inventory {
         g.1 -= 1;
         s.groups.retain(|g| g.1 > 0);
         s.add(Extra { mods, ..from }, 1);
+        if from.equipped {
+            self.sync_equipped(item);
+        }
         true
     }
 
@@ -581,6 +646,7 @@ impl Inventory {
         for (e, n) in eq {
             s.add(e.unequipped(), n);
         }
+        self.sync_equipped(item);
         true
     }
 
@@ -592,6 +658,9 @@ impl Inventory {
         s.groups.retain(|g| !g.0.equipped);
         if s.groups.is_empty() {
             self.items.remove(&item);
+        }
+        if !out.is_empty() {
+            self.sync_equipped(item);
         }
         out
     }
@@ -982,6 +1051,70 @@ mod tests {
         assert!(fresh.has_live() && !Inventory::new().has_live());
         assert_eq!((fresh.count(id), fresh.live_count(id)), (3, 2));
         assert_eq!(fresh.count_at(id, Pick::ANY), 1);
+    }
+
+    #[test]
+    fn equipped_forms_cache_matches_groups_across_all_mutations_and_binary_search_threshold() {
+        let check = |inv: &Inventory| {
+            let expected: Vec<FormId> = inv.groups().filter(|g| g.1.equipped).map(|g| g.0).collect();
+            assert_eq!(inv.equipped(), expected);
+            assert_eq!(inv.equipped_iter().collect::<Vec<_>>(), expected);
+            for raw in 1u32..=24 {
+                let id = FormId(raw);
+                assert_eq!(inv.is_equipped(id), expected.contains(&id), "item {id}");
+            }
+        };
+
+        let mut inv = Inventory::new();
+        // >16 equipped items exercises the binary_search branch in `is_equipped`.
+        for raw in (1u32..=20).rev() {
+            inv.add_extra(FormId(raw), 1, Extra { equipped: true, ..Extra::default() });
+            check(&inv);
+        }
+        // Multiple equipped groups on the same FormId (different conditions), then merged via map_equipped.
+        let multi = FormId(5);
+        let worn_damaged = Extra { equipped: true, condition: Some(0.5), ..Extra::default() };
+        inv.add_extra(multi, 1, worn_damaged);
+        check(&inv);
+        assert!(inv.set_condition_one(multi, worn_damaged, 0.75));
+        check(&inv);
+        let worn_75 = Extra { equipped: true, condition: Some(0.75), ..Extra::default() };
+        assert!(inv.set_mods_one(multi, worn_75, 0b01));
+        check(&inv);
+        assert!(inv.map_equipped(multi, |_| Extra::default()));
+        check(&inv);
+        // mark_live strips equipped when only equipped units remain.
+        let live_id = FormId(2);
+        assert!(inv.mark_live(live_id));
+        check(&inv);
+        // clear_equipped, take_equipped, take_at, and serde round-trip.
+        assert!(inv.clear_equipped(FormId(3)));
+        check(&inv);
+        assert!(!inv.take_equipped(FormId(4)).is_empty());
+        check(&inv);
+        assert!(!inv.take(FormId(6), 1).is_empty());
+        check(&inv);
+        let round: Inventory = serde_json::from_value(serde_json::to_value(&inv).unwrap()).unwrap();
+        assert_eq!(round, inv);
+        check(&round);
+    }
+
+    #[test]
+    fn set_live_count_decrease_merges_equipped_groups_without_stale_cache_duplicates() {
+        let id = FormId(0x30);
+        let mut inv = Inventory::new();
+        inv.add_extra(id, 1, Extra { equipped: true, live: false, ..Extra::default() });
+        inv.add_extra(id, 1, Extra { equipped: true, live: true, ..Extra::default() });
+        assert_eq!(inv.equipped(), vec![id, id]);
+
+        assert_eq!(inv.set_live_count(id, 0), 0);
+        let expected: Vec<FormId> = inv.groups().filter(|g| g.1.equipped).map(|g| g.0).collect();
+        assert_eq!(expected, vec![id]);
+        assert_eq!(inv.equipped(), expected);
+        assert_eq!(inv.equipped_iter().collect::<Vec<_>>(), expected);
+        assert!(inv.is_equipped(id));
+        let round: Inventory = serde_json::from_value(serde_json::to_value(&inv).unwrap()).unwrap();
+        assert_eq!(round, inv);
     }
 
     proptest! {

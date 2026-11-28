@@ -1,0 +1,82 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6d2-set-hardcore-stage-effect-validate",
+  "description": "Wave 6D-2 read-only clean-room JIP LN 57.30 probe for SetHardcoreStageEffect (SPEL validation, explicit 0 no-op, omitted-arg clear).",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "jip_nvse": "57.30"
+  },
+  "batches": [
+    {
+      "id": "w6d2_set_hardcore_stage_effect_validate",
+      "title": "SetHardcoreStageEffect SPEL validation and omitted-arg clear",
+      "extender": "jip_nvse",
+      "required_plugins": [
+        "jip_nvse.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6d2_30_actor_unarmed_and_hardcore_stage_effect",
+          "bucket": "A",
+          "extender": "JIP LN 57.30",
+          "required_plugins": [
+            "jip_nvse.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/jip-actors-11.md",
+          "spec_line": 77,
+          "functions_tested": [
+            "GetActorUnarmedEffect",
+            "SetActorUnarmedEffect",
+            "GetHardcoreStageEffect",
+            "SetHardcoreStageEffect"
+          ],
+          "claim": "Verify GetActorUnarmedEffect/SetActorUnarmedEffect (jip-actors-11.md:41; static audit SD-14: return value, non-effect rejection, null clear) and GetHardcoreStageEffect/SetHardcoreStageEffect (jip-actors-11.md:77: Hunger1 0x161906, clear on omit/null, non-SPEL).",
+          "expected": "Confirm SetActorUnarmedEffect return 1/0 & whether null clears EITM, and SetHardcoreStageEffect clear & non-SPEL behavior.",
+          "script_lines": [
+            "ref rDocB = GetFormFromMod \"FalloutNV.esm\" \"104C0C\"",
+            "ref rSpel = GetFormFromMod \"FalloutNV.esm\" \"1DEA8\"",
+            "ref rStim = GetFormFromMod \"FalloutNV.esm\" \"15169\"",
+            "ref rHung = GetFormFromMod \"FalloutNV.esm\" \"161906\"",
+            "ref rNull = 0",
+            "ref u0 = GetActorUnarmedEffect rDocB",
+            "int urSet = SetActorUnarmedEffect rSpel rDocB",
+            "ref uSet = GetActorUnarmedEffect rDocB",
+            "int urBad = SetActorUnarmedEffect rStim rDocB",
+            "ref uBad = GetActorUnarmedEffect rDocB",
+            "int urClr = SetActorUnarmedEffect rNull rDocB",
+            "ref uClr = GetActorUnarmedEffect rDocB",
+            "ref h0 = GetHardcoreStageEffect rHung",
+            "SetHardcoreStageEffect rHung rSpel",
+            "ref hSet = GetHardcoreStageEffect rHung",
+            "SetHardcoreStageEffect rHung rStim",
+            "ref hBad = GetHardcoreStageEffect rHung",
+            "SetHardcoreStageEffect rHung rNull",
+            "ref hNull = GetHardcoreStageEffect rHung",
+            "SetHardcoreStageEffect rHung",
+            "ref hOmit = GetHardcoreStageEffect rHung",
+            "SetHardcoreStageEffect rHung h0",
+            "PrintToConsole \"PROBE|w6d2_30_actor_unarmed_and_hardcore_stage_effect|u(0z=%g,r=%g/%g/%g,set=%g,badEq=%g,clrZ=%g)|hc(0z=%g,set=%g,badEq=%g,badZ=%g,nullZ=%g,omitZ=%g)\" (u0 == 0) urSet urBad urClr (uSet == rSpel) (uBad == rSpel) (uClr == 0) (h0 == 0) (hSet == rSpel) (hBad == rSpel) (hBad == 0) (hNull == 0) (hOmit == 0)"
+          ]
+        }
+      ]
+    }
+  ]
+}

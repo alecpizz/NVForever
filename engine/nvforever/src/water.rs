@@ -75,7 +75,7 @@ use fnv_world::land::{load_land, LandParts, SIDE};
 use fnv_world::sky::{srgb_to_linear, ColorType, Water};
 use fnv_world::CELL_SIZE;
 use nvf_assets::model::ModelCtx;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 /// Height of the noise texture's full range in game units: the record's "noise normals
 /// scale" [hypothesis] times this factor [tuned by eye against in-game screenshots].
@@ -92,7 +92,8 @@ impl Plugin for WaterPlugin {
             .init_resource::<WaterCache>()
             .init_resource::<DistantWater>()
             .init_resource::<WaterRemaps>()
-            .add_plugins(crate::underwater::UnderwaterFogPlugin);
+            .add_plugins(crate::underwater::UnderwaterFogPlugin)
+            .add_systems(PostUpdate, update_shot_rings.run_if(resource_exists::<nvf_play::combat::ShotVisuals>));
         add_update_systems(app);
     }
 }
@@ -134,6 +135,20 @@ pub struct WaterParams {
     pub seen_plane: Vec4,
     /// Direction toward the outdoor sun (Bevy axes) and daylight strength.
     pub water_sun: Vec4,
+    shot_rings: [ShotRingUniform; MAX_SHOT_RINGS],
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, ShaderType)]
+struct ShotRingUniform {
+    /// Game x/y, surface height, and wrapped shader start time plus one. Empty slots are zero.
+    point_time: Vec4,
+    /// Unit projectile direction projected onto the surface, or the axis of a blast's fallout.
+    travel: Vec2,
+    receiver: u32,
+    /// 0 for a bullet, 1 for a heavy projectile crossing, 2 for a blast.
+    kind: u32,
+    /// Horizontal spread and vertical strength of a blast, relative to the authored column.
+    blast_scale: Vec2,
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
@@ -207,6 +222,118 @@ pub struct WaterCache {
     plane: Option<Handle<Mesh>>,
     /// The water-pixel counter ([`WaterMaterial::seen`]), made with the first material.
     seen: Option<Handle<ShaderBuffer>>,
+}
+
+// Keep the newest crossings under automatic fire. The shader stops at the first empty slot.
+const MAX_SHOT_RINGS: usize = 8;
+const SHOT_RING_LIFETIME: f64 = 1.2;
+const BLAST_RING_LIFETIME: f64 = 3.4;
+const BLAST_RING: u32 = 2;
+
+/// Horizontal spread and strength of the surface wave [design].
+/// A deeper blast spreads and weakens as it reaches the surface. An airburst
+/// loses coupling as its height above the water grows.
+fn blast_surface_scale(blast: nvf_play::combat::SurfaceBlast) -> Vec2 {
+    // A conventional frag's 900-unit EXPL radius and a missile's 1000 both
+    // stay in the scaling range (docs/spec-notes/explosion-effects.md).
+    let size = (blast.radius.max(0.0) / 600.0).sqrt().clamp(0.55, 1.8);
+    let depth = (blast.depth / blast.reach.max(1.0)).clamp(-1.0, 1.0);
+    let width = size * (1.0 + 0.15 * depth.max(0.0));
+    let height = size * (1.0 - 0.56 * depth.max(0.0) - 0.75 * (-depth).max(0.0));
+    Vec2::new(width, height)
+}
+
+#[derive(Default)]
+struct ShotRings {
+    // Ordered by birth; the first value is its expiry on the unwrapped clock.
+    live: VecDeque<(f64, ShotRingUniform)>,
+    space: Option<(u32, Option<u32>)>,
+}
+
+impl ShotRings {
+    fn push(&mut self, entry: nvf_play::combat::ShotWaterEntry, now: f64, shader_time: f32) {
+        use nvf_play::combat::WaterImpact;
+        let (kind, lifetime, travel, blast_scale) = match entry.kind {
+            WaterImpact::Blast(blast) => {
+                let axis = Vec2::from_angle((entry.point[0] * 0.013 + entry.point[1] * 0.027 + shader_time).rem_euclid(std::f32::consts::TAU));
+                (BLAST_RING, BLAST_RING_LIFETIME, axis, blast_surface_scale(blast))
+            }
+            WaterImpact::HeavyEntry => (1, SHOT_RING_LIFETIME, Vec3::from_array(entry.direction).truncate(), Vec2::ZERO),
+            WaterImpact::Bullet => (0, SHOT_RING_LIFETIME, Vec3::from_array(entry.direction).truncate(), Vec2::ZERO),
+        };
+        if self.live.len() == MAX_SHOT_RINGS {
+            // A burst of pistol fire must not cut off a grenade's receding wave.
+            if let Some(index) = self.live.iter().position(|(_, ring)| ring.kind != BLAST_RING) {
+                self.live.remove(index);
+            } else if kind == BLAST_RING {
+                self.live.pop_front();
+            } else {
+                return;
+            }
+        }
+        self.live.push_back((now + lifetime, ShotRingUniform {
+            point_time: Vec3::from_array(entry.point).extend(shader_time + 1.0),
+            travel,
+            receiver: entry.receiver,
+            kind,
+            blast_scale,
+        }));
+    }
+
+    fn expire(&mut self, now: f64) {
+        self.live.retain(|(expires, _)| *expires > now);
+    }
+}
+
+/// Combat places each crossing at the waterline when the shot reaches it. The material
+/// only needs its start time: expanding the ring costs no per-frame asset changes.
+#[allow(clippy::too_many_arguments)]
+fn update_shot_rings(
+    time: Res<Time>,
+    graphics: Res<crate::graphics::Graphics>,
+    world: Res<WorldData>,
+    streamer: Res<Streamer>,
+    mut shots: ResMut<nvf_play::combat::ShotVisuals>,
+    mut rings: Local<ShotRings>,
+    cache: Res<WaterCache>,
+    mut materials: ResMut<Assets<WaterMaterial>>,
+) {
+    if rings.live.is_empty() && shots.water_entries.is_empty() {
+        return;
+    }
+    let space = (world.world, streamer.interior);
+    if !graphics.water_effects || rings.space != Some(space) {
+        rings.live.clear();
+        rings.space = Some(space);
+    }
+    let now = time.elapsed_secs_f64();
+    rings.expire(now);
+    if !shots.water_entries.is_empty() {
+        for entry in shots.water_entries.drain(..) {
+            if graphics.water_effects {
+                rings.push(entry, now, time.elapsed_secs_wrapped());
+                let point = entry.point;
+                let name = match entry.kind {
+                    nvf_play::combat::WaterImpact::Bullet => "shot ring",
+                    nvf_play::combat::WaterImpact::HeavyEntry => "heavy entry ring",
+                    nvf_play::combat::WaterImpact::Blast(_) => "blast wave",
+                };
+                debug!("water: {name} at ({:.0}, {:.0}, {:.0})", point[0], point[1], point[2]);
+            }
+        }
+    }
+    let mut packed = [ShotRingUniform::default(); MAX_SHOT_RINGS];
+    for (slot, (_, entry)) in packed.iter_mut().zip(&rings.live) {
+        *slot = *entry;
+    }
+    // This also seeds materials streamed in while a ring is still travelling.
+    for h in cache.materials.values() {
+        if materials.get(h).is_some_and(|m| m.params.shot_rings != packed) {
+            if let Some(mut m) = materials.get_mut(h) {
+                m.params.shot_rings = packed;
+            }
+        }
+    }
 }
 
 impl WaterCache {
@@ -366,6 +493,10 @@ pub struct DistantWater {
     want_for: Option<WantKey>,
     /// `want_for` the planes were placed for.
     built_for: Option<WantKey>,
+    /// Cells of `want` skipped by the read budget ([`SURFACE_READS_PER_FRAME`]), in `want`'s
+    /// order: the only ones the frames after go through while neither the choice nor the
+    /// loaded cells change (#3879: the whole list again was 16,000 cells a frame in Novac).
+    unread: Vec<(i32, i32)>,
     /// The loaded cells the planes were placed for, sorted ([`loaded_changed`]), and a
     /// buffer for this frame's.
     loaded_seen: Vec<(i32, i32)>,
@@ -519,6 +650,33 @@ fn wet_vertices(heights: &[f32], surface: f32) -> Option<[usize; 4]> {
     b.map(|[c0, r0, c1, r1]| [c0.saturating_sub(1), r0.saturating_sub(1), (c1 + 1).min(SIDE - 1), (r1 + 1).min(SIDE - 1)])
 }
 
+/// What [`walk_with_reads`]' visit did with a cell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Walked {
+    /// Handled without a surface read.
+    Done,
+    /// Handled with one read of the budget.
+    Read,
+    /// It needs a read and none was left: kept for a later frame.
+    Later,
+}
+
+/// Visits `cells` in order, `visit(cell, may_read)` told whether a surface read is still
+/// within the frame's `reads`; returns the cells it put off ([`Walked::Later`]), in order,
+/// for the frames after to visit instead of the whole list (#3879).
+pub fn walk_with_reads(cells: &[(i32, i32)], reads: usize, mut visit: impl FnMut((i32, i32), bool) -> Walked) -> Vec<(i32, i32)> {
+    let mut used = 0;
+    let mut later = Vec::new();
+    for &c in cells {
+        match visit(c, used < reads) {
+            Walked::Done => {}
+            Walked::Read => used += 1,
+            Walked::Later => later.push(c),
+        }
+    }
+    later
+}
+
 /// The distant water's landscape reads in one frame ([`distant_water`]).
 const SURFACE_READS_PER_FRAME: usize = 12;
 
@@ -539,7 +697,10 @@ pub fn distant_water(
     let want_key = (world.world, lod.choice(), on);
     let dwm = &mut *dw;
     let loaded = loaded_changed(&mut dwm.loaded_seen, &mut dwm.loaded_now, streamer.loaded.keys().copied());
-    if dw.built_for == Some(want_key) && !loaded {
+    // A full pass when the choice or the loaded cells changed; otherwise only the cells
+    // the read budget left for later, if any (#3879).
+    let full = dw.built_for != Some(want_key) || loaded;
+    if !full && dw.unread.is_empty() {
         return;
     }
     dw.built_for = Some(want_key);
@@ -561,31 +722,29 @@ pub fn distant_water(
         }
     }
     // Loaded cells have their own water: their planes go, and come back when they unload.
-    let want = std::mem::take(&mut dw.want);
-    let mut reads = 0;
-    for &c in &want {
+    // The full pass goes through `want`; a later frame through what it left unread.
+    let cells = if full { std::mem::take(&mut dw.want) } else { std::mem::take(&mut dw.unread) };
+    let unread = walk_with_reads(&cells, reads_a_frame, |c, may_read| {
         if streamer.loaded.contains_key(&c) {
             if let Some(e) = dw.planes.remove(&c) {
                 commands.entity(e).despawn();
             }
-            continue;
+            return Walked::Done;
         }
         if dw.planes.contains_key(&c) {
-            continue;
+            return Walked::Done;
         }
         // [design] #2956 follow-up (#3070): a cell's surface not known yet reads and
         // inflates its landscape record; a new chunk choice can uncover many at once (5-11 ms
         // of one frame [observed 2026-11-19, `profile hitch`]). At most
         // `SURFACE_READS_PER_FRAME` are read a frame, the rest the frames after.
-        if !dw.surface_known(c) {
-            if reads >= reads_a_frame {
-                dw.built_for = None;
-                continue;
-            }
-            reads += 1;
+        let read = !dw.surface_known(c);
+        if read && !may_read {
+            return Walked::Later;
         }
-        let Some((height, wid)) = dw.surface(&world, c) else { continue };
-        let Some(mat) = water_material(&world, wid, true, false, Some(cell_water_center(c, height)), &mut models, &mut water) else { continue };
+        let walked = if read { Walked::Read } else { Walked::Done };
+        let Some((height, wid)) = dw.surface(&world, c) else { return walked };
+        let Some(mat) = water_material(&world, wid, true, false, Some(cell_water_center(c, height)), &mut models, &mut water) else { return walked };
         let mesh = water.plane(&mut models.meshes);
         let s = CELL_SIZE;
         let e = commands
@@ -599,8 +758,12 @@ pub fn distant_water(
             .id();
         commands.entity(root).add_child(e);
         dw.planes.insert(c, e);
+        walked
+    });
+    if full {
+        dw.want = cells;
     }
-    dw.want = want;
+    dw.unread = unread;
 }
 
 fn linear(c: [u8; 3]) -> Vec3 {
@@ -633,6 +796,7 @@ pub fn water_params(w: &Water) -> WaterParams {
         edge: w.edge_falloff().map_or(Vec4::ZERO, |(a, b)| Vec4::new(a, b, 1.0, 0.0)),
         seen_plane: Vec4::ZERO,
         water_sun: Vec4::ZERO,
+        shot_rings: [ShotRingUniform::default(); MAX_SHOT_RINGS],
     }
 }
 
@@ -722,6 +886,59 @@ mod wet_tests {
     use super::*;
 
     #[test]
+    fn shot_rings_keep_the_latest_entries_and_expire_across_the_shader_clock_wrap() {
+        let mut rings = ShotRings::default();
+        for i in 0..=MAX_SHOT_RINGS {
+            let now = 3599.0 + i as f64 * 0.1;
+            let entry = nvf_play::combat::ShotWaterEntry { point: [i as f32, 1.0, 2600.0], direction: [0.6, 0.0, -0.8], receiver: 0xff01_0000 + i as u32, kind: nvf_play::combat::WaterImpact::Bullet };
+            rings.push(entry, now, now as f32);
+        }
+        assert_eq!(rings.live.len(), MAX_SHOT_RINGS);
+        let first = rings.live.front().unwrap().1;
+        assert_eq!(first.point_time.xyz(), Vec3::new(1.0, 1.0, 2600.0));
+        assert_eq!(first.receiver, 0xff01_0001);
+        assert_eq!(first.travel, Vec2::new(0.6, 0.0));
+        rings.expire(3600.41);
+        assert_eq!(rings.live.front().unwrap().1.point_time.x, 3.0);
+        rings.expire(3601.1);
+        assert!(rings.live.is_empty());
+    }
+
+    #[test]
+    fn submerged_blast_is_wider_and_lower_and_airburst_loses_lift() {
+        use nvf_play::combat::SurfaceBlast;
+        let surface = SurfaceBlast { radius: 600.0, depth: 0.0, reach: 250.0 };
+        let on = blast_surface_scale(surface);
+        let below = blast_surface_scale(SurfaceBlast { depth: 180.0, ..surface });
+        let above = blast_surface_scale(SurfaceBlast { depth: -180.0, ..surface });
+        assert_eq!(on, Vec2::ONE);
+        assert!(below.x > on.x && below.y < on.y);
+        assert!(above.x == on.x && above.y < below.y);
+        assert!(blast_surface_scale(SurfaceBlast { radius: 800.0, ..surface }).x > on.x);
+    }
+
+    #[test]
+    fn blast_wave_survives_following_gunfire_and_uses_its_own_lifetime() {
+        use nvf_play::combat::{ShotWaterEntry, SurfaceBlast, WaterImpact};
+        let mut rings = ShotRings::default();
+        let blast = SurfaceBlast { radius: 200.0, depth: 80.0, reach: 250.0 };
+        let entry = ShotWaterEntry { point: [12.0, 34.0, 90.0], direction: [0.0; 3], receiver: 44, kind: WaterImpact::Blast(blast) };
+        rings.push(entry, 0.0, 0.0);
+        for _ in 0..MAX_SHOT_RINGS {
+            rings.push(ShotWaterEntry { kind: WaterImpact::HeavyEntry, ..entry }, 0.1, 0.1);
+        }
+        assert_eq!(rings.live.len(), MAX_SHOT_RINGS);
+        rings.expire(1.4);
+        assert_eq!(rings.live.len(), 1);
+        let wave = rings.live[0].1;
+        assert_eq!(wave.kind, BLAST_RING);
+        assert_eq!(wave.receiver, 44);
+        assert_eq!(wave.blast_scale, blast_surface_scale(blast));
+        rings.expire(BLAST_RING_LIFETIME);
+        assert!(rings.live.is_empty());
+    }
+
+    #[test]
     fn baked_current_keeps_each_layer_downstream_against_strong_wind() {
         let wind = [
             Vec4::new(0.0, 900.0, 0.01, 0.7),
@@ -784,6 +1001,44 @@ mod distant_tests {
         assert!(loaded_changed(&mut seen, &mut now, [(0, 0), (1, 0), (-1, 1)].into_iter()), "one swapped, same count");
         assert!(loaded_changed(&mut seen, &mut now, [(-49, 3), (-49, 7)].into_iter()));
         assert!(loaded_changed(&mut seen, &mut now, [(-47, 3), (-47, 7)].into_iter()), "two swapped for two");
+    }
+
+    /// #3879: with 12 reads a frame, 40 cells not read yet take four frames, and each frame
+    /// after the first visits only the cells put off, not the whole list again; cells
+    /// handled without a read (known, loaded, with a plane) never use the budget.
+    #[test]
+    fn a_frame_after_the_budget_visits_only_the_cells_put_off() {
+        let cells: Vec<(i32, i32)> = (0..50).map(|i| (i, 0)).collect();
+        // Every fifth cell's surface is known already; the rest need a read.
+        let mut known: std::collections::HashSet<(i32, i32)> = cells.iter().copied().filter(|c| c.0 % 5 == 0).collect();
+        let mut visits = Vec::new();
+        let mut walk = |list: &[(i32, i32)], known: &mut std::collections::HashSet<(i32, i32)>| {
+            let mut visited = 0;
+            let later = walk_with_reads(list, 12, |c, may_read| {
+                visited += 1;
+                if known.contains(&c) {
+                    return Walked::Done;
+                }
+                if !may_read {
+                    return Walked::Later;
+                }
+                known.insert(c);
+                Walked::Read
+            });
+            visits.push(visited);
+            later
+        };
+        let mut left = walk(&cells, &mut known);
+        assert_eq!(left.len(), 40 - 12, "the known 10 and 12 read; the rest put off");
+        assert_eq!(left, cells.iter().copied().filter(|c| c.0 % 5 != 0).skip(12).collect::<Vec<_>>(), "in the list's order");
+        let mut frames = 1;
+        while !left.is_empty() {
+            left = walk(&left.clone(), &mut known);
+            frames += 1;
+        }
+        assert_eq!(frames, 4, "40 reads at 12 a frame");
+        assert_eq!(visits, vec![50, 28, 16, 4], "each later frame visits only what was put off");
+        assert_eq!(known.len(), 50);
     }
 
     /// A chunk's cells are `x..x + l` by `y..y + l`: the range per column takes no

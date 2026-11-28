@@ -178,7 +178,7 @@
     },
     {
       "op": "note",
-      "text": "The player rides down to the control room under the penthouse (travel stand-in), unseals House's chamber at the control terminal, waits out the pod's timer (L38TimerQuest) and kills him by disabling the cerebral interface. The terminal entry sets VStoryEventMrHouseNeutralized and VMQHouseFail 1."
+      "text": "The player rides down to the control room under the penthouse (travel stand-in), unseals House's chamber at the control terminal, waits out the pod's timer (L38TimerQuest) and kills him by disabling the cerebral interface. The terminal entry sets VStoryEventMrHouseNeutralized and VMQHouseFail 1. (L38TimerQuest's 15 s, counted at the quest delay of 5 s, opens the pod about 20 s after it was unsealed: the wait is 21 s, #4851)"
     },
     {
       "op": "go_to_cell",
@@ -203,7 +203,7 @@
     },
     {
       "op": "advance_seconds",
-      "seconds": 20
+      "seconds": 21
     },
     {
       "op": "terminal",

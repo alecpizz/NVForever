@@ -242,14 +242,18 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
     let v = match name {
         // ---- navmeshes and paths ----
         // The calling reference joins or leaves the obstacle list [documented]; the
-        // engine's navmesh cuts round it (spec note §3). 1 on a reference [observed:
-        // jg10.returns, both on Doc Mitchell], 0 without one [hypothesis].
+        // engine's navmesh cuts round it (spec note §3). Returns 1 both on a reference
+        // [observed: jg10.returns] and without a calling reference [observed: Fallout:
+        // New Vegas 1.4.0.525 + xNVSE 6.4.9 + JohnnyGuitarNVSE 528, 2026-11-24,
+        // `GSDocMitchellHouse` (`0x00103DF9`), 10 official base masters,
+        // `w4c_b3_10_jg10_safe_edges`: `obsNoRef=1/1`].
         "addnavmeshobstacle" | "removenavmeshobstacle" => {
-            let Some(r) = subject else { return Some(Ok(zero)) };
-            if name == "addnavmeshobstacle" {
-                g.other.jg10.nav_obstacles.insert(r);
-            } else {
-                g.other.jg10.nav_obstacles.remove(&r);
+            if let Some(r) = subject {
+                if name == "addnavmeshobstacle" {
+                    g.other.jg10.nav_obstacles.insert(r);
+                } else {
+                    g.other.jg10.nav_obstacles.remove(&r);
+                }
             }
             XVal::Num(1.0)
         }
@@ -292,9 +296,12 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
         // unpoisoned [observed: Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 +
         // JohnnyGuitarNVSE 528 + JIP LN 57.30, 2026-11-24, `GSDocMitchellHouse`,
         // `w4h_09_apply_weapon_poison_stimpak` (`wave4h_reconcile.json`, #3803):
-        // `PROBE|w4h_09_apply_weapon_poison_stimpak|eq=00004326|isPois(b=1,s=1,st=0)|init=00000000|bleak(1:001613D0)|clr1(1:00000000)|stim(0:00000000)|silver(1:00167475)|clr2(1:00000000)`].
-        // Rejecting a non-ALCH form or leaving an already-applied poison unchanged on
-        // rejection and returning 0 without an equipped WEAP [hypothesis].
+        // `PROBE|w4h_09_apply_weapon_poison_stimpak|eq=00004326|isPois(b=1,s=1,st=0)|init=00000000|bleak(1:001613D0)|clr1(1:00000000)|stim(0:00000000)|silver(1:00167475)|clr2(1:00000000)`],
+        // and `w6t2p2_27_jg10_apply_poison_and_muzzle_hex`
+        // (`tools/capture/nvse/catalogs/wave6_t2_observed_matches.json`):
+        // `unarm=0,ok=1,bad=0,kept=1,clr=1` confirming unarmed returns `0`, non-`ALCH`
+        // (`Weap10mmPistol 0x434F`) returns `0` while keeping the already-applied poison,
+        // and omitted argument clears returning `1`].
         "applyweaponpoison" => {
             let Some(r) = subject else { return Some(Ok(zero)) };
             let key = match g.temp_item(r) {
@@ -328,13 +335,26 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
             zero
         }
         // `[mode]`: 0 on again, 1 off for all, 2 the player's, 3 NPCs' [documented]; a
-        // mode outside 0–3 is ignored [hypothesis].
+        // mode outside 0–3 leaves the setting unchanged and returns exact `u32::MAX`
+        // (`4_294_967_295`, `0xFFFFFFFF`, printed as `FFFFFFFF` under `%x` and
+        // `4.29497e+09` under `%g`) [observed: Fallout: New Vegas 1.4.0.525 + xNVSE
+        // 6.4.9 + JohnnyGuitarNVSE 528, 2026-11-24, `GSDocMitchellHouse` (`0x00103DF9`),
+        // 10 official base masters, `w4c_b3_10_jg10_safe_edges` (`dm(4.29497e+09,0)`),
+        // `w4h_06_disable_muzzle_flash_hex`
+        // (`tools/capture/nvse/catalogs/wave4h_reconcile.json`, #3803):
+        // `PROBE|w4h_06_disable_muzzle_flash_hex|dm99(hex=FFFFFFFF,i=00000000,g=4.29497e+09)|dm1(1,1)|dm0(0,0)|dt(c1=1,ex1=1,c2=-1,ex2=1,ex3=0)|getOps(0,0,0)`,
+        // and `w6t2p2_27_jg10_apply_poison_and_muzzle_hex`
+        // (`tools/capture/nvse/catalogs/wave6_t2_observed_matches.json`):
+        // `muz=4294967295,neg=4.29497e+09`; zero DLL, PDB, or third-party source
+        // consulted].
         "disablemuzzleflashlights" => {
             let m = num(args, 0, 0.0);
             if (0.0..=3.0).contains(&m) && m.fract() == 0.0 {
                 g.other.jg10.muzzle_lights_off = m as u8;
+                zero
+            } else {
+                XVal::Num(f64::from(u32::MAX))
             }
-            zero
         }
         // `path [weapon]`: the scope's picture; a weapon gives its own (MOD3) and the path
         // is ignored [documented].
@@ -376,7 +396,14 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
         }
         // ---- FaceGen ----
         // `base type n`: the base's nth value of the list (FACEGEN) [documented: the
-        // arguments; hypothesis: the types]; 0 out of range.
+        // arguments; hypothesis: the types; observed: Fallout: New Vegas 1.4.0.525 +
+        // xNVSE 6.4.9 + JohnnyGuitarNVSE 528, 2026-11-24, GSDocMitchellHouse
+        // (0x00103DF9), 10 official base masters, w4d_31_jg_facegen_bounds
+        // (tools/capture/nvse/catalogs/wave4d_extenders.json):
+        // t0(0=-0.2281,49=0.0000)|t1(0=0.0000) on Doc Mitchell (0x00104C0C); no DLL or
+        // source consulted]. Returning 0.0 for out-of-range indices (>= 50 / >= 30 /
+        // < 0) or invalid types (>= 3) is [design: crash-safety guard avoiding
+        // out-of-bounds reads, which crash/hang JohnnyGuitarNVSE 528].
         "facegengetnthproperty" => {
             let (Some(b), Ok(k), Ok(i)) = (form(args, 0), usize::try_from(num(args, 1, -1.0) as i64), usize::try_from(num(args, 2, -1.0) as i64)) else { return Some(Ok(zero)) };
             if k >= FACEGEN.len() {
@@ -385,14 +412,20 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
             XVal::Num(g.facegen_values(b, k).get(i).copied().unwrap_or(0.0))
         }
         // `base type n value`: sets it, the player's in the creator's look (drawn again),
-        // an NPC's as the base's record value (FaceGenRefreshAppearance draws it); 1 when
-        // set [hypothesis].
+        // an NPC's as the base's record value (FaceGenRefreshAppearance draws it); invalid
+        // type returns 0, while a valid type with an out-of-bounds index leaves data
+        // unchanged and returns 1 [observed: Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 +
+        // JohnnyGuitarNVSE 528, 2026-11-24, `GSDocMitchellHouse` (`0x00103DF9`), 10 official
+        // base masters, `w4c_b3_10_jg10_safe_edges`: `fg(badT=0,oob=1)`].
         "facegensetnthproperty" => {
             let (Some(b), Ok(k), Ok(i)) = (form(args, 0), usize::try_from(num(args, 1, -1.0) as i64), usize::try_from(num(args, 2, -1.0) as i64)) else { return Some(Ok(zero)) };
             let Some(v) = crate::nvse::field_number(num(args, 3, f64::NAN), crate::nvse::F32.0, crate::nvse::F32.1) else { return Some(Ok(zero)) };
-            let Some(&(sub, n)) = FACEGEN.get(k).filter(|&&(_, n)| i < n) else { return Some(Ok(zero)) };
+            let Some(&(sub, n)) = FACEGEN.get(k) else { return Some(Ok(zero)) };
             if sig(g, b) != Some(*b"NPC_") {
                 return Some(Ok(zero));
+            }
+            if i >= n {
+                return Some(Ok(XVal::Num(1.0)));
             }
             if b == FormId::PLAYER_BASE {
                 if let Some(l) = g.player.look.as_mut() {
@@ -505,12 +538,14 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
             zero
         }
         // `count duration size opacity alpha colour flare fade`: TriggerScreenSplatter's
-        // splats with the given textures [documented]; 1 when splats are asked for
-        // [hypothesis: 0/1 is documented, not when].
+        // splats with the given textures [documented]; returns 1 even when `count == 0`
+        // (without queuing a splatter trigger) [observed: Fallout: New Vegas 1.4.0.525 +
+        // xNVSE 6.4.9 + JohnnyGuitarNVSE 528, 2026-11-24, `GSDocMitchellHouse` (`0x00103DF9`),
+        // 10 official base masters, `w4c_b3_10_jg10_safe_edges`: `spl0=1`].
         "triggerscreensplatterex" => {
             let count = num(args, 0, 0.0).clamp(0.0, f64::from(u32::MAX)) as u32;
             if count == 0 {
-                return Some(Ok(zero));
+                return Some(Ok(XVal::Num(1.0)));
             }
             let duration = Some(num(args, 1, 0.0).min(3600.0) as f32).filter(|d| *d > 0.0);
             let factor = |i: usize| num(args, i, 1.0).clamp(0.0, crate::functions::misc::SPLATTER_MAX_FACTOR) as f32;

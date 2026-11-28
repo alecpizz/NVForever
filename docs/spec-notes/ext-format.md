@@ -74,9 +74,15 @@ decimals; String Formatting says it formats as an integer. How it rounds 2.5: op
 | `%{ … %}` | a value | if the value is 0, everything up to `%}` is left out, and the values of codes inside are skipped |
 
 Notes:
-- `%e` as "empty" and the base game's `%.3e` (scientific) share a letter: `%e` with a
-  precision is the number code, bare `%e` the empty string [hypothesis: the pages
-  describe both; which reading wins for a bare `%e` given a value: open].
+- `%e` as "empty" and the base game's `%.3e` (scientific) share a letter: bare `%e` and
+  `%E` emit the empty string (`"A%eB"` and `"A%EB"` both produce `"AB"`, length 2), while
+  precision forms `%.0e` and `%.2E` emit scientific notation (`"1e+03"`, `"5.00E-04"`)
+  [observed: Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9, 2026-11-24, `GSDocMitchellHouse`
+  (`0x00103DF9`), 10 official base masters, read-only `PrintToConsole` probe
+  `w4c_b2_10_format_bare_e` (`tools/capture/nvse/catalogs/wave4c_extenders.json`, #3679,
+  calling `sv_Construct` on `"A%eB"`, `"A%EB"`, `"%.0e" 1000`, `"%.2E" 0.0005`):
+  `PROBE|w4c_b2_10_format_bare_e|bare_e=[AB](len=2)|bare_E=[AB](len=2)|0e=[1e+03]|2E=[5.00E-04]`;
+  no DLL or source consulted].
 - `%x` output case: the example gives upper-case digits (`00FF`) [documented: String
   Formatting].
 - `%k` needs the scancode table (Template:DirectX Scancodes, not exported) to be checked

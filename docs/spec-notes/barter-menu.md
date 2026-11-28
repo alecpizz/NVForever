@@ -221,6 +221,34 @@ Not built: the BarterExit lines merchants say when the menu closes (GECK wiki Se
 the blur, the mods tile, the "Calculate Buy Price" perk entry point, repair at merchants. The
 menus from their files: §8.
 
+### 5.1 The merchant's owned loose items (#3350)
+
+- A merchant's barter list also offers the items it owns that lie loose in the world,
+  not in any container [observed: observer check 256 and its follow-up, 2026-11-28].
+  - Blake (`NVBlakeREF` 0x000F1866, at the Crimson Caravan) listed the two medical books
+    of Bitter Springs Infirmary Blues: `VBSPsychologyBook` and `VBSPediatricsBook`.
+    These are persistent references owned by him, lying on the ground.
+  - He also listed his owned loose Purified Water (0x000151A3, one row of 8) and
+    Whiskey (0x00032C75, one row of 4). These references are not persistent.
+  - Neither his merchant container (`VendorContainerBlake` 0x000FD56D) nor his own
+    inventory held any of them, before the menu opened or while it was open.
+  - The loose references stayed enabled while the menu was open.
+- NVForever offers the item references in the merchant's cell that are owned by its
+  base or its reference, enabled and not taken (`menu::model::owned_loose`).
+  - All units of one item make one row, together with any stock row of the same item.
+  - A quest item is offered too: Blake's books are quest items.
+  - Buying takes the stock's units first, then the loose references. Each reference
+    goes into the player's inventory, owned by no one, so it is bought, not stolen,
+    and it leaves the world as a pick-up would. The item's OnAdd then runs as for any
+    item reaching the player.
+- [hypothesis] The reach is the merchant's cell, by the counts. 7 of the 8 waters and
+  all 4 whiskeys lie in Blake's cell; the eighth water lies somewhere else.
+- [hypothesis] Only ownership by the merchant counts. Ownership by its faction or by
+  the cell was not checked.
+- [observed: a scan of the ten masters, 2026-11-28] 76 such items lie by 11 merchants.
+  Blake has 23, the merchant reference 0x000E6822 has 21 and Genaro (Freeside) 18;
+  the other eight have one to four each.
+
 ## 6. Looking at one
 
 - `NVF_PLAY_TEST_BARTER=<merchant reference>[:discount]` opens the barter menu with that
@@ -374,7 +402,9 @@ with JIP on a footlocker; interface units; parts a to g, with their shots in the
 - **The buttons**: Take All 116 x 47 at -116, 0 of `CM_ButtonRect`, Exit 68 x 47 at -68, 45,
   hints "A)" and "E)" [observed: launchtest shot, which reads "Take All A)", unlike §3's
   earlier reading "R)"]. `ClickMenuTile` on Take All takes all and closes, no prompt, no
-  message after. The weight label "Wg   52/200", three spaces.
+  message after. The weight label "Wg   52/200", three spaces. NVForever writes the
+  setting `sInventoryWeight`'s word there and in the heading ("Weight   52/200" without a
+  plugin's text), and `sInventoryCaps`'s for the caps [design, #4495].
 
 What the tile path does with these, and where it differs:
 
@@ -627,3 +657,175 @@ or the engine's
 preserve the feedback without inventing a tile in the file. Blur uses the existing
 tile-menu blur path at radius 3
 [hypothesis for barter: the same shared presentation as the container].
+
+
+## Android alternate touch presentation
+
+[design: issue #2436, Android batch after qualified R9]
+An optional compact touch sheet presents the existing barter model, independently
+of whether its ordinary drawing selected native tiles or the hand-built fallback.
+This is an alternate mobile presentation, not native-file widget touch support.
+Both inventories have separate category/scroll controls and rows at least48 logical
+pixels high. A row tap only selects. Explicit One/All controls stage or take back
+units, the existing quantity prompt asks for large stacks, and only explicit Accept
+commits the existing trade. Cancel keeps the ordinary menu's Close semantics.
+
+[documented: menu/model.rs, menu.rs::apply_input, menu/barter.rs]
+The touch producer emits existing guarded MenuInput commands. Existing prices,
+merchant services, quest/live filtering, condition/mod identity, caps limit,
+quantity rules, script callbacks, sounds and item-transfer effects remain the
+authoritative consumers. No direct transfer, Use, invented discount or relaxed
+eligibility is introduced. Before an accepted touch action, the real inventory is
+checked again; changed rows or trade totals require a fresh selection/review.
+
+[design]
+The same logical rectangles paint and hit the sheet, clipped to the parent's
+current safe window and explicit full-window UI camera. A scrolling contact cannot
+stage an item or accept a trade. Sticky travel, one contact, guarded release and a
+same-batch commit barrier prevent row/category/quantity/Accept click-through.
+Quantity changes alone move no items. Small/invalid windows fail closed and retain
+the ordinary presentation rather than creating invisible targets.
+
+[design]
+KeyboardMouse remains the existing shared device identity for both finger and mouse.
+The parent observes actual physical mouse/navigation intent once: it hides/retires
+the sheet without altering hardware buttons, and the ordinary mouse/keyboard/pad
+consumers keep their behavior. A fresh touch restores the sheet while consuming
+that contact; the existing consumed controller-return touch restores presentation
+without an extra action or an extra restoration tap. The parent alone reads raw
+TouchInput, applies selector/platform/focus/modal admission and prioritizes barter
+over the underlying conversation. Original hand-built touch picking is filtered
+only for this sheet's owned/retired contacts, never for unrelated menus.
+
+[hypothesis: qualification plan]
+Authored App tests must run the actual MenuInput/apply_input consumer in both
+native-selected and fallback configurations, including both inventories, quantity,
+category, insufficient caps, changed row/trade, cancellation, source handoff and
+no duplicate actions. Source review, compilation, CPU execution and phone/readability
+acceptance are separate evidence; none is implied by this design note.
+
+[design]
+At the command boundary the adapter rechecks current safe insets, UI scale, window
+density/size/focus, full-window camera, device/platform admission, keyboard capture,
+free camera and fresh-menu state. A stale row, quantity session or quote is refused.
+Retired contact IDs are bounded at 32; exceeding that budget abandons proposals and
+captures until an actual neutral touch frame, without clearing hardware input.
+
+[design]
+Touch dispatch also checks the runtime's current top menu and active character
+creator. Barter and its own Quantity publication are admitted; an unrelated script
+modal opened after raw input retires the touch proposal. These checks apply only
+to this touch producer; ordinary keyboard/mouse/controller consumers are unchanged.
+
+[design]
+Accept and quantity controls use a one-shot internal command envelope. The existing
+MenuInput consumer resolves it immediately before its ordinary mutation, checking
+the exact current basket/quote or quantity row and confirmed amount. Earlier queued
+menu commands cannot change what a touch confirmation commits. One typed guard is
+retained; rejected, consumed or canceled tokens do not replay. Ordinary commands
+and their sounds, callbacks and effects retain the existing execution path.
+
+[design]
+The same consumer context check covers selection, staging, scrolling, category and
+Close, so a later modal cannot receive a touch intended for the underlying trade.
+Scroll resolves a fixed Focus/Scroll pair through the original effects body with no
+interleaving. An obsolete token cannot discard a newer live guard; only its matching
+token is consumed, including when an existing row guard drops that command.
+
+
+### Ordinary-menu touch and independent typography
+
+[design] The optional finger route keeps the existing native or hand-built
+buying/selling presentation. Its independent menu size changes the existing
+font metrics, wrapping and row measurement within the same viewport; the painter
+and hit geometry use the same current size. The default 100% retains the prior
+row law. Hand-built rows keep at least their original 51-unit height so markers
+remain inside adjacent rows; an XML row's larger explicit height is retained.
+A changed effective saved size cancels a held proposal, including A-to-B-to-A;
+setting an equivalent quantized value preserves it. Other ordinary prompts keep
+their existing size; the actual barter quantity prompt follows barter size.
+
+The touch adapter compares the actual painted size, interface-unit scale,
+window/camera, insets and live source before the original consumer acts. It does
+not zoom the entire canvas or synthesize a mouse click. Quantity-meter dragging
+uses the composed original Amount consumer and preserves these size/source
+guards, including acknowledged same-geometry repaint. R41 compiled these adapters
+and passed all thirteen ordinary barter/typography controls. Its nine quantity-meter
+cases failed; R42 subsequently passed all nine original cases. R43 passed all
+thirteen, including the adapted context observation distinguished below.
+
+
+## Ordinary touch quantity meter
+
+[design] The ordinary barter prompt's meter supports a held finger, as its
+existing mouse meter does. Start and movement propose only the amount under the
+current painted meter, clamped at its ends even when the owned finger leaves
+its footprint. A separate Confirm still stages the quantity; a separate trade
+Accept still moves inventory/caps. Lists keep their existing browse-only drag.
+
+[design] Every changed sample uses the existing one-shot MenuInput consumer and
+its exact quantity/row/trade/frame/source guards. Only an acknowledged original
+Amount application updates the held contact's expected quantity. Its own
+hand-built redraw may replace the meter entity once at the same geometry;
+unrelated replacements and native tile-ID changes do not inherit the owner.
+Foreign quantity edits and cancel/reopen in one command queue retire the old
+contact. Same-value samples coalesce without dirtying the view. Raw cancellation
+discards an unapplied sample and retains the last applied amount; it does not
+confirm or undo a previously applied meter edit. Secondary fingers cannot press
+Confirm for the owning finger. Hardware, modal, window and settings priority
+retain their existing cancellation/neutral/return behavior.
+
+[design] Continuous native samples are guarded Amount commands, without physical
+input synthesis or PointerState writes. A stationary native End retains its real
+native click pulse only when its endpoint still hits that same meter. A subslop
+End just outside it remains an amount clamp, never a click on a nearby button.
+
+[design] Authored Apps exercise actual hand-built Taffy/fill
+geometry and the existing native QuantityMenu writer/amount text, actual raw
+input and original apply_input, including density/nonunit Bevy UiScale and a
+large-stack short edge crossing. Native prompt XML is authored test data; it does
+not establish full game-file/class lifecycle, GPU pixels or physical-phone acceptance.
+
+[qualification] R41 source `a18b10ae`, actual checkout `54f8997b`, compiled and
+executed all nine meter cases, which failed. Eight native cases reached missing
+drawn-meter geometry in their shared fixture; the physical hand-built control
+applied amount 2, then failed the next drag expectation of 6. The corrected native
+fixture retains a drawn meter parent with its original writer/text identity and a
+full-size hit-testable child. All nine complete case bodies and their effect
+assertions remain. R42 source `e5b00f0b`, actual checkout `56793aa7`, executed
+these corrections and passed all nine original cases. This is a combined-source
+CPU result, without physical-phone or full original-menu acceptance.
+
+[design] Only a hand-built Barter meter participates in physical leaf retention.
+Its original Amount consumer must acknowledge the exact requested change before
+the painter can reuse the already-Pressed leaf across that amount-only redraw.
+The full painted prompt, row/trade/status, font size, window/camera, density,
+interface scale, insets, original Node style and first accepted geometry must
+still agree. Another command, prompt replacement or changed context retires that
+leaf; an equivalent saved size preserves it. The first accepted geometry is kept
+through the held chain rather than reconstructed after each redraw. This creates
+no new raw input reader, PointerState writer, quantity effect or input owner.
+
+[design] Ordinary meters retain their existing PointerState/RelativeCursorPosition
+admission without a retention component. Additional geometry is optional for that
+route and required only by known painted retention. Partial-window fresh clicks
+retain the original consumer without promising retained dragging. Container and
+Inventory meters keep their original route; changing only Barter size cannot
+retire their unchanged source. A separate Confirm and trade Accept still own the
+effects. One retained leaf and its paint snapshot are bounded; no FPS improvement
+or allocation reduction is claimed.
+
+[qualification] Four additional App cases cover competing commands, context and
+geometry retirement with fresh recovery, partial-viewport original clicks, and an
+unrelated Container control. The existing component-only Inventory switching and
+release case is unchanged. R42 executed all thirteen: twelve passed and the new
+context case failed an interactive-hit witness while observing deliberately
+translated, invalidated geometry. The reported right-edge hit was the actual
+neighboring amount-step arrow. The follow-up reads computed geometry for only
+that transient change observation; the four hit witnesses remain at actual meter
+samples and fresh recovery, with all thirteen context causes and later refusal,
+hardware, amount and effect assertions retained. This explicit fixture-observation
+adaptation was unexecuted at that checkpoint. R43 source `1c1b96bb`, actual
+checkout `a53b0978`, subsequently passed all thirteen cases. This is an actual CPU
+result for the combined source; production input and quantity effects are
+unchanged, and physical-phone acceptance remains open.

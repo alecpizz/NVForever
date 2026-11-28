@@ -24,6 +24,10 @@ pub type Lookup = Arc<dyn Fn(&str) -> u8 + Send + Sync>;
 /// The host's reader of a Data path, archives included.
 pub type Reader = Arc<dyn Fn(&str) -> Option<Vec<u8>> + Send + Sync>;
 
+/// The host's loose files under a Data folder (lower case, `\`-separated whole paths): the
+/// files a Mod Organizer 2 merge holds there, which no read root has on disk.
+pub type Lister = Arc<dyn Fn(&str) -> Vec<String> + Send + Sync>;
+
 /// Where the files are: `read` in order (NVForever's layer first, then the game's Data),
 /// `write` the layer, and `lookup` the host's answer for a path in the archives too
 /// (0 none, 1 a loose file, 2 inside an archive).
@@ -35,23 +39,60 @@ pub struct Roots {
     pub write: Option<PathBuf>,
     pub lookup: Option<Lookup>,
     pub reader: Option<Reader>,
+    /// The host's loose files under a folder ([`Lister`]), for the listings.
+    pub list: Option<Lister>,
     /// The archives the host loaded, by file name (IsBSALoaded, `nvse_jg8`).
     pub archives: Vec<String>,
+    /// The read roots from this index on, the game's Data excepted, are folders the host's
+    /// own index already holds (`lookup`, `reader`, `list`): a Mod Organizer 2 merge's mod
+    /// folders. The file questions ask the index for them instead of walking each on disk
+    /// [observed: 1,665 mod folders, FileExists 133 ms a call and the start's Script Runner
+    /// files 80 s, log nvforever-20261125-145542-7604.log]. `None`: walk every root.
+    pub hosted_from: Option<usize>,
+}
+
+impl Roots {
+    /// The read roots to look in on disk, in order: every one, or with a host index
+    /// ([`Roots::hosted_from`]) those before it and the game's Data (the last).
+    pub fn disk_roots(&self) -> Vec<&PathBuf> {
+        match self.hosted_from {
+            Some(i) if self.lookup.is_some() && i < self.read.len() => {
+                let mut v: Vec<&PathBuf> = self.read[..i].iter().collect();
+                v.extend(self.read.last());
+                v
+            }
+            _ => self.read.iter().collect(),
+        }
+    }
+
+    /// The roots to look in for one file on disk: [`Roots::disk_roots`], except for a file
+    /// at Data's top level (no folder in its path). The host's index leaves those out
+    /// (fnv-vfs `index_loose` keeps only keys with a folder), so every read root is looked
+    /// in for it: a plugin or INI that sits only in a mod folder.
+    pub fn disk_roots_for(&self, path: &str) -> Vec<&PathBuf> {
+        if path.contains(['\\', '/']) { self.disk_roots() } else { self.read.iter().collect() }
+    }
+
+    /// Whether some read roots are left to the host's index ([`Roots::disk_roots`]).
+    fn hosted(&self) -> bool {
+        self.disk_roots().len() < self.read.len()
+    }
 }
 
 static ROOTS: Mutex<Option<Roots>> = Mutex::new(None);
 static ROOTS_GEN: AtomicU64 = AtomicU64::new(0);
 
-/// Monotonic revision bumped whenever process-wide file roots change.
-pub(crate) fn roots_generation() -> u64 {
-    ROOTS_GEN.load(Ordering::Relaxed)
+/// Monotonic revision bumped whenever process-wide file roots change (`set_roots` /
+/// `update_roots`).
+pub fn roots_generation() -> u64 {
+    ROOTS_GEN.load(Ordering::Acquire)
 }
 
 /// Set the roots for the games made after this (the engine, `fnvtool --config`).
 pub fn set_roots(r: Roots) {
     if let Ok(mut g) = ROOTS.lock() {
         *g = Some(r);
-        ROOTS_GEN.fetch_add(1, Ordering::Relaxed);
+        ROOTS_GEN.fetch_add(1, Ordering::Release);
     }
 }
 
@@ -60,7 +101,7 @@ pub fn set_roots(r: Roots) {
 pub fn update_roots(f: impl FnOnce(&mut Roots)) {
     if let Ok(mut g) = ROOTS.lock() {
         f(g.get_or_insert_with(Roots::default));
-        ROOTS_GEN.fetch_add(1, Ordering::Relaxed);
+        ROOTS_GEN.fetch_add(1, Ordering::Release);
     }
 }
 
@@ -87,13 +128,23 @@ pub fn nif_has_name(bytes: &[u8], name: &str) -> bool {
 /// Archives are not looked in.
 pub fn data_files(folder: &str) -> Vec<(String, PathBuf)> {
     let mut out: Vec<(String, PathBuf)> = Vec::new();
-    for root in roots().read {
-        let Some(dir) = on_disk_any_case(&root, folder) else { continue };
+    let r = roots();
+    for root in r.disk_roots() {
+        let Some(dir) = on_disk_any_case(root, folder) else { continue };
         let Ok(rd) = std::fs::read_dir(&dir) else { continue };
         for e in rd.flatten() {
             let n = e.file_name().to_string_lossy().to_string();
             if e.path().is_file() && !out.iter().any(|(x, _)| x.eq_ignore_ascii_case(&n)) {
                 out.push((n, e.path()));
+            }
+        }
+    }
+    // The mod folders the host's index holds: its loose files directly in the folder (the
+    // path is the Data path; [`read_data_file`] reads it through the host).
+    if r.hosted() {
+        for name in host_listing(&r, folder) {
+            if !name.contains('\\') && !out.iter().any(|(x, _)| x.eq_ignore_ascii_case(&name)) {
+                out.push((name.clone(), PathBuf::from(format!("{folder}\\{name}"))));
             }
         }
     }
@@ -123,7 +174,7 @@ pub(crate) fn udf_data_path(path: &str) -> Option<String> {
 /// A Data file's bytes: the first read root's loose copy (NVForever's layer before the
 /// game's Data), else through the host (archives included).
 pub fn read_data_file(path: &str) -> Option<Vec<u8>> {
-    roots().read.iter().filter_map(|root| on_disk_any_case(root, path)).find_map(|p| std::fs::read(p).ok()).or_else(|| read_data(path))
+    roots().disk_roots_for(path).into_iter().filter_map(|root| on_disk_any_case(root, path)).find_map(|p| std::fs::read(p).ok()).or_else(|| read_data(path))
 }
 
 /// [`on_disk`], each part of the path matched to what is on disk in any case, as Windows
@@ -159,8 +210,9 @@ pub fn data_dir() -> Option<PathBuf> {
 /// Whether a Data path is a file of the game: in a read root (its parts in any case, as
 /// on Windows; mods spell `Meshes` and `meshes` both) or in an archive.
 pub fn exists(path: &str) -> bool {
+    // (`lookup` is the host's index, a Mod Organizer 2 merge's files included.)
     let r = roots();
-    r.read.iter().any(|root| on_disk(root, path).is_some_and(|p| p.is_file()) || find_file(root, path).is_some()) || r.lookup.as_ref().is_some_and(|f| f(path) > 0)
+    r.lookup.as_ref().is_some_and(|f| f(path) > 0) || r.disk_roots_for(path).into_iter().any(|root| on_disk(root, path).is_some_and(|p| p.is_file()) || find_file(root, path).is_some())
 }
 
 /// Whether the host answers for the archives (the engine, once the game's Data is open):
@@ -264,14 +316,22 @@ pub fn files_under(rel: &str) -> Vec<String> {
 /// (`crate::nvse_unlisted2`).
 pub fn entries_in(rel: &str) -> Vec<String> {
     let (mut seen, mut out) = (std::collections::HashSet::new(), Vec::new());
-    for root in roots().read {
-        let Some(dir) = find_dir(&root, rel) else { continue };
+    let r = roots();
+    for root in r.disk_roots() {
+        let Some(dir) = find_dir(root, rel) else { continue };
         let Ok(rd) = std::fs::read_dir(&dir) else { continue };
         for e in rd.flatten() {
             let name = e.file_name().to_string_lossy().to_string();
             if seen.insert(name.to_ascii_lowercase()) {
                 out.push(name);
             }
+        }
+    }
+    // The host's (a Mod Organizer 2 merge's) files and folders directly in it.
+    for p in host_listing(&r, rel) {
+        let first = p.split('\\').next().unwrap_or(&p).to_string();
+        if seen.insert(first.clone()) {
+            out.push(first);
         }
     }
     out
@@ -321,14 +381,29 @@ fn walk_files(dir: &Path, prefix: &str, deep: bool, open: &mut Vec<PathBuf>, see
 
 fn list_files(rel: &str, deep: bool) -> Vec<String> {
     let (mut seen, mut out) = (std::collections::HashSet::new(), Vec::new());
-    for root in roots().read {
-        if let Some(dir) = find_dir(&root, rel) {
+    let r = roots();
+    for root in r.disk_roots() {
+        if let Some(dir) = find_dir(root, rel) {
             let mut open: Vec<PathBuf> = dir.canonicalize().into_iter().collect();
             walk_files(&dir, "", deep, &mut open, &mut seen, &mut out);
         }
     }
+    // Then the host's own loose files there (a Mod Organizer 2 merge's), after the roots.
+    for name in host_listing(&r, rel) {
+        if (deep || !name.contains('\\')) && seen.insert(name.clone()) {
+            out.push(name);
+        }
+    }
     out.sort_by_key(|n| n.to_ascii_lowercase());
     out
+}
+
+/// The host's loose files under `rel` ([`Roots::list`]), relative to it, lower case.
+fn host_listing(r: &Roots, rel: &str) -> Vec<String> {
+    let Some(list) = &r.list else { return Vec::new() };
+    let pre = norm(rel);
+    let cut = if pre.is_empty() { 0 } else { pre.len() + 1 };
+    list(&pre).into_iter().filter_map(|p| p.get(cut..).map(str::to_string)).filter(|s| !s.is_empty()).collect()
 }
 
 /// A file under `base` by a Data-relative path, each part matched without regard to
@@ -346,9 +421,15 @@ fn find_file(base: &Path, rel: &str) -> Option<PathBuf> {
 }
 
 /// A loose Data file's bytes through the read roots (the first that has it), the path's
-/// parts matched without regard to case.
+/// parts matched without regard to case; else, when the host answers that the path is a
+/// loose file (a Mod Organizer 2 merge's, which no root holds on disk), through its reader.
 pub fn read_loose(rel: &str) -> Option<Vec<u8>> {
-    roots().read.iter().find_map(|root| std::fs::read(find_file(root, rel)?).ok())
+    let r = roots();
+    let host = rel.replace('/', "\\");
+    r.disk_roots_for(rel)
+        .into_iter()
+        .find_map(|root| std::fs::read(find_file(root, rel)?).ok())
+        .or_else(|| (r.lookup.as_ref().is_some_and(|f| f(&host) == 1)).then(|| r.reader.as_ref().and_then(|f| f(&host))).flatten())
 }
 
 /// Strip a leading UTF-8 BOM (either decoded as `\u{feff}` or as three latin-1 chars
@@ -397,7 +478,23 @@ pub fn read_folder_inis_from_roots(roots: &[PathBuf], folder: &str) -> Vec<(Stri
 /// Read all loose `.ini` files directly inside `folder` across the current read roots,
 /// sorted case-insensitively (`A..Z`) by filename.
 pub fn read_data_folder_inis(folder: &str) -> Vec<(String, String)> {
-    read_folder_inis_from_roots(&roots().read, folder)
+    let r = roots();
+    let disk: Vec<PathBuf> = r.disk_roots().into_iter().cloned().collect();
+    let mut out = read_folder_inis_from_roots(&disk, folder);
+    if r.hosted() {
+        // The mod folders the host's index holds, after the disk roots (a name once).
+        let mut seen: std::collections::HashSet<String> = out.iter().map(|(n, _)| n.to_ascii_lowercase()).collect();
+        for name in host_listing(&r, folder) {
+            if name.contains('\\') || !name.ends_with(".ini") || !seen.insert(name.clone()) {
+                continue;
+            }
+            if let Some(bytes) = r.reader.as_ref().and_then(|f| f(&format!("{}\\{name}", norm(folder)))) {
+                out.push((name, strip_bom(latin1(&bytes))));
+            }
+        }
+        out.sort_by_key(|(name, _)| name.to_ascii_lowercase());
+    }
+    out
 }
 
 /// Whether NVForever may write `path`: never inside the game's install or the original
@@ -474,7 +571,11 @@ impl ModFiles {
         by_lower.into_values().collect()
     }
 
-    /// A file's text: this session's write, else NVForever's layer, else the game's Data.
+    /// A file's text: this session's write, else NVForever's layer, else the game's Data,
+    /// else the host's reader: with a Mod Organizer 2 profile merged over Data (`--mo2`)
+    /// a mod's loose `Config` files are in that merge, not in any folder on disk
+    /// [observed: Nuclear Sunset's Immersive Fast Travel Encounters, `Lime/Encounters.ini`
+    /// in its mod's `config\Lime`, read as missing and its start error box shown].
     fn read(&self, rel: &str) -> Option<String> {
         if let Some(t) = self.written.get(&norm(rel)) {
             return Some(t.clone());
@@ -486,7 +587,12 @@ impl ModFiles {
             lower.strip_prefix("config\\").and_then(|_| on_disk(c, &rel["config\\".len()..]))
         });
         on_disk(Path::new(""), &rel)?;
-        config.into_iter().chain(r.read.iter().filter_map(|root| on_disk(root, &rel))).find_map(|p| std::fs::read(p).ok()).map(|b| b.iter().map(|&c| c as char).collect())
+        config
+            .into_iter()
+            .chain(r.disk_roots().into_iter().filter_map(|root| on_disk(root, &rel)))
+            .find_map(|p| std::fs::read(p).ok())
+            .or_else(|| r.reader.as_ref().and_then(|f| f(&rel)))
+            .map(|b| latin1(&b))
     }
 
     /// A file under the game's own folder (JIP's array files): this session's write,
@@ -992,10 +1098,13 @@ fn xval_to_json(g: &Game, v: &XVal, depth: usize) -> serde_json::Value {
     }
 }
 
-/// Put `value` at a JSON Pointer (RFC 6901) in `root`, making the objects on the way
-/// that are missing [hypothesis: the page does not say what a pointer into a missing
-/// part does]; an array index at or past the end (or `-`) appends. False when the path
-/// runs through a value that is neither an object nor an array.
+/// Put `value` at a JSON Pointer (RFC 6901) in `root`. Promotes a `null` root (including
+/// a missing file) into `{}` so single-level pointers such as `"/k"` succeed, while
+/// failing when any intermediate segment is missing rather than auto-creating intermediate
+/// objects [hypothesis: the page does not specify missing-path creation; root-object
+/// creation is retained for missing files / null roots while missing intermediate segments
+/// return false]. An array index at the final segment equal to `len` (or `-`) appends.
+/// False when any intermediate segment is missing or traverses a non-container value.
 fn json_set(root: &mut serde_json::Value, pointer: &str, value: serde_json::Value) -> bool {
     use serde_json::Value as J;
     if pointer.is_empty() {
@@ -1004,32 +1113,35 @@ fn json_set(root: &mut serde_json::Value, pointer: &str, value: serde_json::Valu
     }
     let Some(rest) = pointer.strip_prefix('/') else { return false };
     let parts: Vec<String> = rest.split('/').map(|p| p.replace("~1", "/").replace("~0", "~")).collect();
+    if root.is_null() {
+        *root = J::Object(serde_json::Map::new());
+    }
     let mut cur = root;
     let mut value = Some(value);
     for (i, part) in parts.iter().enumerate() {
         let last = i + 1 == parts.len();
-        if cur.is_null() {
-            *cur = J::Object(serde_json::Map::new());
-        }
         cur = match cur {
             J::Object(m) => {
                 if last {
                     m.insert(part.clone(), value.take().unwrap_or(J::Null));
                     return true;
                 }
-                m.entry(part.clone()).or_insert(J::Null)
+                let Some(next) = m.get_mut(part) else { return false };
+                next
             }
             J::Array(items) => {
                 let at = match part.parse::<usize>() {
-                    Ok(n) => n.min(items.len()),
-                    Err(_) if part == "-" => items.len(),
-                    Err(_) => return false,
+                    Ok(n) if last => n.min(items.len()),
+                    Ok(n) if n < items.len() => n,
+                    Err(_) if last && part == "-" => items.len(),
+                    _ => return false,
                 };
-                if at == items.len() {
-                    items.push(J::Null);
-                }
                 if last {
-                    items[at] = value.take().unwrap_or(J::Null);
+                    if at == items.len() {
+                        items.push(value.take().unwrap_or(J::Null));
+                    } else {
+                        items[at] = value.take().unwrap_or(J::Null);
+                    }
                     return true;
                 }
                 &mut items[at]
@@ -1041,9 +1153,14 @@ fn json_set(root: &mut serde_json::Value, pointer: &str, value: serde_json::Valu
 }
 
 /// A JSON file under the game's folder: with `use_cache`, the cache's copy when present;
-/// otherwise the UTF-8 file parsed fresh (UTF-8 BOM stripped). Every parser mode reads
-/// standard JSON [hypothesis: JAXN (1) and TaoConfig (2) extend it; their extensions are
-/// not read, so such a file fails to parse].
+/// otherwise the UTF-8 file parsed fresh (UTF-8 BOM stripped). All three parser modes
+/// (`0` JSON, `1` JAXN, `2` TaoConfig) read standard JSON [observed: Fallout: New Vegas
+/// 1.4.0.525 + xNVSE 6.4.9 + ShowOffNVSE 184, 2026-11-24, `GSDocMitchellHouse`
+/// (`0x00103DF9`), 10 official base masters, `w4d_38_showoff_perk_stagger_fade`
+/// (`tools/capture/nvse/catalogs/wave4d_extenders.json`, #3679):
+/// `json(42,42,42,0/1,0/1)` (standard JSON across modes 0/1/2, JAXN in modes 0/1,
+/// TaoConfig in modes 0/2); no DLL or source consulted]; JAXN (1) and
+/// TaoConfig (2) syntax extensions are [not built], so such files fail to parse.
 fn json_file(g: &Game, path: &str, use_cache: bool) -> Option<serde_json::Value> {
     if use_cache {
         if let Some(v) = g.mod_files.showoff_json.get(&norm(path)) {
@@ -1434,7 +1551,10 @@ pub(crate) fn call(g: &mut Game, name: &str, args: &[XVal]) -> Option<Result<XVa
         }
         // `toWrite filepath [jsonPointer] [parserMode] [useCache] [saveFile]
         // [compactFormatting]`: the value converted and put at the pointer of the file's
-        // JSON (a file that is missing or not JSON starts from nothing); cached when
+        // JSON (a missing file, malformed non-JSON file, or `null` root starts from `null`
+        // and promotes the root to `{}` for a single-level pointer, while missing
+        // intermediate segments return `0` without creating intermediate objects
+        // [hypothesis]); cached when
         // asked, saved unless saveFile is 0, minified or indented [documented:
         // WriteToJSON]. Saved into NVForever's layer, never the game's folder
         // (`write_root`). 1 when done [documented: "success"].
@@ -1530,8 +1650,13 @@ pub(crate) fn call(g: &mut Game, name: &str, args: &[XVal]) -> Option<Result<XVa
             let p = text(args, 0).unwrap_or_default().replace('/', "\\");
             let folder = num(args, 1, 0.0) != 0.0;
             let r = roots();
-            // In any case, and never outside the root (`find_dir`, `find_file`).
-            let loose = r.read.iter().any(|root| if folder { find_dir(root, &p).is_some() } else { find_file(root, &p).is_some() }) ||(!folder && g.mod_files.written.contains_key(&norm(&p)));
+            // The host's index first (a Mod Organizer 2 merge's mod folders are not walked
+            // on disk, `Roots::disk_roots`); then the disk roots, in any case and never
+            // outside the root (`find_dir`, `find_file`).
+            let hosted = if folder { r.hosted() && !host_listing(&r, &p).is_empty() } else { r.lookup.as_ref().is_some_and(|f| f(&p) == 1) };
+            let loose = hosted
+                || (!folder && g.mod_files.written.contains_key(&norm(&p)))
+                || (if folder { r.disk_roots() } else { r.disk_roots_for(&p) }).into_iter().any(|root| if folder { find_dir(root, &p).is_some() } else { find_file(root, &p).is_some() });
             if loose {
                 XVal::Num(1.0)
             } else if !folder {
@@ -1547,8 +1672,23 @@ pub(crate) fn call(g: &mut Game, name: &str, args: &[XVal]) -> Option<Result<XVa
             let p = text(args, 0).unwrap_or_default().replace('/', "\\");
             let filter = text(args, 1).unwrap_or_else(|| "*".into()).to_ascii_lowercase();
             let mut names: Vec<String> = Vec::new();
-            for root in roots().read {
-                let Some(dir) = find_dir(&root, &p) else { continue };
+            let r = roots();
+            // The folders the host's index holds: names directly in `p` (files) or the first
+            // part of deeper paths (folders), before the disk roots add theirs.
+            if r.hosted() {
+                for rel in host_listing(&r, &p) {
+                    let n = match rel.split_once('\\') {
+                        Some((first, _)) if folders => first.to_string(),
+                        None if !folders => rel,
+                        _ => continue,
+                    };
+                    if glob(&filter, &n) && !names.iter().any(|x| x.eq_ignore_ascii_case(&n)) {
+                        names.push(n);
+                    }
+                }
+            }
+            for root in r.disk_roots() {
+                let Some(dir) = find_dir(root, &p) else { continue };
                 if let Ok(rd) = std::fs::read_dir(dir) {
                     for e in rd.flatten() {
                         if e.path().is_dir() == folders {
@@ -1581,6 +1721,33 @@ fn glob(pat: &str, s: &str) -> bool {
         }
     }
     go(pat.as_bytes(), s.as_bytes())
+}
+
+#[cfg(test)]
+mod hosted_roots_tests {
+    use super::Roots;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    #[test]
+    fn with_a_host_index_only_the_layer_and_data_are_walked_on_disk() {
+        let read: Vec<PathBuf> = ["layer", "modA", "modB", "Data"].iter().map(PathBuf::from).collect();
+        let mut r = Roots { read: read.clone(), hosted_from: Some(1), ..Roots::default() };
+        // No host index: every root is still walked.
+        assert_eq!(r.disk_roots().len(), 4);
+        r.lookup = Some(Arc::new(|_: &str| 0));
+        let disk: Vec<&PathBuf> = r.disk_roots();
+        assert_eq!(disk, vec![&read[0], &read[3]]);
+        assert!(r.hosted());
+        // Without NVForever's layer (no mods folder): Data alone.
+        // A Data top-level file (no folder) is not in the host's index: every root.
+        assert_eq!(r.disk_roots_for("Patch.esp").len(), 4);
+        assert_eq!(r.disk_roots_for("meshes\\a.nif"), vec![&read[0], &read[3]]);
+        r.hosted_from = Some(0);
+        assert_eq!(r.disk_roots(), vec![&read[3]]);
+        r.hosted_from = None;
+        assert!(!r.hosted());
+    }
 }
 
 #[cfg(test)]

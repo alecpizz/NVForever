@@ -213,8 +213,10 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         // then prio.after -1, copyprio, removetextkey, queue then queued.after 0].
         "setaniminterppriority" | "copyanimpriorities" | "removeanimtextkey" | "queuenextanim" | "setanimadditiveinterpsweightmult"
         | "registercustomanimgroup" | "ejectweapon" => XVal::Num(0.0),
-        // 1 for an animation file of the game [observed: knv2.cycletype, destframe;
-        // hypothesis: 0 for none].
+        // 1 for an existing animation file of the game and 0 for a missing file
+        // [observed: knv2.cycletype, destframe; `b3_knv_02_anim_cycle_dest_frame`
+        // (`wave4b_extenders.json`) and `knv_02_set_anim_cycle_dest_missing_file`
+        // (`wave4a_extenders.json`), see docs/spec-notes/ext-unlisted-rest.md §7].
         "setanimcycletype" | "setanimdestframe" => {
             let p = match args.first() {
                 Some(XVal::Str(s)) => s.clone(),
@@ -362,8 +364,37 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
             let _ = crate::nvse::call(g, ctx, "setcontainersound", None, &[XVal::Ref(container), XVal::Num(which), XVal::Ref(sound)]);
             XVal::Num(0.0)
         }
-        // 1 for an actor [observed: rest5.hasactionref.doc; hypothesis: others 0].
-        "hasactionref" => XVal::Num(f64::from(u8::from(subject.is_some_and(|r| crate::ai::is_actor_base(g.world.forms, crate::functions::base_of(g, r).unwrap_or(FormId(0))))))),
+        // Active action/interaction state on the calling reference (0-arg only): 0 for
+        // Player, freshly spawned NPCs before their first AI tick, XMarkerHeading
+        // `0x00104C0D`, and unactivated unscripted non-actor refs; 1 for activated refs
+        // (`ctx.action_ref` / `action_refs`), Doc Mitchell `0x00104C0F` (sitting in
+        // furniture `0x001059B0`), spawned NPCs after 1 AI tick, and front door
+        // `0x00103E61` [observed: Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 + JIP LN
+        // 57.30, 2026-11-24, `GSDocMitchellHouse` (`0x00103DF9`), 10 official base masters,
+        // isolated clean-room staging copy (read-only `PrintToConsole` probe; zero writes
+        // to game install or Saves), `w4c_a03_has_action_ref`,
+        // `w4c_a03c_has_action_ref_doc_real`, `w4c_a03d_has_action_ref_doors_actors`,
+        // `w4c_a03b_has_action_ref_1arg` (`wave4c_extenders.json`, #3679), and
+        // `w4d_02_has_action_ref_triggers` (`tools/capture/nvse/catalogs/wave4d_extenders.json`,
+        // #3802 / PR #3803): `PROBE|w4d_02_has_action_ref_triggers|front(1,1)|doc(1,1)|docMk104C0D(0,0)|unscr(001062AC:0,1,1)|spawn(0,1)|cont(001062C6:0,1,0)`;
+        // zero DLL, PDB, or third-party source consulted].
+        // Generalizing those observations to (a) any non-player actor with an active AI
+        // `current_package` ("active AI package") and (b) any `DOOR` base with an attached
+        // script ("scripted door"), as well as exact clearing rules on container menu close
+        // (`cont(001062C6:0,1,0)`), cell unload, or unprobed reference types, remain
+        // [hypothesis].
+        "hasactionref" => {
+            let has = subject.is_some_and(|r| {
+                (ctx.action_ref.is_some() && ctx.self_ref == Some(r))
+                    || g.action_refs.contains_key(&r)
+                    || g.furniture_use(r).is_some()
+                    || (r != FormId::PLAYER_REF
+                        && g.extra.get(&r).is_some_and(|e| e.current_package.is_some()))
+                    || crate::functions::base_of(g, r)
+                        .is_some_and(|b| g.data.sig(b) == Some(*b"DOOR") && g.data.script_of_base(b).is_some())
+            });
+            XVal::Num(f64::from(u8::from(has)))
+        }
         // [observed: rest5.questtargetschanged 1, toggle.hiteffects 1]
         "getquesttargetschanged" | "togglehiteffects" => XVal::Num(1.0),
         "getobjectiveteleportlinks" => XVal::Array(0),
@@ -377,8 +408,10 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         | "inititemfilter" | "initminimap" | "updateminimap" | "reloadcharcontroller" | "reloadcloudtextures"
         | "resetclouds" | "executescript" | "showlevelupmenuex" | "ccctaskpackageflags" | "gettranslatedpos" | "getworldmapposmults"
         | "transformworldtolocal" => XVal::Num(0.0),
-        // 1 in a game started from the New Game menu until a save is loaded [observed:
-        // rest1.isnewgame 0 in a loaded save; hypothesis: the rest] (§5).
+        // 1 in a fresh New Game session and 0 in a loaded save [observed: rest1.isnewgame 0
+        // in a loaded save; `sup_12_is_new_game` (`wave4a_extenders.json`), see
+        // docs/spec-notes/ext-unlisted-rest.md §5]; clearing from 1 to 0 when a save is
+        // loaded mid-session ("until a save is loaded") remains [hypothesis] (§5).
         "isnewgame" => XVal::Num(f64::from(u8::from(g.other.unlisted2.new_game))),
         _ => return None,
     };

@@ -177,7 +177,7 @@ pub struct Projectile {
     pub rolling: bool,
     restitution: f32,
     roll_keep: f32,
-    roll_damping: f32,
+    roll_friction: f32,
 }
 
 /// Lobbers stop bouncing below this speed, units/s [design].
@@ -248,7 +248,7 @@ impl Projectile {
             rolling: false,
             restitution: t.grenade_restitution,
             roll_keep: t.grenade_roll_keep,
-            roll_damping: t.grenade_roll_damping,
+            roll_friction: t.grenade_roll_friction,
         }
     }
 
@@ -349,10 +349,12 @@ impl Projectile {
         if self.landed {
             return out;
         }
-        // A grenade rolling on the ground loses speed as it rolls [observed: fitted to
-        // the original's frag grenade, o26_gl frag0; combat-rules.md §5].
+        // A grenade rolling on the ground loses the same speed every second until it rests
+        // [observed: fitted to the original's frag grenade, o32_throw; combat-rules.md §5].
         if self.rolling {
-            self.vel = vec::scale(self.vel, (-self.roll_damping * dt).exp());
+            let speed = vec::len(self.vel);
+            let left = (speed - self.roll_friction * dt).max(0.0);
+            self.vel = vec::scale(self.vel, if speed > 1e-6 { left / speed } else { 0.0 });
         }
         // Swept flight.
         let vel = [self.vel[0], self.vel[1], self.vel[2] - self.gravity * dt];

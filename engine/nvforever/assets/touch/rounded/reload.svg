@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Original NVForever geometry; Rounded family. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="currentColor" color="#ffffff" fill-rule="evenodd" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+  <title>Reload</title>
+  <path d="M 25 12 Q 23 5 16 5 C 7 5 3 15 8 22 C 13 28 24 26 27 19 M 20 12 Q 24 14 27 13 L 27 7"/>
+</svg>

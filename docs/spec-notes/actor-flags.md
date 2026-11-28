@@ -69,6 +69,17 @@ prompt says Talk) when it has the flag and a greeting to say. Before, the greeti
 decided ([hypothesis: both]; the CREA page is not in the wiki export). It is read from the
 definition supplying its base data. As before, a hostile creature only shows its name.
 
+A living non-hostile creature shown by name only (`Action::Name`) whose script carries an
+`OnActivate` block still runs that block on E (`script_activate_by_hand`, #3669; e.g.
+`CRBrahminScript` brahmin pushing [documented: GECK wiki PlayIdle uses the Brahmin Push as
+its activation example]). The name-only prompt stays, and the default activation behind
+the block stays "nothing": if the block falls through to plain `Activate` on the living
+creature (e.g. standing or with a weapon out), any resulting `Outcome::Talk` on that
+creature is suppressed so it neither opens a conversation nor posts a "has nothing to say"
+message [design: preserves playtest list 4 item 19 and #3669]. Dead creatures keep
+`Action::Search`, creatures without an `OnActivate` block are unchanged, and hostile
+actors keep #2536's rule.
+
 ## 5. NPC_ NAM6 Height
 
 0 on 2,601 NPCs and 1.0 on 1,124; the rest lie between 0.85 and 1.1. The drawn scale of an
@@ -121,25 +132,34 @@ service-category consumer is `Game::services` for Autocalc Service actors
 (vendor-services.md). Auto-calc stats and Autocalc Service are separate flags; exercising
 the latter does not demonstrate stat recalculation.
 
-An omitted source-call receiver still selects the calling reference. An explicit empty
-or non-form receiver is already refused by `fnv-script::vm::host_function` before the
-host bridge runs: the query reports `setclass called on no reference`. Preserve that
-error and the existing class state; there is no established source-call fallback to
-implicit self at this boundary [documented: NVForever's existing VM admission; native
-refusal behavior remains unobserved].
+[observed: Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 + JIP LN 57.30, 2026-11-24,
+GSDocMitchellHouse (`0x00103DF9`), 10 official base masters, isolated staging copy
+(read-only), committed probe `w4g_05_isactordetected_and_setclass_invalid` in
+`tools/capture/nvse/catalogs/wave4g_f2_extenders.json` (companion catalog PR #3803);
+no DLL or source consulted] `SetClass` on a non-actor door (`rDoor.SetClass rArcade`)
+and on an explicit null receiver (`rNull.SetClass rArcade`) BOTH continue script
+execution safely without mutating any actor (`scDoor=1`, `scNull=1`). Conversely,
+passing a non-`CLAS` form (`rDoc.SetClass rStim`, `0x00015169`) or a null class
+argument (`rDoc.SetClass rNull`, `0`) BOTH abort the script at runtime (`cmp=1`,
+`ok=0`), leaving Doc Mitchell's class unchanged (`00015679`). Verbatim probe output:
+- `PROBE|w4g_05_isactordetected_and_setclass_invalid|invalid(detDoor=1:0,detNull=1:0|scDoor=1,scNonClas=0,docCls=00015679->00015679,scNull=1)`
+- `PROBE|w4g_05_isactordetected_and_setclass_invalid|setclassArg(nonClas:cmp=1,ok=0,cls=00015679->00015679|nullClas:cmp=1,ok=0,cls=00015679)`
 
-A nonzero unknown FormID or a nonactor form reaches the host. SetClass gives 0, changes
-no class override, and the next statement runs [hypothesis: NVForever admission policy;
-native invalid-actor behavior is unprobed]. Actor admission resolves a placed LVLN/LVLC
-using its seed and encounter level without following any template field, then retains
-SetClass's existing base override key and Traits precedence. This avoids rejecting
-valid leveled actors or attaching classes to nonactors. The source VM refusal controls
-and independently reachable nonactor controls are separate, so an earlier empty-ref
-error cannot prevent the nonactor boundary from being exercised. Actual service
-selection, placed NPC/creature, template and JSON restore controls remain in
-`tests/common/set_class_receivers.rs`; these are authored controls, not original-game
-observations. Large numeric source controls use decimal-point literals with source-local
-value readback because integer-only tokens saturate before receiver admission.
+An omitted source-call receiver still selects the calling reference. An explicit null
+or non-form receiver logs `no_reference_call`, returns `0` without falling back to
+implicit `self`, changes no class override, and continues script execution. A non-`CLAS`
+or null class argument returns `VmError::RuntimeAbort` in both strict and default modes,
+aborting the script immediately while leaving class state unchanged. A nonzero unknown
+FormID or nonactor receiver with a valid `CLAS` argument returns `0`, changes no class
+override, and continues [design: non-form numeric receiver and unknown-FormID safety].
+Actor admission resolves a placed LVLN/LVLC using its seed and encounter level without
+following any template field, then retains SetClass's existing base override key and
+Traits precedence. This avoids rejecting valid leveled actors or attaching classes to
+nonactors. Actual service selection, placed NPC/creature, template and JSON restore
+controls remain in `tests/common/set_class_receivers.rs`; these are authored controls,
+not original-game observations. Large numeric source controls use decimal-point literals
+with source-local value readback because integer-only tokens saturate before receiver
+admission.
 
 `tools/capture/actor_state_observers.py` generates read-only snapshots for controlled
 original-game comparisons. The capture protocol is in its help text; no results have

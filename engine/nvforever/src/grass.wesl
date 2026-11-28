@@ -149,10 +149,30 @@ fn vertex(vertex: Vertex) -> VertexOutput {
         }
         out.previous_world_position = vec4(previous_world, 1.0);
     }
-    @if(!PREPASS_PIPELINE && VERTEX_NORMALS) out.world_normal = mesh_functions::mesh_normal_local_to_world(vertex.normal, vertex.instance_index);
+    @if(!PREPASS_PIPELINE && VERTEX_NORMALS) {
+        var wn = mesh_functions::mesh_normal_local_to_world(vertex.normal, vertex.instance_index);
+        // Canopy shading (Physical lighting): the tuft's normal leans with the wind's push.
+        @if(!PREPASS_PIPELINE && NVF_CANOPY && VERTEX_UVS_B) {
+            let bend = saturate(vertex.uv_b.x * grass.wind.w / 60.0) * 0.25;
+            wn = normalize(wn + grass.wind.xyz * bend);
+        }
+        out.world_normal = wn;
+    }
 
     // Opaque: the alpha held the way to the foot.
-    @if(VERTEX_COLORS) out.color = vec4<f32>(vertex.color.rgb * mix(1.0, CHARRED, saturate(burn * 2.0)), 1.0);
+    @if(VERTEX_COLORS) {
+        var vc = vertex.color.rgb * mix(1.0, CHARRED, saturate(burn * 2.0));
+        // Canopy shading: each plant's brightness and hue varied a little by its foot
+        // [design, tuned by eye on #3828's branch].
+        @if(!PREPASS_PIPELINE && NVF_CANOPY) {
+            let h1 = fract(sin(dot(foot.xz, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+            let h2 = fract(sin(dot(foot.xz, vec2<f32>(39.3468, 11.135))) * 24634.6345);
+            let luma_var = mix(0.86, 1.14, h1);
+            let hue_var = mix(vec3<f32>(1.06, 1.01, 0.90), vec3<f32>(0.93, 1.02, 0.96), h2);
+            vc *= hue_var * luma_var;
+        }
+        out.color = vec4<f32>(vc, 1.0);
+    }
     @if(VERTEX_OUTPUT_INSTANCE_INDEX) out.instance_index = vertex.instance_index;
     @if(VISIBILITY_RANGE_DITHER) out.visibility_range_dither = mesh_functions::get_visibility_range_dither_level(
         vertex.instance_index, world_from_local[3]);
@@ -179,12 +199,24 @@ fn fragment(
         discard;
     }
     pbr_input.material.base_color.a = 1.0;
+    // Canopy shading: the dense root darker (occlusion and colour), the tips open.
+    @if(!PREPASS_PIPELINE && NVF_CANOPY) {
+        var tip = 0.5;
+        @if(VERTEX_UVS_B) tip = saturate(max(in.uv_b.x, in.uv_b.y / max(grass.motion.w, 6.0)));
+        let root_ao = mix(0.32, 1.0, pow(tip, 0.65));
+        pbr_input.diffuse_occlusion *= vec3<f32>(root_ao);
+        let root_grounding = mix(0.68, 1.0, smoothstep(0.0, 0.28, tip));
+        pbr_input.material.base_color = vec4<f32>(pbr_input.material.base_color.rgb * root_grounding, pbr_input.material.base_color.a);
+    }
     var out: FragmentOutput;
     // Grass weighs the ambient light and the sun differently from other surfaces
     // (grass.md §5): the two parts of the display-value lighting sum (nvforever lights.rs
     // DISPLAY_HELPERS) are scaled, each by its factor's display value, so that either part
-    // alone is scaled by the factor as light.
-    var lit = nvf_apply_pbr_lighting(pbr_input, pow(max(grass.light.xy, vec2(0.0)), vec2(1.0 / 2.2))).rgb;
+    // alone is scaled by the factor as light. Under Physical lighting the sun keeps its whole
+    // light and the canopy's root shading grounds the tuft instead [design, #3828's branch].
+    @if(NVF_PHYSICAL_PBR) let grass_weights = vec2<f32>(1.0, 1.0);
+    @if(!NVF_PHYSICAL_PBR) let grass_weights = pow(max(grass.light.xy, vec2(0.0)), vec2(1.0 / 2.2));
+    var lit = nvf_apply_pbr_lighting(pbr_input, grass_weights).rgb;
     // Embers while the patch burns, flickering, brighter at the foot [chosen].
     let burn = burn_at(in.world_position.xyz);
     if burn > 0.004 && burn < 0.5 {

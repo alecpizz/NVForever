@@ -47,6 +47,15 @@ fn fixture() -> Fixture {
         b"STAT",
         &record(b"STAT", 0, 0xD10, &[sub(b"EDID", z("OwnNoModel"))]),
     ));
+    bytes.extend(top(
+        b"MISC",
+        &record(
+            b"MISC",
+            0,
+            0xD11,
+            &[sub(b"EDID", z("OwnMiscModel")), sub(b"MODL", z(MODEL))],
+        ),
+    ));
     let plugins = vec![Plugin::parse(&bytes, "OwnedModels.esm".into()).unwrap()];
     let lo = LoadOrder::new(&plugins).unwrap();
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schemas");
@@ -154,5 +163,100 @@ fn a_placed_reference_reads_its_authored_base_model() {
             "ref ownPlaced\nlet ownPlaced := player.PlaceAtMe OwnStaticModel\nSetFunctionValue (ownPlaced.GetModelPath)"
         ),
         XVal::Str(MODEL.into())
+    );
+}
+
+#[test]
+fn tempclone_snapshots_model_path_at_creation_for_stat_and_misc() {
+    let f = fixture();
+    for (edid, pre, post, cl_edit) in [
+        ("OwnStaticModel", "w4g_pre_stat.nif", "w4g_post_stat.nif", "w4g_cl_stat.nif"),
+        ("OwnMiscModel", "w4g_pre_misc.nif", "w4g_post_misc.nif", "w4g_cl_misc.nif"),
+    ] {
+        let mut g = game(&f);
+        assert_eq!(
+            q(&mut g, &format!("SetFunctionValue (GetModelPath {edid})")),
+            XVal::Str(MODEL.into())
+        );
+
+        // Pre-clone edit on the source is inherited by the clone at creation time.
+        q(&mut g, &format!(r#"SetModelPath "{pre}" {edid}"#));
+        let XVal::Ref(cl1) = q(
+            &mut g,
+            &format!("ref c\nlet c := TempCloneForm {edid} 1\nSetFunctionValue c"),
+        ) else {
+            panic!("expected clone for {edid}")
+        };
+        assert_eq!(
+            q(&mut g, &format!("SetFunctionValue (GetModelPath {cl1:#010X})")),
+            XVal::Str(pre.into())
+        );
+
+        // Post-clone edit on the source does NOT bleed into the existing clone.
+        q(&mut g, &format!(r#"SetModelPath "{post}" {edid}"#));
+        assert_eq!(
+            q(&mut g, &format!("SetFunctionValue (GetModelPath {edid})")),
+            XVal::Str(post.into())
+        );
+        assert_eq!(
+            q(&mut g, &format!("SetFunctionValue (GetModelPath {cl1:#010X})")),
+            XVal::Str(pre.into()),
+            "post-clone source edit bled into {edid} clone"
+        );
+
+        // Clone-of-clone inherits parent clone's snapshot and stays isolated from later parent edits.
+        let XVal::Ref(cl2) = q(
+            &mut g,
+            &format!(
+                "ref c1\nref c2\nlet c1 := StringToRef \"{cl1:08X}\"\nlet c2 := TempCloneForm c1 1\nSetFunctionValue c2"
+            ),
+        ) else {
+            panic!("expected clone-of-clone for {edid}")
+        };
+        assert_ne!(cl2, 0, "clone-of-clone must allocate a non-null FormId for {edid}");
+        assert_ne!(cl2, cl1);
+        assert_eq!(
+            q(&mut g, &format!("SetFunctionValue (GetModelPath {cl2:#010X})")),
+            XVal::Str(pre.into())
+        );
+        q(&mut g, &format!(r#"SetModelPath "{cl_edit}" {cl1:#010X}"#));
+        assert_eq!(
+            q(&mut g, &format!("SetFunctionValue (GetModelPath {cl1:#010X})")),
+            XVal::Str(cl_edit.into())
+        );
+        assert_eq!(
+            q(&mut g, &format!("SetFunctionValue (GetModelPath {cl2:#010X})")),
+            XVal::Str(pre.into()),
+            "post-clone parent-clone edit bled into {edid} child clone"
+        );
+        assert_eq!(
+            q(&mut g, &format!("SetFunctionValue (GetModelPath {edid})")),
+            XVal::Str(post.into())
+        );
+    }
+
+    // Cloning an unedited source or model-less source stays isolated when the source is edited later.
+    let mut g = game(&f);
+    let XVal::Ref(unedited_cl) = q(
+        &mut g,
+        "ref c\nlet c := TempCloneForm OwnDoorModel 1\nSetFunctionValue c",
+    ) else {
+        panic!("expected door clone")
+    };
+    let XVal::Ref(empty_cl) = q(
+        &mut g,
+        "ref c\nlet c := TempCloneForm OwnNoModel 1\nSetFunctionValue c",
+    ) else {
+        panic!("expected model-less clone")
+    };
+    q(&mut g, r#"SetModelPath "late_door.nif" OwnDoorModel"#);
+    q(&mut g, r#"SetModelPath "late_empty.nif" OwnNoModel"#);
+    assert_eq!(
+        q(&mut g, &format!("SetFunctionValue (GetModelPath {unedited_cl:#010X})")),
+        XVal::Str(MODEL.into())
+    );
+    assert_eq!(
+        q(&mut g, &format!("SetFunctionValue (GetModelPath {empty_cl:#010X})")),
+        XVal::Str(String::new())
     );
 }

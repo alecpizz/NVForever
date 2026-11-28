@@ -214,11 +214,11 @@
     },
     {
       "op": "note",
-      "text": "L38TimerQuest's 15 s count runs before the cerebral-interface entry is listed."
+      "text": "L38TimerQuest's 15 s count runs before the cerebral-interface entry is listed. (L38TimerQuest's 15 s, counted at the quest delay of 5 s, opens the pod about 20 s after it was unsealed: the wait is 21 s, #4851)"
     },
     {
       "op": "advance_seconds",
-      "seconds": 20
+      "seconds": 21
     },
     {
       "op": "terminal",

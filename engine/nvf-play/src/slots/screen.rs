@@ -5,9 +5,10 @@
 //! (`crate::lockpick::screen`).
 //!
 //! - The information box: 400 × 175, 10 in from the main rectangle's left and bottom, the
-//!   bracket of lines, three rows in font 7 at 20 in, at 35, 80 and 125 down: "Current
-//!   Bet:", "Chips:", "<casino> Earnings:", each value right-aligned 80 short of the box's
-//!   width [documented: `SMM_InfoRect`; hypothesis: the titles, set in code].
+//!   bracket of lines, three rows in font 7 at 20 in, at 35, 80 and 125 down: "Your
+//!   bet:", "Your chips:", "Won at <casino>:", each value right-aligned 80 short of the
+//!   box's width [documented: `SMM_InfoRect`; design, #4495: the titles, set in code, are
+//!   NVForever's own words].
 //! - Six buttons right-aligned 50 from the main rectangle's right, under each other: Spin,
 //!   Increase Bet, Decrease Bet, Payout List, Bet Max, Exit, each with its key
 //!   [documented: the order, `_PCButton_W/E/Q/F/S/R`; hypothesis: the words]; placed as
@@ -16,8 +17,11 @@
 //! - The three reels side by side in the middle, each a window three symbols high, the
 //!   payline across the middle row; the payout list in their place when asked for.
 //! - The help box over all of it the first time (`crate::lockpick::help`).
+//! - While the reels turn on the placed machine in the world ([`super::SlotsReels3d`],
+//!   [design]) the flat reels and the black ground are left out: the world shows behind
+//!   the text and the buttons; the payout list still comes up over it.
 
-use super::{Phase, Session, SlotsInput, SlotsScreen};
+use super::{Phase, Session, SlotsInput, SlotsReels3d, SlotsScreen};
 use crate::interface::{amber, at, u};
 use crate::lockpick::screen::{Ctx, FontKind, Kit};
 use crate::pause::AidTime;
@@ -63,11 +67,12 @@ pub struct SlotsRoot;
 #[derive(Component, Clone)]
 pub struct SlotsButton(pub SlotsInput);
 
-fn view_key(s: &Session, now: f32, view_w: f32) -> String {
-    // While the reels turn, a new picture every sixth of a stop.
-    let reels = s.positions(now).map(|p| (p * 6.0).round() as i64);
+fn view_key(s: &Session, now: f32, view_w: f32, in_world: bool) -> String {
+    // While the reels turn, a new picture every sixth of a stop (none when they turn on
+    // the machine in the world).
+    let reels = if in_world { [0; 3] } else { s.positions(now).map(|p| (p * 6.0).round() as i64) };
     format!(
-        "{}:{}:{}:{:?}:{:?}:{:?}:{}:{}:{view_w:.0}:{:?}",
+        "{}:{}:{}:{:?}:{:?}:{:?}:{}:{}:{view_w:.0}:{:?}:{in_world}:{}",
         s.bet,
         s.chips,
         s.earnings,
@@ -77,6 +82,7 @@ fn view_key(s: &Session, now: f32, view_w: f32) -> String {
         s.help.is_some(),
         s.payouts,
         crate::pad::labels(),
+        s.held(now),
     )
 }
 
@@ -96,10 +102,12 @@ pub fn draw(
     roots: Query<Entity, With<SlotsRoot>>,
     time: AidTime,
     (mut kit, mut shown): (Local<Option<Kit>>, Local<Option<String>>),
+    reels3d: Option<Res<SlotsReels3d>>,
 ) {
     let view_w = view_width(window.single().ok());
     let now = time.elapsed_secs();
-    let key = screen.0.as_ref().map(|s| view_key(s, now, view_w));
+    let in_world = reels3d.is_some_and(|r| r.0);
+    let key = screen.0.as_ref().map(|s| view_key(s, now, view_w, in_world));
     if key == *shown {
         return;
     }
@@ -111,53 +119,62 @@ pub fn draw(
     let bc = crate::interface::bc_supported(formats.as_deref());
     let kit = kit.get_or_insert_with(|| Kit::load(data.as_deref(), &mut images, bc));
     let mut c = Ctx { kit, data: data.as_deref(), images: &mut images, bc, glyphs: &glyphs };
-    spawn(&mut commands, &mut c, s, now, view_w);
+    spawn(&mut commands, &mut c, s, now, view_w, in_world);
 }
 
 fn picture(s: &Session, symbol: u8) -> &str {
     s.symbols.get(symbol as usize).map_or("", |p| p.as_str())
 }
 
-fn spawn(commands: &mut Commands, c: &mut Ctx, s: &Session, now: f32, view_w: f32) {
+fn spawn(commands: &mut Commands, c: &mut Ctx, s: &Session, now: f32, view_w: f32, in_world: bool) {
     let bright = amber(255.0);
     let dim = amber(DIM);
     let light = if s.help.is_some() { UNDER_HELP } else { 1.0 };
     let full = Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() };
+    let ground = if in_world { Color::NONE } else { Color::BLACK };
     // The menu at the UI scale, in the middle of the view (`crate::interface::menu_frame`, #1631).
-    commands.spawn((SlotsRoot, full.clone(), GlobalZIndex(106), BackgroundColor(Color::BLACK))).with_children(|r| crate::interface::in_menu_frame(r, crate::interface::MIDDLE, |r| {
+    commands.spawn((SlotsRoot, full.clone(), GlobalZIndex(106), BackgroundColor(ground))).with_children(|r| crate::interface::in_menu_frame(r, crate::interface::MIDDLE, |r| {
         // The payout list takes the reels' place while it shows.
         if s.payouts {
             payouts(r, c, s, view_w);
-        } else {
+        } else if !in_world {
             reels(r, c, s, now, view_w, light);
         }
         let main = Node { position_type: PositionType::Absolute, left: u(EDGE), right: u(EDGE), top: u(EDGE), bottom: u(EDGE), ..default() };
         r.spawn(main).with_children(|m| {
-            let info = Node { position_type: PositionType::Absolute, left: u(INFO_IN), bottom: u(INFO_IN), width: u(INFO.x), height: u(INFO.y), ..default() };
+            let rows = [(tr("Your bet:").to_string(), s.bet.to_string()), (tr("Your chips:").into(), s.chips.to_string()), (trf("Won at {casino}:", &[("casino", &s.casino_name)]), s.earnings.to_string())];
+            let widths: Vec<(f32, f32)> = rows.iter().map(|(t, v)| (c.text_width(FontKind::Menu, t), c.text_width(FontKind::Menu, v))).collect();
+            let (column, info_w) = crate::casino_hud::info_fit(INFO.x, ROW_X, VALUE_X, 16.0, &widths);
+            let info = Node { position_type: PositionType::Absolute, left: u(INFO_IN), bottom: u(INFO_IN), width: u(info_w), height: u(INFO.y), ..default() };
             m.spawn(info).with_children(|b| {
+                crate::casino_hud::glass(b, ROW_X, ROWS_Y[0], info_w - ROW_X * 2.0, ROWS_Y[2] - ROWS_Y[0] + 30.0);
                 c.image(b, "interface\\shared\\line\\fade_to_top.dds", at(0.0, 0.0, THICK, FADE), bright);
                 c.image(b, "interface\\shared\\line\\solid.dds", at(0.0, FADE - THICK, THICK, INFO.y - FADE), bright);
-                c.image(b, "interface\\shared\\line\\solid.dds", at(0.0, INFO.y - THICK, INFO.x - FADE, THICK), bright);
-                c.image(b, "interface\\shared\\line\\fade_to_right.dds", at(INFO.x - FADE - THICK, INFO.y - THICK, FADE, THICK), bright);
-                let rows = [(tr("Current Bet:").to_string(), s.bet.to_string()), (tr("Chips:").into(), s.chips.to_string()), (trf("{casino} Earnings:", &[("casino", &s.casino_name)]), s.earnings.to_string())];
+                c.image(b, "interface\\shared\\line\\solid.dds", at(0.0, INFO.y - THICK, info_w - FADE, THICK), bright);
+                c.image(b, "interface\\shared\\line\\fade_to_right.dds", at(info_w - FADE - THICK, INFO.y - THICK, FADE, THICK), bright);
                 for ((title, value), y) in rows.iter().zip(ROWS_Y) {
                     c.text_in(b, FontKind::Menu, title, ROW_X, y, false, bright);
-                    c.text_in(b, FontKind::Menu, value, VALUE_X, y, true, bright);
+                    c.text_in(b, FontKind::Menu, value, column, y, true, bright);
                 }
             });
             let betting = s.betting();
             let top = s.limits.top(s.chips);
             let h = |k: KeyCode| crate::pad::hint(&[k], crate::pad::at_menu(fnv_game::slots::MENU_CODE));
             let buttons = [
-                (tr("Spin"), h(KeyCode::KeyW), SlotsInput::Spin, betting && s.chips >= s.bet && s.chips > 0),
+                // Greyed while a win's sequence holds the next spin.
+                (tr("Spin"), h(KeyCode::KeyW), SlotsInput::Spin, betting && !s.held(now) && s.chips >= s.bet && s.chips > 0),
                 (tr("Increase Bet"), h(KeyCode::KeyE), SlotsInput::Increase, betting && s.bet < top),
                 (tr("Decrease Bet"), h(KeyCode::KeyQ), SlotsInput::Decrease, betting && s.bet > s.limits.min_bet),
                 (tr("Payout List"), h(KeyCode::KeyF), SlotsInput::Payouts, betting),
                 (tr("Bet Max"), h(KeyCode::KeyS), SlotsInput::Max, betting && s.bet < top),
-                (tr("Exit"), h(KeyCode::KeyR), SlotsInput::Exit, betting),
+                (tr("Exit"), h(KeyCode::KeyR), SlotsInput::Exit, (betting || matches!(s.phase, super::Phase::Paid { .. }))),
             ];
             let column = Node { position_type: PositionType::Absolute, right: u(BUTTONS_RIGHT), top: u(BUTTONS_TOP), width: u(0.0), height: u(6.0 * BUTTON_H), ..default() };
             m.spawn(column).with_children(|b| {
+                let (lw, hw) = buttons.iter().fold((0.0f32, 0.0f32), |(l, h), (label, hint, _, _)| (l.max(c.text_width(FontKind::Menu, label)), h.max(c.text_width(FontKind::Menu, hint))));
+                if !buttons.is_empty() {
+                    crate::casino_hud::glass(b, -lw, 4.0, lw + HINT_GAP + hw, buttons.len() as f32 * BUTTON_H - 8.0);
+                }
                 for (i, (label, hint, cmd, on)) in buttons.into_iter().enumerate() {
                     let color = if on { bright } else { dim };
                     let y = i as f32 * BUTTON_H;
@@ -171,6 +188,8 @@ fn spawn(commands: &mut Commands, c: &mut Ctx, s: &Session, now: f32, view_w: f3
             if let Some(line) = &s.status {
                 let status = Node { position_type: PositionType::Absolute, right: u(BUTTONS_RIGHT), top: u(STATUS_TOP), width: u(0.0), height: u(40.0), ..default() };
                 m.spawn(status).with_children(|b| {
+                    let w = c.text_width(FontKind::Menu, line);
+                    crate::casino_hud::glass(b, -w, 4.0, w, 30.0);
                     c.text_in(b, FontKind::Menu, line, 0.0, 0.0, true, bright);
                 });
             }

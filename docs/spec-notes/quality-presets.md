@@ -155,14 +155,19 @@ offered only when that file was read. The two rows it changes are the original's
 and the two that cost a Steam Deck's GPU most besides multisampling.
 
 [design] **A Steam Deck's first start** (`quality::deck_first_start`): with no
-settings in `NVForever.ini` yet (no `[Settings]` heading: the first start and `fnvtool setup`
-write the game folder's `[Game] Path=` before any setting) and the machine a Deck (Linux DMI `sys_vendor` and `board_vendor` both
-`Valve`; test aid `NVF_PLAY_TEST_STEAM_DECK=1|0` decides instead; `first` also treats the start as a first start, for smoke homes that keep their INI), the start takes Steam Deck
+`NVForever.ini` yet, or one marked `[Game] FirstStart=1` (`fnv_install::FIRST_START_KEY`:
+whatever makes a new INI writes it, the first start, `fnvtool setup` and the launcher;
+every start clears it to `0`, on any machine), and the machine a Deck (Linux DMI
+`sys_vendor` and `board_vendor` both `Valve`; test aid `NVF_PLAY_TEST_STEAM_DECK=1|0`
+decides instead; `first` also treats the start as a first start, for smoke homes that keep
+their INI), the start takes Steam Deck
 and Anti-aliasing SMAA as picks on the page would, so the INI keeps them and later starts
 are the player's. It runs after the INI is read and before the run's smooth terrain is
 fixed, so the first run already draws without it. A command line that names a row the
 preset sets leaves the preset untaken, and an anti-aliasing switch keeps its value. Other
-machines and later starts are unchanged. Windows on a Deck is not recognised.
+machines and later starts are unchanged. An INI made before the mark is a player's who has
+started the game, even with no settings in it, so an update changes none of their rows.
+Windows on a Deck is not recognised.
 
 [observed] Steam Deck LCD, SteamOS, Mesa RADV, 1280x800, uncapped, SMAA, frames a second
 in the steady windows: Goodsprings 12:00 59.3 with High's rows, 67.6 with Steam Deck;

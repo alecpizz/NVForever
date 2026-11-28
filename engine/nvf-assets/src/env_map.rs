@@ -46,7 +46,12 @@
 //!   `NVF_PLAY_DEBUG_ENV_AXES_WINDOW=<orientation>` (window shapes): `base` (the lookup of
 //!   #2669: the Bevy-space reflection (x, y, z) read as (x, y, −z)), `flip-x`, `flip-y`,
 //!   `flip-z` (that direction with one axis negated) or `swap-yz` (its y and z swapped).
-//!   Default `base` for both.
+//!   Defaults: `swap-yz` without the window flag (the game-space reflection read as it is,
+//!   #4392), `base` for windows.
+//! - `NVF_PLAY_DEBUG_ENV_NORMAL=vertex|mapped` (shapes without the window flag) and
+//!   `NVF_PLAY_DEBUG_ENV_NORMAL_WINDOW=…` (window shapes): the reflection is taken at the
+//!   shape's interpolated normal or at the normal-mapped one. Defaults `vertex` (#4392) and
+//!   `mapped` (#2669's lookup).
 //! - `NVF_PLAY_DEBUG_ENV_BLEND=weighted|premultiplied` (shapes without the window flag)
 //!   and `NVF_PLAY_DEBUG_ENV_BLEND_WINDOW=weighted|premultiplied` (window shapes): a
 //!   blended reflecting shape keeps its blend, so the reflection is weighted by its alpha
@@ -153,7 +158,18 @@ pub enum Axes {
     FlipX = 1,
     FlipY = 2,
     FlipZ = 3,
+    /// The game-space direction (x, y, z) as it is: Bevy's (x, y, z) read as (x, −z, y)
+    /// [hypothesis for shapes without the window flag, #4392; nif.md §6].
     SwapYZ = 4,
+}
+
+/// The normal the view is reflected at (`NVF_PLAY_DEBUG_ENV_NORMAL`, `_NORMAL_WINDOW`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnvNormal {
+    /// The interpolated vertex normal [hypothesis for shapes without the window flag, #4392].
+    Vertex,
+    /// The normal-mapped one (#2669).
+    Mapped,
 }
 
 /// How a blended reflecting shape is drawn (`NVF_PLAY_DEBUG_ENV_BLEND`, `_BLEND_WINDOW`).
@@ -186,6 +202,8 @@ pub struct EnvAids {
     pub no_mask: NoMask,
     pub axes: Axes,
     pub axes_window: Axes,
+    pub normal: EnvNormal,
+    pub normal_window: EnvNormal,
     pub blend: EnvBlend,
     pub blend_window: EnvBlend,
     pub light: EnvLight,
@@ -199,8 +217,10 @@ impl Default for EnvAids {
             non_window: true,
             strength: 1.0,
             no_mask: NoMask::Full,
-            axes: Axes::Base,
+            axes: Axes::SwapYZ,
             axes_window: Axes::Base,
+            normal: EnvNormal::Vertex,
+            normal_window: EnvNormal::Mapped,
             blend: EnvBlend::Weighted,
             blend_window: EnvBlend::Premultiplied,
             light: EnvLight::Scene,
@@ -211,12 +231,14 @@ impl Default for EnvAids {
 }
 
 /// The names of the debug switches, in the order the module docs give them.
-pub const ENV_SWITCHES: [&str; 10] = [
+pub const ENV_SWITCHES: [&str; 12] = [
     "NVF_PLAY_DEBUG_ENV_NON_WINDOW",
     "NVF_PLAY_DEBUG_ENV_STRENGTH",
     "NVF_PLAY_DEBUG_ENV_NO_MASK",
     "NVF_PLAY_DEBUG_ENV_AXES",
     "NVF_PLAY_DEBUG_ENV_AXES_WINDOW",
+    "NVF_PLAY_DEBUG_ENV_NORMAL",
+    "NVF_PLAY_DEBUG_ENV_NORMAL_WINDOW",
     "NVF_PLAY_DEBUG_ENV_BLEND",
     "NVF_PLAY_DEBUG_ENV_BLEND_WINDOW",
     "NVF_PLAY_DEBUG_ENV_LIGHT",
@@ -228,6 +250,14 @@ fn on_off(v: &str) -> Option<bool> {
     match v {
         "1" | "on" | "true" | "yes" => Some(true),
         "0" | "off" | "false" | "no" => Some(false),
+        _ => None,
+    }
+}
+
+fn normal(v: &str) -> Option<EnvNormal> {
+    match v {
+        "vertex" => Some(EnvNormal::Vertex),
+        "mapped" => Some(EnvNormal::Mapped),
         _ => None,
     }
 }
@@ -304,6 +334,8 @@ impl EnvAids {
                 "NVF_PLAY_DEBUG_ENV_NO_MASK" => put(&mut aids.no_mask, no_mask(v)),
                 "NVF_PLAY_DEBUG_ENV_AXES" => put(&mut aids.axes, axes(v)),
                 "NVF_PLAY_DEBUG_ENV_AXES_WINDOW" => put(&mut aids.axes_window, axes(v)),
+                "NVF_PLAY_DEBUG_ENV_NORMAL" => put(&mut aids.normal, normal(v)),
+                "NVF_PLAY_DEBUG_ENV_NORMAL_WINDOW" => put(&mut aids.normal_window, normal(v)),
                 "NVF_PLAY_DEBUG_ENV_BLEND" => put(&mut aids.blend, blend(v)),
                 "NVF_PLAY_DEBUG_ENV_BLEND_WINDOW" => put(&mut aids.blend_window, blend(v)),
                 "NVF_PLAY_DEBUG_ENV_LIGHT" => put(&mut aids.light, light(v)),
@@ -321,6 +353,11 @@ impl EnvAids {
     /// The cube orientation for a window shape or another.
     pub fn axes_for(&self, window: bool) -> Axes {
         if window { self.axes_window } else { self.axes }
+    }
+
+    /// The normal a window shape's reflection, or another's, is taken at.
+    pub fn normal_for(&self, window: bool) -> EnvNormal {
+        if window { self.normal_window } else { self.normal }
     }
 
     /// What scales the reflection of a window shape or another.
@@ -382,8 +419,9 @@ pub(crate) fn env_alpha_mode(alpha_mode: AlphaMode, window: Option<bool>, aids: 
 /// - env: x the scale × the strength switch, y the [`MaskMode`], z and w the distances
 ///   of the fade ([`ENV_MAP_LOD1`], [`ENV_MAP_LOD2`]; both 0: no fade);
 /// - env_how: x the [`Axes`] code, y what scales the reflection (0 nothing, 1 the
-///   fragment's received light, 2 the scene light), z 1 for a window shape, w 1 on every
-///   reflecting shape (the shader premultiplies a Premultiplied one by it, even where the
+///   fragment's received light, 2 the scene light), z 1 for a window shape, w 1 on a
+///   reflecting shape read at the shading normal, 2 on one read at the vertex normal ([`EnvNormal`];
+///   the shader premultiplies a Premultiplied one by it, even where the
 ///   reflection has faded out or its strength is 0).
 pub(crate) fn env_uniforms(env: &ShapeEnv, mask: MaskMode, aids: &EnvAids) -> (Vec4, Vec4) {
     let (start, end) = if aids.distance_fade { (ENV_MAP_LOD1, ENV_MAP_LOD2) } else { (0.0, 0.0) };
@@ -396,7 +434,7 @@ pub(crate) fn env_uniforms(env: &ShapeEnv, mask: MaskMode, aids: &EnvAids) -> (V
     };
     (
         Vec4::new(env.scale * aids.strength, mask as u8 as f32, start, end),
-        Vec4::new(aids.axes_for(env.window) as u8 as f32, light, if env.window { 1.0 } else { 0.0 }, 1.0),
+        Vec4::new(aids.axes_for(env.window) as u8 as f32, light, if env.window { 1.0 } else { 0.0 }, if aids.normal_for(env.window) == EnvNormal::Vertex { 2.0 } else { 1.0 }),
     )
 }
 
@@ -433,6 +471,25 @@ pub fn scene_light(ambient: Vec3, ambient_alpha: f32, directional: &[Vec3], expo
     }
     let sum = directional.iter().fold(ambient * exposure, |s, &d| s + d * (exposure / std::f32::consts::PI));
     sum.clamp(Vec3::ZERO, Vec3::ONE)
+}
+
+/// The direction the cube is read in, in Bevy's axes as sent to the sampler; the CPU mirror of
+/// nif_material.wesl's `env_lookup`: `v` towards the viewer, `shading` the normal-mapped normal,
+/// `interpolated` the vertex one, `axes` and `mark` as in `NifSurface::env_how` x and w.
+pub fn lookup(v: Vec3, shading: Vec3, interpolated: Vec3, axes: f32, mark: f32) -> Vec3 {
+    let n = match mark > 1.5 {
+        true if interpolated.length_squared() > 1e-12 => interpolated / interpolated.length(),
+        true => v,
+        false => shading,
+    };
+    let r = -v - 2.0 * n.dot(-v) * n;
+    match axes {
+        a if a > 3.5 => Vec3::new(r.x, -r.z, r.y),
+        a if a > 2.5 => r,
+        a if a > 1.5 => Vec3::new(r.x, -r.y, -r.z),
+        a if a > 0.5 => Vec3::new(-r.x, r.y, -r.z),
+        _ => Vec3::new(r.x, r.y, -r.z),
+    }
 }
 
 /// How a shape without the window flag is drawn with its environment map, for the
@@ -483,8 +540,10 @@ mod tests {
             ("NVF_PLAY_DEBUG_ENV_NON_WINDOW", "0"),
             ("NVF_PLAY_DEBUG_ENV_STRENGTH", "0.5"),
             ("NVF_PLAY_DEBUG_ENV_NO_MASK", "normal-alpha"),
-            ("NVF_PLAY_DEBUG_ENV_AXES", "swap-yz"),
+            ("NVF_PLAY_DEBUG_ENV_AXES", "flip-y"),
             ("NVF_PLAY_DEBUG_ENV_AXES_WINDOW", "flip-z"),
+            ("NVF_PLAY_DEBUG_ENV_NORMAL", "mapped"),
+            ("NVF_PLAY_DEBUG_ENV_NORMAL_WINDOW", "vertex"),
             ("NVF_PLAY_DEBUG_ENV_BLEND", "premultiplied"),
             ("NVF_PLAY_DEBUG_ENV_BLEND_WINDOW", "weighted"),
             ("NVF_PLAY_DEBUG_ENV_LIGHT", "fade-flag"),
@@ -498,8 +557,10 @@ mod tests {
                 non_window: false,
                 strength: 0.5,
                 no_mask: NoMask::NormalAlpha,
-                axes: Axes::SwapYZ,
+                axes: Axes::FlipY,
                 axes_window: Axes::FlipZ,
+                normal: EnvNormal::Mapped,
+                normal_window: EnvNormal::Vertex,
                 blend: EnvBlend::Premultiplied,
                 blend_window: EnvBlend::Weighted,
                 light: EnvLight::FadeFlag,
@@ -627,11 +688,11 @@ mod tests {
         assert_eq!(how, Vec4::new(0.0, 0.0, 1.0, 1.0));
         let (e, how) = env_uniforms(&env(false, true), MaskMode::Full, &d);
         assert_eq!(e, Vec4::new(1.2, 0.0, 0.0, 0.0));
-        assert_eq!(how, Vec4::new(0.0, 2.0, 0.0, 1.0), "scaled by the scene light by default");
-        let a = EnvAids { strength: 2.0, axes: Axes::SwapYZ, light: EnvLight::FadeFlag, distance_fade: true, ..d };
+        assert_eq!(how, Vec4::new(4.0, 2.0, 0.0, 2.0), "game axes, the vertex normal, scaled by the scene light by default");
+        let a = EnvAids { strength: 2.0, axes: Axes::FlipX, normal: EnvNormal::Mapped, light: EnvLight::FadeFlag, distance_fade: true, ..d };
         let (e, how) = env_uniforms(&env(false, true), MaskMode::NormalAlpha, &a);
         assert_eq!(e, Vec4::new(2.4, 2.0, ENV_MAP_LOD1, ENV_MAP_LOD2), "the switch turns the fade on");
-        assert_eq!(how, Vec4::new(4.0, 1.0, 0.0, 1.0));
+        assert_eq!(how, Vec4::new(1.0, 1.0, 0.0, 1.0));
         let (_, how) = env_uniforms(&env(true, true), MaskMode::Full, &a);
         assert_eq!(how, Vec4::new(0.0, 0.0, 1.0, 1.0), "the window orientation and no light: LIGHT names the other set");
         let (e, how) = env_uniforms(&env(true, false), MaskMode::Full, &EnvAids { strength: 0.0, ..d });
@@ -641,6 +702,42 @@ mod tests {
         let lit_windows = EnvAids { light_window: EnvLight::Scene, light: EnvLight::Off, ..d };
         assert_eq!(env_uniforms(&env(true, false), MaskMode::Full, &lit_windows).1.y, 2.0);
         assert_eq!(env_uniforms(&env(false, false), MaskMode::Full, &lit_windows).1.y, 0.0);
+    }
+
+    /// The default lookups (#4392): another shape reads the cube at the interpolated normal in
+    /// the game's axes, a window at the shading normal in #2669's. Each half alone gives a third
+    /// direction, so undoing either fails. The shader's function is the mirror's, line by line.
+    #[test]
+    fn the_lookup_takes_the_vertex_normal_and_the_game_axes() {
+        let d = EnvAids::default();
+        // Seen from above a floor whose normal map tilts it by 45 degrees.
+        let (v, vertex, shading) = (Vec3::Y, Vec3::Y, Vec3::new(0.0, 1.0, 1.0).normalize());
+        let at = |window: bool, aids: &EnvAids| {
+            let (_, how) = env_uniforms(&env(window, false), MaskMode::Full, aids);
+            lookup(v, shading, vertex, how.x, how.w)
+        };
+        let near = |a: Vec3, b: Vec3| assert!((a - b).length() < 1e-5, "{a} is not {b}");
+        near(at(false, &d), Vec3::Z);
+        near(at(true, &d), Vec3::NEG_Z);
+        near(at(false, &EnvAids { axes: Axes::Base, ..d }), Vec3::Y);
+        near(at(false, &EnvAids { normal: EnvNormal::Mapped, ..d }), Vec3::NEG_Y);
+        // The game-space direction as it is: Bevy's (x, y, z) is the game's (x, -z, y).
+        let r = Vec3::new(0.6, 0.0, 0.8);
+        near(lookup(r, r, r, 4.0, 2.0), Vec3::new(0.6, -0.8, 0.0));
+        // Either side of the normal; a normal of no length is not sampled as NaN.
+        near(lookup(v, shading, -vertex, 4.0, 2.0), lookup(v, shading, vertex, 4.0, 2.0));
+        assert!(lookup(v, shading, Vec3::ZERO, 4.0, 2.0).is_finite());
+        let shader = include_str!("nif_material.wesl").replace("\r\n", "\n");
+        for line in [
+            "let dir = env_lookup(pbr_input.V, pbr_input.N, pbr_input.world_normal, surface.env_how.x, surface.env_how.w);",
+            "    var n = shading;\n    if mark > 1.5 {",
+            "n = select(v, interpolated * inverseSqrt(max(squared, 1e-12)), squared > 1e-12);",
+            "let r = reflect(-v, n);",
+            "if axes > 3.5 {\n        return vec3(r.x, -r.z, r.y);",
+            "    return vec3(r.x, r.y, -r.z);\n}",
+        ] {
+            assert_eq!(shader.matches(line).count(), 1, "the shader's lookup: {line}");
+        }
     }
 
     /// The log line's words for a shape without the window flag.

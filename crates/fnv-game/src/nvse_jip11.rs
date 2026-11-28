@@ -230,7 +230,7 @@ impl Game<'_> {
 
     /// The record indices of a magic item's effects RemoveNthEffect left, in order.
     pub fn effect_indices(&self, item: FormId) -> Vec<usize> {
-        let n = self.data.effect_items.get(&item).map_or(0, Vec::len);
+        let n = self.data.effect_items.get(&self.unclone(item)).map_or(0, Vec::len);
         let gone = self.other.jip11.removed_effects.get(&item);
         (0..n).filter(|i| !gone.is_some_and(|g| g.contains(i))).collect()
     }
@@ -336,8 +336,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
         }
         // ---- packages ----
         // Stuck: a package the actor could not reach is set aside now
-        // (`Game::block_package`) [hypothesis: NVForever's form of "unable to find a
-        // path"].
+        // (`Game::block_package`; see docs/spec-notes/jip-actors-11.md §1).
         "gettargetunreachable" => {
             let now = g.world.calendar().map(|c| c.days_passed).unwrap_or(0.0);
             yes(subject.and_then(|r| g.extra.get(&r)).is_some_and(|e| e.package_blocked.values().any(|&u| u > now)))
@@ -386,7 +385,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
             reff(b.filter(|&b| matches!(g.data.sig(b).as_ref(), Some(b"LVLN" | b"LVLC"))))
         }
         // The light at the actor as the last detection round measured it, 0-100
-        // [documented: the range]; 0 for an actor not measured [hypothesis].
+        // [documented: the range]; 0 for an actor not measured (see docs/spec-notes/jip-actors-11.md §2).
         "getactorlightamount" => XVal::Num(subject.and_then(|r| g.other.jip11.light.get(&r).copied()).unwrap_or(0.0)),
         // The movement flags [documented: the bit table]. Jumping, flying, falling and
         // sliding are not known game-side: 0 [decision: spec note §6].
@@ -428,8 +427,8 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
             };
             reff(e)
         }
-        // `effect [baseForm]`: an object effect or actor effect [hypothesis: anything
-        // else refused]; 1 when set [documented].
+        // `effect [baseForm]`: an object effect or actor effect (anything else refused;
+        // see docs/spec-notes/jip-actors-11.md §2); 1 when set [documented].
         "setactorunarmedeffect" => {
             let Some(e) = form(args, 0).filter(|&e| matches!(g.data.sig(e).as_ref(), Some(b"ENCH" | b"SPEL"))) else { return Some(Ok(zero)) };
             let Some(b) = form(args, 1).or_else(|| subject.and_then(|r| crate::functions::base_of(g, r))) else { return Some(Ok(zero)) };
@@ -441,13 +440,18 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
             XVal::Num(1.0)
         }
         // `x y z [local]`: the velocity on the world axes, or the actor's own (x right,
-        // y forward) [documented]; the actor is followed from now on, as GetActorVelocity
-        // follows it, so the first call reads 0 [hypothesis].
+        // y forward) [documented; observed: Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 +
+        // JIP LN 57.30, 2026-11-24, `w6_t1_05_velocities_jip`
+        // (`tools/capture/nvse/catalogs/wave6_t1_jip_velocities.json`, `jip-actors-11.md`
+        // §2): `act0=1(0.0,0.0,0.0)|act1=1(0.0,0.0,0.0)`]; the actor is followed from now
+        // on, as GetActorVelocity follows it, so the first call reads 0 (see docs/spec-notes/jip-actors-11.md §2).
+        // Note: `Vm::out_call` strips output params `[0, 1, 2]` before dispatch, so
+        // optional `getLocal` arrives at `args[0]`.
         "getactorvelocityalt" => {
             let a = subject.unwrap_or(FormId::PLAYER_REF);
             let Some((here, rot)) = g.ref_pos_rot(a) else { return Some(Ok(XVal::Num(0.0))) };
             let v = g.jip2.velocity.entry(a).or_insert((here, [0.0; 3])).1;
-            let local = num(args, 3).is_some_and(|x| x != 0.0);
+            let local = num(args, 0).is_some_and(|x| x != 0.0);
             let out = if local {
                 let (s, c) = (f64::from(rot[2]).sin(), f64::from(rot[2]).cos());
                 let (x, y) = (f64::from(v[0]), f64::from(v[1]));
@@ -579,7 +583,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
             let slots = |g: &Game, f: FormId| field_num(g, f, "BMDT", "biped_flags").map_or(0, |x| x as u64);
             let want = slots(g, a);
             let on = g.world.equipment(r).unwrap_or_default();
-            yes(want != 0 && on.into_iter().filter(|&i| i != a && g.is_armo(i)).any(|i| slots(g, i) & want != 0))
+            yes(want != 0 && on.into_iter().filter(|&i| g.is_armo(i)).any(|i| slots(g, i) & want != 0))
         }
         // On the inventory reference of an equipped item: the item stays on until a
         // script takes it off (the world's NoUnequip lock, saved) [documented].
@@ -613,9 +617,8 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
         // Whether the actor's last hit got past its DT [documented: in its OnHit].
         "getarmourpenetrated" => yes(subject.and_then(|r| g.other.jip11.penetrated.get(&r).copied()).unwrap_or(false)),
         // ---- factions ----
-        // `faction rank [baseActor]`: the base's rank, for the session [documented;
-        // hypothesis: not saved]; a rank below 0 takes the base out [hypothesis: as
-        // SetFactionRank].
+        // `faction rank [baseActor]`: the base's rank, for the session [documented];
+        // a rank below 0 takes the base out (see docs/spec-notes/jip-actors-11.md §5).
         "setbasefactionrank" => {
             let (Some(f), Some(rank)) = (form(args, 0), num(args, 1)) else { return Some(Ok(zero)) };
             let Some(b) = form(args, 2).or_else(|| subject.and_then(|r| crate::functions::base_of(g, r))) else { return Some(Ok(zero)) };
@@ -655,12 +658,21 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
             let record = g.data.need_stages.values().flatten().find(|s| s.stage == st).map(|s| s.spell);
             reff(record.and_then(|sp| g.stage_spell(st, sp)))
         }
-        // `stage [effect]`: no effect leaves the stage without one [hypothesis]; the
-        // player gets the new one at the next change of stage [hypothesis].
+        // `stage [effect]`: omitted arg clears the stage's effect to None; explicit null 0
+        // and non-SPEL forms are no-ops [observed: `w6d2_30_actor_unarmed_and_hardcore_stage_effect`];
+        // the player gets the new one at the next change of stage (see docs/spec-notes/jip-actors-11.md §5).
         "sethardcorestageeffect" => {
             let Some(st) = form(args, 0).filter(|&st| g.data.need_stages.values().flatten().any(|s| s.stage == st)) else { return Some(Ok(zero)) };
-            let e = form(args, 1).filter(|&e| g.data.sig(e) == Some(*b"SPEL"));
-            g.other.jip11.stage_effects.insert(st, e);
+            match args.get(1) {
+                None => {
+                    g.other.jip11.stage_effects.insert(st, None);
+                }
+                Some(_) => {
+                    if let Some(e) = form(args, 1).filter(|&e| g.data.sig(g.unclone(e)) == Some(*b"SPEL")) {
+                        g.other.jip11.stage_effects.insert(st, Some(e));
+                    }
+                }
+            }
             zero
         }
         // The multiplier of the weapon damage penalty below 75 % condition [documented];

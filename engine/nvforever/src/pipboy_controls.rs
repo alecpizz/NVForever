@@ -24,6 +24,11 @@
 //! [hypothesis: nothing was captured down]. The first reading is taken at once, so a loaded
 //! game's needle does not sweep up. While the Pip-Boy is up the needle quivers a little about
 //! where it rests ([`NEEDLE_QUIVER`]); the travel and the log are without the quiver.
+//!
+//! [design: Android scrollbar request] The wheel now reads the list view's actual scroll
+//! value, independent of selected row: a native list's value, STATS top or the hand-built
+//! list's first row. This is NVForever's synchronization policy, not a new measurement of
+//! the original device's mechanical step size.
 
 use crate::pipboy_arm::{PartMesh, PipBoyPart};
 use bevy::mesh::skinning::SkinnedMesh;
@@ -325,12 +330,37 @@ fn pose_controls(commands: &mut Commands, r: Readings, dt: f32, angles: &mut Con
 }
 
 /// The row of the list the page shows; `None` where it has none (the maps).
-fn list_row(pip: &PipBoy, stats: Option<&StatsView>, data: Option<&DataState>, active: &ActiveMenu) -> Option<usize> {
+fn list_row(pip: &PipBoy, stats: Option<&StatsView>, data: Option<&DataState>, active: &ActiveMenu,
+    inventory: Option<&nvf_play::tiles::inventory_menu::InventoryTiles>, map: Option<&nvf_play::tiles::map_menu::MapTiles>,
+    items: Option<&nvf_play::pipboy::scrollbar::ItemsScroll>) -> Option<usize> {
+    #[cfg(target_os = "android")]
+    {
+        list_row_scroll(pip, stats, data, active, inventory, map, items)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (inventory, map, items);
+        let tab = pip.tab();
+        match pip.page {
+            Page::Stats => stats?.selected.get(tab).copied(),
+            Page::Items => active.0.as_ref().map(|m| m.selected[Side::Player as usize]),
+            Page::Data if tab >= 2 => Some(data?.selection(tab).0),
+            Page::Data => None,
+        }
+    }
+}
+
+#[cfg(any(target_os = "android", test))]
+fn list_row_scroll(pip: &PipBoy, stats: Option<&StatsView>, data: Option<&DataState>, active: &ActiveMenu,
+    inventory: Option<&nvf_play::tiles::inventory_menu::InventoryTiles>, map: Option<&nvf_play::tiles::map_menu::MapTiles>,
+    items: Option<&nvf_play::pipboy::scrollbar::ItemsScroll>) -> Option<usize> {
     let tab = pip.tab();
     match pip.page {
-        Page::Stats => stats?.selected.get(tab).copied(),
-        Page::Items => active.0.as_ref().map(|m| m.selected[Side::Player as usize]),
-        Page::Data if tab >= 2 => Some(data?.selection(tab).0),
+        Page::Stats => stats?.top.get(tab).copied(),
+        Page::Items => inventory.filter(|t| t.shown.is_some() && !t.others).map(|t| t.view.value(Side::Player).max(0.0) as usize)
+            .or_else(|| active.0.as_ref().and_then(|m| items.filter(|s| s.matches(m)).and_then(|s| s.position()).or(Some(m.scroll[Side::Player as usize])))),
+        Page::Data if tab >= 2 => map.filter(|t| t.shown.is_some() && !t.others).and_then(|t| t.list_scroll()).map(|v| v.max(0.0) as usize)
+            .or_else(|| data.and_then(|d| d.list_scroll(tab))),
         Page::Data => None,
     }
 }
@@ -347,20 +377,20 @@ fn rads(script: Option<Mut<ScriptState>>) -> Option<f64> {
 }
 
 /// The needle and knobs: read the game while the Pip-Boy shows on the arm, then pose.
+type ControlLists<'w> = (Option<Res<'w,StatsView>>, Option<Res<'w,DataState>>, Option<Res<'w,nvf_play::tiles::inventory_menu::InventoryTiles>>, Option<Res<'w,nvf_play::tiles::map_menu::MapTiles>>, Option<Res<'w,nvf_play::pipboy::scrollbar::ItemsScroll>>);
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn turn_controls(
     mut commands: Commands,
     time: Res<Time<Real>>,
     pip: Res<PipBoy>,
-    stats: Option<Res<StatsView>>,
-    data: Option<Res<DataState>>,
+    (stats, data, inventory, map, items): ControlLists,
     active: Res<ActiveMenu>,
     script: Option<ResMut<ScriptState>>,
     mut angles: ResMut<ControlAngles>,
     mut shapes: ControlShapes,
 ) {
     let readings = if pip.on_arm() {
-        Readings { rads: rads(script.map(Into::into)), tab: Some(pip.tab()), row: list_row(&pip, stats.as_deref(), data.as_deref(), &active) }
+        Readings { rads: rads(script.map(Into::into)), tab: Some(pip.tab()), row: list_row(&pip, stats.as_deref(), data.as_deref(), &active, inventory.as_deref(), map.as_deref(), items.as_deref()) }
     } else {
         Readings::default()
     };
@@ -501,6 +531,26 @@ mod tests {
     fn the_wheel_turns_a_ridge_a_row() {
         assert!((wheel_angle(26) - 360.0).abs() < 1e-4, "26 ridges round");
         assert!((wheel_angle(1) - 13.846).abs() < 1e-2);
+    }
+
+    #[test]
+    fn actual_model_wheel_transform_follows_view_scroll_instead_of_selected_row() {
+        let mut pip=PipBoy::default();pip.page=Page::Stats;pip.tabs[0]=2;
+        // These are distinct authoritative view fields: the selection can remain offscreen.
+        let mut stats=StatsView::default();stats.top[2]=3;stats.selected[2]=11;
+        let row=list_row_scroll(&pip,Some(&stats),None,&ActiveMenu::default(),None,None,None);
+        assert_eq!(row,Some(3));
+        #[cfg(not(target_os = "android"))]
+        assert_eq!(list_row(&pip,Some(&stats),None,&ActiveMenu::default(),None,None,None),Some(11));
+        let mut app=app();
+        let wheel=app.world_mut().spawn((PipBoyPart::ScrollKnob,bind(),known(PipBoyPart::ScrollKnob))).id();
+        app.world_mut().resource_mut::<Now>().0=Readings{row,..default()};
+        app.world_mut().resource_mut::<Now>().1=100.0;
+        app.update();app.update();
+        let want=bind().transform_point(Quat::from_rotation_x(wheel_angle(3).to_radians())*Vec3::Y);
+        let wrong=bind().transform_point(Quat::from_rotation_x(wheel_angle(11).to_radians())*Vec3::Y);
+        assert!((tip(&app,wheel,Vec3::Y)-want).length()<1e-4,"the actual rig shape poses from current list scroll");
+        assert!((tip(&app,wheel,Vec3::Y)-wrong).length()>0.1,"selected row cannot drive the scrollbar wheel");
     }
 
     #[test]

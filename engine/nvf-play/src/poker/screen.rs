@@ -204,10 +204,12 @@ fn spawn(commands: &mut Commands, c: &Ctx, s: &Session, view: Option<&PokerView>
     let bright = amber(255.0);
     let soft = amber(SOFT);
     let full = Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() };
-    let mut root = commands.spawn((PokerRoot, full.clone(), GlobalZIndex(106), BackgroundColor(Color::BLACK)));
-    if let Some(v) = view {
+    // At a table in the world (no picture) the room shows through.
+    let in_world = view.is_some_and(|v| v.image.is_none());
+    let mut root = commands.spawn((PokerRoot, full.clone(), GlobalZIndex(106), BackgroundColor(if in_world { Color::NONE } else { Color::BLACK })));
+    if let Some(image) = view.and_then(|v| v.image.clone()) {
         root.with_children(|r| {
-            r.spawn((full.clone(), ImageNode::new(v.image.clone())));
+            r.spawn((full.clone(), ImageNode::new(image)));
         });
     }
     let t = &s.table;
@@ -215,10 +217,16 @@ fn spawn(commands: &mut Commands, c: &Ctx, s: &Session, view: Option<&PokerView>
     root.with_children(|r| crate::interface::in_menu_frame(r, crate::interface::MIDDLE, |r| {
         // The heading, top left; the pot, top right.
         let title = format!("{}  -  TEXAS HOLD'EM", s.casino.title().to_uppercase());
+        let blinds = format!("BLINDS {SMALL_BLIND}/{BIG_BLIND}   HAND {}", t.hand);
+        let w = c.width(Font::Glow, &title).max(c.width(Font::Plain, &blinds));
+        crate::casino_hud::glass(r, EDGE, EDGE + 4.0, w, 2.0 * LINE - 8.0);
         c.text(r, Font::Glow, &title, EDGE, EDGE, 0.0, bright);
-        c.text(r, Font::Plain, &format!("BLINDS {SMALL_BLIND}/{BIG_BLIND}   HAND {}", t.hand), EDGE, EDGE + LINE, 0.0, soft);
-        c.text(r, Font::Glow, &format!("POT {}", t.pot()), view_w - EDGE, EDGE, 1.0, bright);
+        c.text(r, Font::Plain, &blinds, EDGE, EDGE + LINE, 0.0, soft);
+        let pot = format!("POT {}", t.pot());
         let street = if t.street == Street::Over && !t.showdown { "" } else { t.street.name() };
+        let w = c.width(Font::Glow, &pot).max(c.width(Font::Plain, &street.to_uppercase()));
+        crate::casino_hud::glass(r, view_w - EDGE - w, EDGE + 4.0, w, 2.0 * LINE - 8.0);
+        c.text(r, Font::Glow, &pot, view_w - EDGE, EDGE, 1.0, bright);
         c.text(r, Font::Plain, &street.to_uppercase(), view_w - EDGE, EDGE + LINE, 1.0, soft);
         // The opponents' labels at their seats.
         for i in 1..t.seats.len() {
@@ -233,21 +241,34 @@ fn spawn(commands: &mut Commands, c: &Ctx, s: &Session, view: Option<&PokerView>
         }
         // The hand's result.
         if let Some(st) = &s.status {
-            c.text(r, Font::Glow, &st.to_uppercase(), view_w / 2.0, STATUS_Y, 0.5, bright);
+            let st = st.to_uppercase();
+            let w = c.width(Font::Glow, &st);
+            crate::casino_hud::glass(r, (view_w - w) / 2.0, STATUS_Y + 4.0, w, LINE - 8.0);
+            c.text(r, Font::Glow, &st, view_w / 2.0, STATUS_Y, 0.5, bright);
         }
         // The player's chips, the call and the best hand, bottom left.
         let p = s.player();
         let bottom = 960.0 - EDGE;
-        c.text(r, Font::Glow, &format!("CHIPS {}", p.stack), EDGE, bottom - 3.0 * LINE, 0.0, bright);
+        let chips = format!("CHIPS {}", p.stack);
         let legal = t.legal(PLAYER);
         let call_line = if t.street != Street::Over && p.in_hand() && legal.to_call > 0 { format!("TO CALL {}", legal.to_call) } else { String::new() };
-        c.text(r, Font::Plain, &call_line, EDGE, bottom - 2.0 * LINE, 0.0, soft);
         let hand = if p.in_hand() { t.best_hand(PLAYER).map(|v| v.describe().to_uppercase()).unwrap_or_default() } else { String::new() };
+        let w = c.width(Font::Glow, &chips).max(c.width(Font::Plain, &call_line)).max(c.width(Font::Plain, &hand));
+        // Only as tall as the lines that show (the call and the hand come and go).
+        let lines = if !hand.is_empty() { 3.0 } else if !call_line.is_empty() { 2.0 } else { 1.0 };
+        crate::casino_hud::glass(r, EDGE, bottom - 3.0 * LINE + 4.0, w, lines * LINE - 8.0);
+        c.text(r, Font::Glow, &chips, EDGE, bottom - 3.0 * LINE, 0.0, bright);
+        c.text(r, Font::Plain, &call_line, EDGE, bottom - 2.0 * LINE, 0.0, soft);
         c.text(r, Font::Plain, &hand, EDGE, bottom - LINE, 0.0, soft);
         // The choices, bottom right, right to left.
         let mut x = view_w - EDGE;
         let y = 960.0 - EDGE - CHOICES_UP;
-        for (label, cmd, on) in choices(s).into_iter().rev() {
+        let all = choices(s);
+        // The glass behind the row: the texts' widths (a hint drawn as a button's picture
+        // may differ a little from its text's).
+        let row_w = all.iter().map(|(l, _, _)| c.width(Font::Glow, l)).sum::<f32>() + CHOICE_GAP * all.len().saturating_sub(1) as f32;
+        crate::casino_hud::glass(r, x - row_w, y + 4.0, row_w, LINE - 8.0);
+        for (label, cmd, on) in all.into_iter().rev() {
             // The drawn width, not the text's: a hint that names a button draws its
             // picture, so the click box and the gap must follow that width.
             let w = c.text(r, Font::Glow, &label, x, y, 1.0, amber(if on { 255.0 } else { DIM }));

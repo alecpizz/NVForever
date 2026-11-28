@@ -57,6 +57,17 @@ pub struct EmittanceState {
     shown: Option<(u32, Option<u32>, f32)>,
     /// Canonical light record revision used by cached light-backed sources.
     light_revision: Option<u64>,
+    /// Peak linear luminance (0..1) of active weather-backed (`Source::Weather`) emittance
+    /// sources in the current scene (`0.0` at night or when no weather XEMI is active).
+    pub weather_daylight_luma: f32,
+}
+
+#[cfg(any(test, debug_assertions, feature = "dev-aids"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RoomRayEmittance {
+    Daylight,
+    OtherRegion,
+    Light,
 }
 
 enum Source {
@@ -145,6 +156,24 @@ impl EmittanceState {
         s
     }
 
+    /// Classify a placed ray's cached XEMI for the room beam census [design, #4698].
+    /// The material path resolves this source before attaching the census mark.
+    #[cfg(any(test, debug_assertions, feature = "dev-aids"))]
+    pub(crate) fn room_ray_emittance(&self, sky: &SkyState, xemi: u32) -> Option<RoomRayEmittance> {
+        match self.sources.get(&xemi)?.as_ref()? {
+            Source::Weather(region, weathers) => {
+                let weather = weathers.get(&region.best)?;
+                let sunlight = |hour| weather.color(&sky.climate, ColorType::Sunlight, hour).iter().sum::<f32>();
+                Some(if sunlight(12.0) > sunlight(0.0) {
+                    RoomRayEmittance::Daylight
+                } else {
+                    RoomRayEmittance::OtherRegion
+                })
+            }
+            Source::Color(..) => Some(RoomRayEmittance::Light),
+        }
+    }
+
     /// Mark a light as driven by `xemi`, if that resolves.
     pub fn light(&mut self, world: &WorldData, xemi: u32, color: LinearRgba) -> Option<LightEmittance> {
         self.hour = None;
@@ -224,6 +253,11 @@ fn scale(a: LinearRgba, b: LinearRgba) -> LinearRgba {
     LinearRgba::new(a.red * b.red, a.green * b.green, a.blue * b.blue, a.alpha)
 }
 
+fn linear_luma(c: LinearRgba) -> f32 {
+    (0.2126 * c.red + 0.7152 * c.green + 0.0722 * c.blue).clamp(0.0, 1.0)
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn update_emittance(
     sky: Res<SkyState>,
     world: Option<Res<WorldData>>,
@@ -232,6 +266,7 @@ pub(crate) fn update_emittance(
     mut materials: ResMut<Assets<NifMaterial>>,
     mut lights: Query<(&LightEmittance, Option<&mut PointLight>, Option<&mut SpotLight>)>,
     changed: Query<(), Changed<LightEmittance>>,
+    mut removed_lights: RemovedComponents<LightEmittance>,
 ) {
     if let (Some(world), Some(game)) = (world, script.as_ref().and_then(|s| s.rt.as_ref()).map(|rt| &rt.game)) {
         state.refresh_session_lights(&world, game);
@@ -239,7 +274,9 @@ pub(crate) fn update_emittance(
     let moved = state.hour.is_none_or(|h| (h - sky.hour).abs() > 1.0 / 60.0);
     let shown = (sky.weather.form_id, sky.prev.as_ref().map(|p| p.form_id), if sky.prev.is_some() { sky.fade } else { 1.0 });
     let weather_moved = state.shown.is_none_or(|(w, p, f)| w != shown.0 || p != shown.1 || (f - shown.2).abs() > 0.01);
-    if !moved && !weather_moved && changed.is_empty() {
+    let removed = !removed_lights.is_empty();
+    removed_lights.clear();
+    if !moved && !weather_moved && changed.is_empty() && !removed {
         return;
     }
     state.hour = Some(sky.hour);
@@ -267,9 +304,13 @@ pub(crate) fn update_emittance(
             }
         }
     }
+    let mut weather_luma = 0.0f32;
     for (l, point, spot) in &mut lights {
-        let Some(&(_, e)) = colors.get(&l.source) else { continue };
-        let c = Color::LinearRgba(scale(l.color, e));
+        let Some(&(lin_e, disp_e)) = colors.get(&l.source) else { continue };
+        if matches!(state.sources.get(&l.source), Some(Some(Source::Weather(..)))) {
+            weather_luma = weather_luma.max(linear_luma(lin_e));
+        }
+        let c = Color::LinearRgba(scale(l.color, disp_e));
         if let Some(mut p) = point {
             p.color = c;
         }
@@ -277,6 +318,7 @@ pub(crate) fn update_emittance(
             s.color = c;
         }
     }
+    state.weather_daylight_luma = weather_luma;
 }
 
 #[cfg(test)]
@@ -287,5 +329,60 @@ mod tests {
     fn scales_per_channel() {
         let s = scale(LinearRgba::new(1.0, 0.5, 0.25, 0.3), LinearRgba::rgb(0.5, 1.0, 0.0));
         assert_eq!((s.red, s.green, s.blue, s.alpha), (0.5, 0.5, 0.0, 0.3));
+    }
+
+    #[test]
+    fn weather_daylight_luma_follows_time_and_presence() {
+        assert_eq!(linear_luma(LinearRgba::BLACK), 0.0);
+        assert!(linear_luma(LinearRgba::rgb(0.9, 0.8, 0.5)) > 0.7);
+
+        let mut w = Weather { form_id: 0x15e, colors: vec![vec![[0; 3]; 4]; 10], ..Default::default() };
+        // 4 times: sunrise, day, sunset, night; ColorType::Sunlight == 2.
+        w.colors[ColorType::Sunlight as usize] = vec![
+            [200, 160, 100],
+            [255, 227, 170],
+            [200, 140, 90],
+            [0, 0, 0],
+        ];
+        let mut ws = HashMap::new();
+        ws.insert(w.form_id, w);
+        let region = RegionEmittance { listed: vec![0x15e], best: 0x15e };
+
+        let mut world = World::new();
+        let mut sky = SkyState::default();
+        sky.climate.sunrise = (5.0, 7.0);
+        sky.climate.sunset = (18.0, 20.0);
+        sky.weather.form_id = 0x15e;
+        sky.hour = 12.0;
+
+        let mut state = EmittanceState::default();
+        state.sources.insert(1, Some(Source::Weather(region, ws)));
+        world.insert_resource(sky);
+        world.insert_resource(state);
+        world.insert_resource(Assets::<NifMaterial>::default());
+
+        let light_e = world
+            .spawn((LightEmittance { source: 1, color: LinearRgba::WHITE }, PointLight::default()))
+            .id();
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(update_emittance);
+
+        // Noon: weather source lights up and reports positive daylight luminance.
+        schedule.run(&mut world);
+        assert!(world.resource::<EmittanceState>().weather_daylight_luma > 0.5);
+
+        // Midnight: weather source turns black and daylight luminance drops to 0.
+        world.resource_mut::<SkyState>().hour = 0.0;
+        schedule.run(&mut world);
+        assert_eq!(world.resource::<EmittanceState>().weather_daylight_luma, 0.0);
+
+        // Back to noon, then despawn the cell's light: removal triggers reset to 0.
+        world.resource_mut::<SkyState>().hour = 12.0;
+        schedule.run(&mut world);
+        assert!(world.resource::<EmittanceState>().weather_daylight_luma > 0.5);
+        world.despawn(light_e);
+        schedule.run(&mut world);
+        assert_eq!(world.resource::<EmittanceState>().weather_daylight_luma, 0.0);
     }
 }

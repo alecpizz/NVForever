@@ -34,12 +34,23 @@
 //!   again from where each actor stands).
 //! - **Thumbnail** (design §5 q8): a 512×288 PNG of the main camera's picture, for the load
 //!   menu (`crate::pause`). The snapshot is still taken at the end of the frame the save
-//!   was asked in; that frame is drawn without the UI (the root nodes are hidden for it
-//!   and shown again the next frame) and captured from the window. When the picture
-//!   arrives (a frame or two later), a thread crops it to 16:9, scales it down by area
-//!   averaging, encodes the PNG and writes the file, so the frame does not wait for the
-//!   encoder or the disk. No picture within [`SHOT_WAIT_FRAMES`] frames: the save is
+//!   was asked in; the render world captures the main 3D view's post-processed texture in
+//!   `Core3d` after `Core3dSystems::PostProcess` and before `ui_pass`, so the thumbnail
+//!   has no HUD or menus and no UI node is hidden or blinks on screen (#3808). When the
+//!   picture arrives (a frame or two later), a thread crops it to 16:9, scales it down by
+//!   area averaging, encodes the PNG and writes the file, so the frame does not wait for
+//!   the encoder or the disk. No picture within [`SHOT_WAIT_FRAMES`] frames: the save is
 //!   written without one. A load or quit waits for the saves in flight ([`SaveWrites`]).
+//!
+//! - **A co-op guest's own game**: a guest joining another player's world
+//!   keeps its own game as it was then ([`KeepSolo`] asks, [`keep_solo`] takes it into
+//!   [`SoloBase`] before the guest is moved). Each save made while it is kept writes that
+//!   game with the character as it is now (`GameSnapshot::with_character_of`): the place,
+//!   the world, quests and time are the guest's own, the inventory, values, level, XP and
+//!   perks are what it has now. So a guest loads back into its own game where it left it,
+//!   with what it gained in the other world. The engine's part is its own game's too,
+//!   apart from the view, sneak, run, flashlight and the magazine in hand. Outside co-op
+//!   nothing asks for it, and saves are written as before [design].
 //!
 //! The random numbers are not restored as saved: a load re-seeds them, so a reload does
 //! not replay the same rolls (design §5 q3); test aid `NVF_PLAY_TEST_SAVE_SAME_ROLLS=1`
@@ -49,17 +60,36 @@
 //! 512x288 (<bytes> bytes PNG) in <ms> ms (snapshot <ms> ms)` (`no thumbnail` without one),
 //! `save: not now: <why>`, `load: restored <path>: …`.
 
+use fnv_util::words::{tr, trf};
 use crate::script::ScriptState;
 use crate::sim::SimState;
 use crate::{Location, PlaySet, PlayState, PlayWorld};
+use bevy::camera::{CameraOutputMode, NormalizedRenderTarget};
+use bevy::core_pipeline::{
+    blit::{BlitPipeline, BlitPipelineKey},
+    Core3d, Core3dSystems,
+};
 use bevy::prelude::*;
-use bevy::render::render_resource::TextureFormat;
-use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
+use bevy::render::{
+    camera::ExtractedCamera,
+    render_resource::{
+        Buffer, BufferDescriptor, BufferUsages, Extent3d, MapMode, Operations, PipelineCache, RenderPassColorAttachment, RenderPassDescriptor, SpecializedRenderPipelines, TexelCopyBufferInfo,
+        TexelCopyBufferLayout, Texture, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureView,
+    },
+    renderer::{RenderContext, RenderDevice, RenderGraph, RenderGraphSystems, ViewQuery},
+    sync_world::MainEntity,
+    view::{ExtractedWindow, ResolvedCompositingSpace, ViewTarget},
+    Render, RenderApp, RenderSystems,
+};
+use bevy::window::PrimaryWindow;
 use fnv_save::{PluginEntry, SaveHeader, SaveKind};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::{mpsc, Mutex};
+use std::sync::{
+    atomic::{AtomicU64, AtomicU8, Ordering},
+    mpsc, Arc, Mutex,
+};
 
 mod death_recovery;
 
@@ -253,6 +283,24 @@ pub struct OrderChange {
     pub missing: Vec<String>,
 }
 
+/// Co-op: keep this game as it is now, as the guest's own ([`keep_solo`]),
+/// once it runs; coop.rs asks for it as a guest joins another's world.
+#[derive(Resource, Default)]
+pub struct KeepSolo;
+
+/// A co-op guest's own game as it was when it joined another's world (module notes);
+/// `None` when it could not be taken (the scripts do not run). While it is here, saves
+/// write it with the character as it is now.
+#[derive(Resource)]
+pub struct SoloBase(pub Option<Box<Solo>>);
+
+pub struct Solo {
+    pub game: fnv_game::game::GameSnapshot,
+    pub engine: EngineSnapshot,
+    /// The header's place, location and game date then.
+    pub header: SaveHeader,
+}
+
 /// The engine part waiting for the runtime to be restored.
 #[derive(Resource)]
 pub struct PendingEngine(pub EngineSnapshot, pub PathBuf, pub Option<OrderChange>);
@@ -312,24 +360,44 @@ struct Written {
     snapshot_ms: f64,
 }
 
-/// The window's picture as captured.
+/// Render-world `Core3d` system set that captures the pre-UI save thumbnail after
+/// `Core3dSystems::PostProcess` and before `ui_pass`. Downstream post-UI/display passes
+/// such as `nvforever::hdr::hdr_expand` order `.after(SaveShotSystems)` so SDR thumbnails
+/// capture the pre-expansion `[0, 1]` tonemapped frame deterministically [design, #3808].
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SaveShotSystems;
+
+/// The pre-UI world picture as captured for a save thumbnail.
 struct Shot {
+    id: u64,
     w: u32,
     h: u32,
     bgra: bool,
     px: Vec<u8>,
 }
 
-/// Saves between their snapshot and their file: waiting for the picture, or being written
-/// on another thread.
+/// Shared main-world / render-world bridge for capturing a pre-UI save thumbnail without
+/// hiding any UI node (#3808). `requested` holds `0` when idle or the monotonic non-zero
+/// request ID of the active capture.
+#[derive(Resource, Clone)]
+struct ShotBridge {
+    requested: Arc<AtomicU64>,
+    tx: mpsc::Sender<Shot>,
+}
+
+/// Saves between their snapshot and their file: waiting for the pre-UI picture, or being
+/// written on another thread.
 #[derive(Resource)]
 pub struct SaveWrites {
     waiting: Vec<Unwritten>,
-    /// The frame the picture was asked for (the UI is hidden in it), until it comes.
-    asked: Option<u32>,
+    /// The frame and request ID the picture was asked for, until it arrives or times out.
+    asked: Option<(u32, u64)>,
+    next_shot_id: u64,
     shot: Option<Shot>,
-    /// UI roots hidden for the picture, and their visibility before.
-    hidden: Vec<(Entity, Visibility)>,
+    /// Signal to the render world carrying the active non-zero capture request ID (`0` idle) (#3808).
+    shot_req: Arc<AtomicU64>,
+    /// Channel delivering completed pre-UI thumbnail captures from the render world.
+    shot_rx: Mutex<mpsc::Receiver<Shot>>,
     threads: Vec<std::thread::JoinHandle<()>>,
     in_flight: usize,
     tx: mpsc::Sender<Written>,
@@ -338,12 +406,31 @@ pub struct SaveWrites {
 
 impl Default for SaveWrites {
     fn default() -> Self {
-        let (tx, rx) = mpsc::channel();
-        SaveWrites { waiting: Vec::new(), asked: None, shot: None, hidden: Vec::new(), threads: Vec::new(), in_flight: 0, tx, rx: Mutex::new(rx) }
+        Self::new_with_bridge().0
     }
 }
 
 impl SaveWrites {
+    fn new_with_bridge() -> (Self, ShotBridge) {
+        let (tx, rx) = mpsc::channel();
+        let (shot_tx, shot_rx) = mpsc::channel();
+        let shot_req = Arc::new(AtomicU64::new(0));
+        let bridge = ShotBridge { requested: shot_req.clone(), tx: shot_tx };
+        let writes = SaveWrites {
+            waiting: Vec::new(),
+            asked: None,
+            next_shot_id: 1,
+            shot: None,
+            shot_req,
+            shot_rx: Mutex::new(shot_rx),
+            threads: Vec::new(),
+            in_flight: 0,
+            tx,
+            rx: Mutex::new(rx),
+        };
+        (writes, bridge)
+    }
+
     /// Whether a save is not on disk yet (a load waits for it).
     pub fn busy(&self) -> bool {
         !self.waiting.is_empty() || self.in_flight > 0
@@ -354,11 +441,12 @@ pub struct SavePlugin;
 
 impl Plugin for SavePlugin {
     fn build(&self, app: &mut App) {
+        let (writes, bridge) = SaveWrites::new_with_bridge();
         app.init_resource::<SaveConfig>()
             .init_resource::<SaveHooks>()
             .init_resource::<SaveQueue>()
             .init_resource::<SaveLog>()
-            .init_resource::<SaveWrites>()
+            .insert_resource(writes)
             .init_resource::<CoopEngineState>()
             .init_resource::<FastTravelLanding>()
             .init_resource::<death_recovery::RecoveryPolicy>()
@@ -369,8 +457,16 @@ impl Plugin for SavePlugin {
             .add_message::<LoadRequest>()
             .add_message::<LoadRefused>()
             .add_systems(Update, (requests, autosaves).in_set(PlaySet::Ui))
-            .add_systems(Update, (death_recovery::update, write_saves, take_shot, finish_writes, apply_engine).chain().after(PlaySet::Sync))
+            .add_systems(Update, (death_recovery::update, write_saves, take_shot, finish_writes, apply_engine, keep_solo).chain().after(PlaySet::Sync))
             .add_systems(Last, flush_on_exit);
+        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+            render_app
+                .insert_resource(bridge)
+                .init_resource::<RenderSaveShot>()
+                .add_systems(Render, prepare_save_shot.in_set(RenderSystems::Prepare).ambiguous_with_all())
+                .add_systems(Core3d, capture_save_shot.in_set(SaveShotSystems).after(Core3dSystems::PostProcess).before(bevy::ui_render::ui_pass))
+                .add_systems(RenderGraph, finish_save_shot.in_set(RenderGraphSystems::Finish));
+        }
         if let Some(p) = app.world_mut().remove_resource::<PendingLoad>() {
             let PendingLoad { path, body, order } = p;
             app.insert_resource(PendingEngine(body.engine, path.clone(), order));
@@ -421,7 +517,7 @@ fn requests(input: crate::bindings::ControlInput, state: Res<State<PlayState>>, 
                 info!("load: QuickLoad key: {}", p.display());
                 load.write(LoadRequest { path: p });
             }
-            Ok(_) => log.0.push("No quicksave yet".into()),
+            Ok(_) => log.0.push(tr("No quicksave yet").into()),
             Err(e) => log.0.push(e),
         }
     }
@@ -493,7 +589,7 @@ fn player_dead(world: &World) -> bool {
 }
 
 /// Why saving is not allowed now, if it is not.
-fn not_now(world: &World) -> Option<String> {
+pub fn not_now(world: &World) -> Option<String> {
     let st = world.get_resource::<ScriptState>()?;
     let Some(rt) = st.rt.as_ref() else { return Some("the scripts are not running yet".into()) };
     if world.resource::<crate::loading::Loading>().active() {
@@ -595,14 +691,16 @@ fn save_now(world: &mut World, r: &SaveRequest) -> Result<(), String> {
         SaveKind::Manual => r.name.as_str(),
     };
     let path = cfg.path_of(name)?;
-    let mut game = world.resource_scope(|world, mut sim: Mut<SimState>| {
+    let (mut game, story) = world.resource_scope(|world, mut sim: Mut<SimState>| {
         let mut st = world.resource_mut::<ScriptState>();
         let rt = st.rt.as_mut().ok_or("the scripts are not running")?;
         // The extender's SaveGame event, with the save's name [documented: NVSE Event
         // Handling], before the state is taken.
         crate::script::with_world(rt, &mut sim, |rt| {
             rt.game.dispatch_event("SaveGame", vec![fnv_script::vm::XVal::Str(name.to_string())], None);
-            rt.game.checked_snapshot()
+            // The story to undo keeps the unique rewards of claimed quests
+            // (coop-shared-progress.md §4.1).
+            rt.game.checked_snapshot().map(|g| (g, rt.game.coop_story_to_undo()))
         })
     })?;
     // Test aid: this save reads as one from a later version (smoke `save-refused-load`).
@@ -610,7 +708,28 @@ fn save_now(world: &mut World, r: &SaveRequest) -> Result<(), String> {
         game.format = "fnv.game.state/2".into();
     }
     let engine = engine_snapshot(world);
-    let header = header(world, r.kind, &game, &engine);
+    let mut header = header(world, r.kind, &game, &engine);
+    // A co-op guest's save: its own game, with the character as it is now.
+    let (game, engine) = match world.get_resource::<SoloBase>().and_then(|s| s.0.as_deref()) {
+        Some(solo) => {
+            let mut e = solo.engine.clone();
+            (e.third_person, e.distance, e.sneak, e.always_run, e.flashlight, e.magazine) = (engine.third_person, engine.distance, engine.sneak, engine.always_run, engine.flashlight, engine.magazine);
+            let h = &solo.header;
+            (header.place, header.location, header.weather) = (h.place.clone(), h.location.clone(), h.weather.clone());
+            (header.game_year, header.game_month, header.game_day, header.game_hour) = (h.game_year, h.game_month, h.game_day, h.game_hour);
+            info!("save: a co-op guest's save: its own game at {} with the character as it is now", h.location);
+            // What the host's story gave or took is not part of the character: taken off,
+            // but for the unique rewards of the stages this character claimed
+            // (docs/design/coop-save.md §5).
+            let mut now = game;
+            let undone = story.undo_on(&mut now);
+            if !undone.is_empty() {
+                info!("save: the host's story taken off the guest's save: {}", undone.join(", "));
+            }
+            (solo.game.clone().with_character_of(&now), e)
+        }
+        None => (game, engine),
+    };
     let refs = game.sim.refs.len();
     let body = SaveBody { format: BODY_FORMAT.into(), game, engine };
     let bytes = serde_json::to_vec(&body).map_err(|e| e.to_string())?;
@@ -619,61 +738,325 @@ fn save_now(world: &mut World, r: &SaveRequest) -> Result<(), String> {
     Ok(())
 }
 
-/// Ask for the picture of this frame, drawn without the UI, for the saves just taken.
+/// Ask the render world for this frame's pre-UI world picture for the saves just taken.
+/// Never hides any UI root node, so the HUD and menus do not blink during a save (#3808).
 fn take_shot(world: &mut World) {
-    let w = world.resource::<SaveWrites>();
+    let frame = world.resource::<bevy::diagnostic::FrameCount>().0;
+    let mut w = world.resource_mut::<SaveWrites>();
     if w.waiting.is_empty() || w.asked.is_some() {
         return;
     }
-    let frame = world.resource::<bevy::diagnostic::FrameCount>().0;
-    // The root nodes drawn on the window (not the Pip-Boy's screen, drawn by its own camera).
-    let mut roots = world.query_filtered::<(Entity, &Visibility), (With<Node>, Without<ChildOf>, Without<bevy::ui::UiTargetCamera>)>();
-    let hidden: Vec<(Entity, Visibility)> = roots.iter(world).filter(|(_, v)| **v != Visibility::Hidden).map(|(e, v)| (e, *v)).collect();
-    for (e, _) in &hidden {
-        world.entity_mut(*e).insert(Visibility::Hidden);
+    // Discard any late picture from an earlier timed-out request.
+    if let Ok(rx) = w.shot_rx.lock() {
+        while rx.try_recv().is_ok() {}
     }
-    let mut w = world.resource_mut::<SaveWrites>();
-    w.hidden = hidden;
-    w.asked = Some(frame);
+    let id = w.next_shot_id;
+    w.next_shot_id = id.wrapping_add(1).max(1);
+    w.asked = Some((frame, id));
     w.shot = None;
-    world.spawn(Screenshot::primary_window()).observe(|ev: On<ScreenshotCaptured>, mut w: ResMut<SaveWrites>| {
-        let img = &ev.image;
-        let bgra = match img.texture_descriptor.format {
-            TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb => true,
-            TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb => false,
-            f => {
-                warn!("save: the window's picture is {f:?}; no thumbnail");
-                return;
-            }
-        };
-        if let Some(px) = img.data.clone() {
-            w.shot = Some(Shot { w: img.width(), h: img.height(), bgra, px });
-        }
-    });
+    w.shot_req.store(id, Ordering::Release);
 }
 
-/// Show the UI again the frame after the picture; once the picture is here (or did not
-/// come in time) hand the saves to a writer thread; report the files written.
+/// Once the pre-UI picture arrives (or did not come in time), hand the saves to a writer
+/// thread and report the files written.
 fn finish_writes(world: &mut World) {
     let frame = world.resource::<bevy::diagnostic::FrameCount>().0;
     let mut w = world.resource_mut::<SaveWrites>();
-    let shown_again = if w.asked.is_none_or(|f| frame > f) { std::mem::take(&mut w.hidden) } else { Vec::new() };
-    let ready = w.asked.is_some_and(|f| w.shot.is_some() || frame.saturating_sub(f) > SHOT_WAIT_FRAMES);
+    if let Some((_, req_id)) = w.asked {
+        if w.shot.is_none() {
+            let received = w.shot_rx.lock().ok().and_then(|rx| {
+                while let Ok(shot) = rx.try_recv() {
+                    if shot.id == req_id {
+                        return Some(shot);
+                    }
+                }
+                None
+            });
+            if let Some(shot) = received {
+                w.shot = Some(shot);
+            }
+        }
+    }
+    let ready = w.asked.is_some_and(|(f, _)| w.shot.is_some() || frame.saturating_sub(f) > SHOT_WAIT_FRAMES);
     if ready {
         let shot = w.shot.take();
-        if shot.is_none() {
-            warn!("save: no picture of the window within {SHOT_WAIT_FRAMES} frames; saving without a thumbnail");
+        if let Some((_, req_id)) = w.asked.take() {
+            if shot.is_none() {
+                let _ = w.shot_req.compare_exchange(req_id, 0, Ordering::AcqRel, Ordering::Acquire);
+                warn!("save: no picture of the window within {SHOT_WAIT_FRAMES} frames; saving without a thumbnail");
+            }
         }
-        w.asked = None;
         let batch = std::mem::take(&mut w.waiting);
         start_writer(&mut w, batch, shot);
     }
-    for (e, v) in shown_again {
-        if let Ok(mut ent) = world.get_entity_mut(e) {
-            ent.insert(v);
+    report_written(world);
+}
+
+/// Capture format for the pre-UI save thumbnail blit: 8-bit sRGB RGBA so hardware
+/// linear-to-sRGB conversion handles both SDR and HDR (`Rgba16Float`) main textures
+/// uniformly [design, #3808].
+const SHOT_FORMAT: TextureFormat = TextureFormat::Rgba8UnormSrgb;
+
+const MAP_PENDING: u8 = 0;
+const MAP_DONE: u8 = 1;
+const MAP_FAILED: u8 = 2;
+
+/// WebGPU `copyTextureToBuffer` requires `bytes_per_row` to be a multiple of 256 bytes
+/// [documented: WebGPU `copyTextureToBuffer`, `COPY_BYTES_PER_ROW_ALIGNMENT`].
+const COPY_BYTES_PER_ROW_ALIGNMENT: u32 = 256;
+
+/// Row byte stride aligned to [`COPY_BYTES_PER_ROW_ALIGNMENT`] (256 bytes) for
+/// 4-byte-per-pixel RGBA8 readbacks.
+fn aligned_rgba_bytes_per_row(width: u32) -> u32 {
+    let unaligned = width.saturating_mul(4);
+    unaligned.div_ceil(COPY_BYTES_PER_ROW_ALIGNMENT).saturating_mul(COPY_BYTES_PER_ROW_ALIGNMENT)
+}
+
+/// Strip row-alignment padding from a mapped RGBA8 buffer into tightly packed `width x height x 4` bytes.
+fn unpad_rgba_rows(mapped: &[u8], width: u32, height: u32, bytes_per_row: u32) -> Option<Vec<u8>> {
+    let row_bytes = (width as usize).checked_mul(4)?;
+    let stride = bytes_per_row as usize;
+    let rows = height as usize;
+    if row_bytes == 0 || rows == 0 || stride < row_bytes || mapped.len() < stride.checked_mul(rows)? {
+        return None;
+    }
+    if stride == row_bytes {
+        return Some(mapped[..row_bytes * rows].to_vec());
+    }
+    let mut out = Vec::with_capacity(row_bytes * rows);
+    for y in 0..rows {
+        let start = y * stride;
+        out.extend_from_slice(&mapped[start..start + row_bytes]);
+    }
+    Some(out)
+}
+
+struct PreparedSaveShot {
+    id: u64,
+    entity: Entity,
+    pipeline_id: bevy::render::render_resource::CachedRenderPipelineId,
+    texture: Texture,
+    texture_view: TextureView,
+    buffer: Buffer,
+    width: u32,
+    height: u32,
+    bytes_per_row: u32,
+}
+
+struct SubmittedSaveShot {
+    id: u64,
+    buffer: Buffer,
+    width: u32,
+    height: u32,
+    bytes_per_row: u32,
+}
+
+struct MappingSaveShot {
+    id: u64,
+    buffer: Buffer,
+    width: u32,
+    height: u32,
+    bytes_per_row: u32,
+    status: Arc<AtomicU8>,
+}
+
+#[derive(Resource, Default)]
+struct RenderSaveShot {
+    prepared: Option<PreparedSaveShot>,
+    submitted: Vec<SubmittedSaveShot>,
+    mapping: Vec<MappingSaveShot>,
+}
+
+/// Allocate the temporary pre-UI capture texture and staging buffer only on a frame a save
+/// thumbnail was requested (#3808). Selects only a `Camera3d` targeting the primary window
+/// so `capture_save_shot` (in `Core3d`) always matches it. Zero persistent VRAM cost
+/// between saves.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+fn prepare_save_shot(
+    bridge: Res<ShotBridge>,
+    mut state: ResMut<RenderSaveShot>,
+    render_device: Res<RenderDevice>,
+    pipeline_cache: Res<PipelineCache>,
+    blit_pipeline: Option<Res<BlitPipeline>>,
+    pipelines: Option<ResMut<SpecializedRenderPipelines<BlitPipeline>>>,
+    primary_windows: Query<MainEntity, (With<ExtractedWindow>, With<PrimaryWindow>)>,
+    views: Query<(Entity, &ViewTarget, &ExtractedCamera, Option<&ResolvedCompositingSpace>), With<Camera3d>>,
+) {
+    state.prepared = None;
+    let req_id = bridge.requested.load(Ordering::Acquire);
+    if req_id == 0 {
+        return;
+    }
+    let (Some(blit), Some(mut pipelines)) = (blit_pipeline, pipelines) else {
+        return;
+    };
+    let Some(primary) = primary_windows.iter().next() else {
+        return;
+    };
+    let Some((entity, target, _, resolved_space)) = views
+        .iter()
+        .filter(|(_, _, c, _)| matches!(c.target, Some(NormalizedRenderTarget::Window(w)) if w.entity() == primary) && !matches!(c.output_mode, CameraOutputMode::Skip))
+        .min_by_key(|(_, _, c, _)| c.sorted_camera_index_for_target)
+    else {
+        return;
+    };
+    let size = target.main_texture().size();
+    if size.width == 0 || size.height == 0 {
+        return;
+    }
+    let key = BlitPipelineKey {
+        target_format: SHOT_FORMAT,
+        blend_state: None,
+        samples: 1,
+        source_space: ResolvedCompositingSpace::space(resolved_space),
+        hdr: false,
+        hdr_gamma22: false,
+    };
+    let pipeline_id = pipelines.specialize(&pipeline_cache, &blit, key);
+    if pipeline_cache.get_render_pipeline(pipeline_id).is_none() {
+        // Pipeline is still compiling on the first save; keep `requested` set and capture next frame.
+        return;
+    }
+    let extent = Extent3d { width: size.width, height: size.height, depth_or_array_layers: 1 };
+    let texture = render_device.create_texture(&TextureDescriptor {
+        label: Some("nvf_save_thumbnail_capture"),
+        size: extent,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: TextureDimension::D2,
+        format: SHOT_FORMAT,
+        usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let texture_view = texture.create_view(&Default::default());
+    let bytes_per_row = aligned_rgba_bytes_per_row(size.width);
+    let buffer = render_device.create_buffer(&BufferDescriptor {
+        label: Some("nvf_save_thumbnail_readback"),
+        size: u64::from(bytes_per_row) * u64::from(size.height),
+        usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    state.prepared = Some(PreparedSaveShot {
+        id: req_id,
+        entity,
+        pipeline_id,
+        texture,
+        texture_view,
+        buffer,
+        width: size.width,
+        height: size.height,
+        bytes_per_row,
+    });
+}
+
+/// Blit the main 3D view's post-processed texture into the capture texture and copy to the
+/// readback buffer after `Core3dSystems::PostProcess` and before `ui_pass`, so the save
+/// thumbnail has no HUD or menus without hiding any UI (#3808).
+fn capture_save_shot(
+    view: ViewQuery<(Entity, &ViewTarget)>,
+    bridge: Res<ShotBridge>,
+    mut state: ResMut<RenderSaveShot>,
+    blit_pipeline: Option<Res<BlitPipeline>>,
+    pipeline_cache: Res<PipelineCache>,
+    mut ctx: RenderContext,
+) {
+    let (entity, target) = view.into_inner();
+    if state.prepared.as_ref().is_none_or(|p| p.entity != entity) {
+        return;
+    }
+    let Some(blit) = blit_pipeline else { return };
+    let Some(prepared) = state.prepared.take() else { return };
+    let Some(pipeline) = pipeline_cache.get_render_pipeline(prepared.pipeline_id) else {
+        return;
+    };
+    let bind_group = blit.create_bind_group(ctx.render_device(), target.main_texture_view(), &pipeline_cache);
+    {
+        let mut pass = ctx.command_encoder().begin_render_pass(&RenderPassDescriptor {
+            label: Some("nvf_save_thumbnail_blit"),
+            color_attachments: &[Some(RenderPassColorAttachment {
+                view: &prepared.texture_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: Operations::default(),
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.draw(0..3, 0..1);
+    }
+    let extent = Extent3d { width: prepared.width, height: prepared.height, depth_or_array_layers: 1 };
+    ctx.command_encoder().copy_texture_to_buffer(
+        prepared.texture.as_image_copy(),
+        TexelCopyBufferInfo {
+            buffer: &prepared.buffer,
+            layout: TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(prepared.bytes_per_row),
+                rows_per_image: Some(prepared.height),
+            },
+        },
+        extent,
+    );
+    state.submitted.push(SubmittedSaveShot {
+        id: prepared.id,
+        buffer: prepared.buffer,
+        width: prepared.width,
+        height: prepared.height,
+        bytes_per_row: prepared.bytes_per_row,
+    });
+    let _ = bridge.requested.compare_exchange(prepared.id, 0, Ordering::AcqRel, Ordering::Acquire);
+}
+
+/// Start async readbacks after `RenderGraphSystems::Submit` and deliver completed captures
+/// back to the main world without stalling the render thread (#3808).
+fn finish_save_shot(bridge: Res<ShotBridge>, mut state: ResMut<RenderSaveShot>) {
+    let submitted = std::mem::take(&mut state.submitted);
+    for shot in submitted {
+        let status = Arc::new(AtomicU8::new(MAP_PENDING));
+        let done = status.clone();
+        shot.buffer.slice(..).map_async(MapMode::Read, move |res| {
+            done.store(if res.is_ok() { MAP_DONE } else { MAP_FAILED }, Ordering::Release);
+        });
+        state.mapping.push(MappingSaveShot {
+            id: shot.id,
+            buffer: shot.buffer,
+            width: shot.width,
+            height: shot.height,
+            bytes_per_row: shot.bytes_per_row,
+            status,
+        });
+    }
+    let mut i = 0;
+    while i < state.mapping.len() {
+        match state.mapping[i].status.load(Ordering::Acquire) {
+            MAP_PENDING => i += 1,
+            MAP_DONE => {
+                let m = state.mapping.swap_remove(i);
+                let px = {
+                    let slice = m.buffer.slice(..);
+                    match slice.get_mapped_range() {
+                        Ok(mapped) => unpad_rgba_rows(&mapped, m.width, m.height, m.bytes_per_row),
+                        Err(e) => {
+                            warn!("save: failed to read mapped thumbnail buffer: {e}");
+                            None
+                        }
+                    }
+                };
+                m.buffer.unmap();
+                if let Some(px) = px {
+                    let _ = bridge.tx.send(Shot { id: m.id, w: m.width, h: m.height, bgra: false, px });
+                }
+            }
+            _ => {
+                let _ = state.mapping.swap_remove(i);
+                warn!("save: GPU readback failed for save thumbnail; saving without one");
+            }
         }
     }
-    report_written(world);
 }
 
 fn start_writer(w: &mut SaveWrites, batch: Vec<Unwritten>, shot: Option<Shot>) {
@@ -698,9 +1081,9 @@ fn start_writer(w: &mut SaveWrites, batch: Vec<Unwritten>, shot: Option<Shot>) {
 /// error's first line, cut at [`REASON_CHARS`] characters (the log has all of it).
 fn failed_note(kind: SaveKind, error: &str) -> String {
     let what = match kind {
-        SaveKind::Auto => "Autosave failed",
-        SaveKind::Quick => "Quicksave failed",
-        SaveKind::Manual | SaveKind::System => "Save failed",
+        SaveKind::Auto => tr("Autosave failed"),
+        SaveKind::Quick => tr("Quicksave failed"),
+        SaveKind::Manual | SaveKind::System => tr("Save failed"),
     };
     let line = error.lines().next().unwrap_or("").trim();
     let mut reason: String = line.chars().take(REASON_CHARS).collect();
@@ -744,7 +1127,7 @@ fn report_written(world: &mut World) {
                     rt.game.save_files.saved = Some(fnv_game::nvse_sup4::SaveFile { name, bytes: *bytes as u64 });
                 }
                 if let Some(mut c) = world.get_resource_mut::<crate::corner_messages::CornerMessages>() {
-                    c.push(if d.kind == SaveKind::Auto { "Autosaved".to_string() } else { "Game saved".to_string() }.into());
+                    c.push(tr(if d.kind == SaveKind::Auto { "Autosaved" } else { "Game saved" }).to_string().into());
                 }
                 format!("Saved {}", d.path.display())
             }
@@ -768,6 +1151,7 @@ fn flush_on_exit(world: &mut World) {
     let mut w = world.resource_mut::<SaveWrites>();
     let batch = std::mem::take(&mut w.waiting);
     w.asked = None;
+    w.shot_req.store(0, Ordering::Release);
     start_writer(&mut w, batch, None);
     let threads = std::mem::take(&mut w.threads);
     for t in threads {
@@ -902,6 +1286,32 @@ fn header(world: &World, kind: SaveKind, game: &fnv_game::game::GameSnapshot, en
     h
 }
 
+/// Take this game as the co-op guest's own ([`KeepSolo`], module notes) once it runs and a
+/// save it loaded is back, before anything moves the player.
+fn keep_solo(world: &mut World) {
+    if !world.contains_resource::<KeepSolo>() || world.contains_resource::<SoloBase>() || world.contains_resource::<PendingEngine>() {
+        return;
+    }
+    let Some(st) = world.get_resource::<ScriptState>() else { return };
+    if st.off.is_some() {
+        world.insert_resource(SoloBase(None));
+        return;
+    }
+    if st.rt.is_none() || st.pending_game_waiting() || world.resource::<crate::loading::Loading>().active() {
+        return;
+    }
+    let game = world.resource_scope(|world, mut sim: Mut<SimState>| {
+        let mut st = world.resource_mut::<ScriptState>();
+        let rt = st.rt.as_mut()?;
+        Some(crate::script::with_world(rt, &mut sim, |rt| rt.game.snapshot()))
+    });
+    let Some(game) = game else { return };
+    let engine = engine_snapshot(world);
+    let header = header(world, SaveKind::Auto, &game, &engine);
+    info!("save: this game kept as the co-op guest's own: {} at {:?}; its saves come back here", header.location, header.place.feet);
+    world.insert_resource(SoloBase(Some(Box::new(Solo { game, engine, header }))));
+}
+
 /// Put back the engine's part once the runtime holds the restored game.
 fn apply_engine(world: &mut World) {
     if !world.contains_resource::<PendingEngine>() {
@@ -911,6 +1321,7 @@ fn apply_engine(world: &mut World) {
         return;
     }
     let Some(PendingEngine(e, path, order)) = world.remove_resource::<PendingEngine>() else { return };
+    replay_claims(world);
     // The player's tweak: a load turns god mode off [design: docs/design/tweaks.md].
     if world.get_resource::<crate::tweaks::TweakSettings>().is_some_and(|t| t.game.god_mode_off_on_load) && crate::combat::god_mode() {
         crate::combat::set_god_mode(false);
@@ -972,7 +1383,7 @@ fn apply_engine(world: &mut World) {
 
 /// What the player is told when a save's plugins are missing (design §4.1).
 pub fn missing_content_text(missing: &[String]) -> String {
-    format!("This save relies on content that is no longer present: {}. What came from it was removed.", missing.join(", "))
+    trf("This save relies on content that is no longer present: {missing}. What came from it was removed.", &[("missing", &missing.join(", "))])
 }
 
 /// Read a save for `--load`: its header (to start the world at its place) and its body,
@@ -1048,6 +1459,38 @@ pub fn read_for_load(path: &std::path::Path, current: &[PluginEntry]) -> Result<
         eprintln!("load: {}", missing_content_text(&missing));
     }
     Ok((f.header, body, Some(OrderChange { remap, missing })))
+}
+
+/// Joint progression's replay (`fnv_game::coop_joint`, coop-shared-progress.md §3.5): when this character's
+/// own world loads, the quest stages it claimed in another player's world are applied
+/// before the first frame. Not for a load that joins a co-op session (that world is the
+/// host's: the claims wait in the character for its own next load) [design].
+fn replay_claims(world: &mut World) {
+    use crate::coop_progress::{REJOIN_ENV, SYNC_ENV};
+    if std::env::var_os(SYNC_ENV).is_some() || std::env::var_os(REJOIN_ENV).is_some() {
+        return;
+    }
+    if world.get_resource::<crate::coop_progress::CoopProgress>().is_some_and(|p| p.role == crate::coop_progress::Role::Guest) {
+        return;
+    }
+    let lines = match world.get_resource_mut::<ScriptState>().and_then(|s| s.into_inner().rt.as_mut()) {
+        Some(rt) => rt.game.replay_claims(),
+        None => return,
+    };
+    if let Some(mut corner) = world.get_resource_mut::<crate::corner_messages::CornerMessages>() {
+        for l in lines {
+            corner.push(l.into());
+        }
+    }
+    // The map markers found in another player's world (coop-shared-progress.md §2):
+    // found here too, as a save's own are (no notice, no XP).
+    let markers = world.get_resource_mut::<ScriptState>().and_then(|s| s.into_inner().rt.as_mut()).map(|rt| std::mem::take(&mut rt.game.player.claims.markers)).unwrap_or_default();
+    if !markers.is_empty() {
+        info!("co-op: {} map marker(s) found in co-op are found here too", markers.len());
+        let mut found = world.get_resource::<crate::pipboy::data::DataState>().map(|s| s.discovered().clone()).unwrap_or_default();
+        found.extend(markers.iter().map(|m| m.0));
+        crate::pipboy::data::DataState::restore_discovered(world, found);
+    }
 }
 
 #[cfg(test)]
@@ -1382,5 +1825,147 @@ mod tests {
             "the INI's switches were not applied: {cfg:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #3808: taking a save thumbnail requests a pre-UI capture from the render world
+    /// without ever hiding UI root nodes (eliminating the one-frame UI blink on quicksave)
+    /// and encodes the delivered RGBA picture into the written save's 512x288 PNG thumbnail.
+    #[test]
+    fn saving_never_hides_ui_roots_and_writes_pre_ui_thumbnail() {
+        let dir = std::env::temp_dir().join(format!("nvf-quicksave-no-blink-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("quicksave.nvfsave");
+
+        let (mut writes, bridge) = SaveWrites::new_with_bridge();
+        writes.waiting.push(Unwritten {
+            path: path.clone(),
+            header: SaveHeader::new(SaveKind::Quick),
+            body: b"{}".to_vec(),
+            kind: SaveKind::Quick,
+            refs: 0,
+            t0: std::time::Instant::now(),
+            snapshot_ms: 1.0,
+        });
+
+        let mut world = World::new();
+        world.insert_resource(bevy::diagnostic::FrameCount(10));
+        world.insert_resource(writes);
+        world.init_resource::<SaveLog>();
+        world.init_resource::<Messages<SaveDone>>();
+        let hud_root = world.spawn((Node::default(), Visibility::Inherited)).id();
+        let menu_root = world.spawn((Node::default(), Visibility::Visible)).id();
+
+        take_shot(&mut world);
+        // Neither UI root was hidden, and the render-world pre-UI request is armed with ID 1.
+        assert_eq!(*world.get::<Visibility>(hud_root).unwrap(), Visibility::Inherited);
+        assert_eq!(*world.get::<Visibility>(menu_root).unwrap(), Visibility::Visible);
+        assert_eq!(bridge.requested.load(Ordering::Acquire), 1);
+        assert_eq!(world.resource::<SaveWrites>().asked, Some((10, 1)));
+
+        // Simulate the render world completing the pre-UI RGBA capture on the next frame.
+        let (w, h) = (32u32, 18u32);
+        let px = [20u8, 180, 90, 255].repeat((w * h) as usize);
+        bridge.requested.store(0, Ordering::Release);
+        bridge.tx.send(Shot { id: 1, w, h, bgra: false, px }).unwrap();
+
+        world.resource_mut::<bevy::diagnostic::FrameCount>().0 = 11;
+        finish_writes(&mut world);
+        assert_eq!(*world.get::<Visibility>(hud_root).unwrap(), Visibility::Inherited);
+        assert_eq!(*world.get::<Visibility>(menu_root).unwrap(), Visibility::Visible);
+
+        let threads = std::mem::take(&mut world.resource_mut::<SaveWrites>().threads);
+        for t in threads {
+            t.join().unwrap();
+        }
+        report_written(&mut world);
+
+        let header = fnv_save::read_header(&path).unwrap();
+        let (tw, th, rgba) = decode_thumbnail(&header.shot).expect("save has a valid PNG thumbnail");
+        assert_eq!((tw, th), (THUMB_W, THUMB_H));
+        assert_eq!(&rgba[..4], &[20, 180, 90, 255]);
+
+        // Timeout path: if no render world answers within SHOT_WAIT_FRAMES, the request is
+        // cleared and the save still writes without a thumbnail, still without hiding UI.
+        let timeout_path = dir.join("timeout.nvfsave");
+        world.resource_mut::<SaveWrites>().waiting.push(Unwritten {
+            path: timeout_path.clone(),
+            header: SaveHeader::new(SaveKind::Quick),
+            body: b"{}".to_vec(),
+            kind: SaveKind::Quick,
+            refs: 0,
+            t0: std::time::Instant::now(),
+            snapshot_ms: 1.0,
+        });
+        world.resource_mut::<bevy::diagnostic::FrameCount>().0 = 20;
+        take_shot(&mut world);
+        assert_eq!(bridge.requested.load(Ordering::Acquire), 2);
+        world.resource_mut::<bevy::diagnostic::FrameCount>().0 = 20 + SHOT_WAIT_FRAMES + 1;
+        finish_writes(&mut world);
+        assert_eq!(bridge.requested.load(Ordering::Acquire), 0);
+        assert_eq!(*world.get::<Visibility>(hud_root).unwrap(), Visibility::Inherited);
+        let threads = std::mem::take(&mut world.resource_mut::<SaveWrites>().threads);
+        for t in threads {
+            t.join().unwrap();
+        }
+        let header = fnv_save::read_header(&timeout_path).unwrap();
+        assert!(header.shot.is_empty());
+
+        // Late-readback filtering: a late capture for timed-out request 2 arriving while
+        // request 3 is active is discarded and never misattributed to save 3.
+        let later_path = dir.join("later.nvfsave");
+        world.resource_mut::<SaveWrites>().waiting.push(Unwritten {
+            path: later_path.clone(),
+            header: SaveHeader::new(SaveKind::Quick),
+            body: b"{}".to_vec(),
+            kind: SaveKind::Quick,
+            refs: 0,
+            t0: std::time::Instant::now(),
+            snapshot_ms: 1.0,
+        });
+        world.resource_mut::<bevy::diagnostic::FrameCount>().0 = 60;
+        take_shot(&mut world);
+        assert_eq!(bridge.requested.load(Ordering::Acquire), 3);
+        let stale_px = [240u8, 10, 10, 255].repeat((w * h) as usize);
+        bridge.tx.send(Shot { id: 2, w, h, bgra: false, px: stale_px }).unwrap();
+        world.resource_mut::<bevy::diagnostic::FrameCount>().0 = 61;
+        finish_writes(&mut world);
+        // Save 3 is still waiting; the stale red shot (id 2) was rejected.
+        assert_eq!(world.resource::<SaveWrites>().asked, Some((60, 3)));
+        assert_eq!(world.resource::<SaveWrites>().waiting.len(), 1);
+        let fresh_px = [15u8, 45, 220, 255].repeat((w * h) as usize);
+        bridge.tx.send(Shot { id: 3, w, h, bgra: false, px: fresh_px }).unwrap();
+        world.resource_mut::<bevy::diagnostic::FrameCount>().0 = 62;
+        finish_writes(&mut world);
+        let threads = std::mem::take(&mut world.resource_mut::<SaveWrites>().threads);
+        for t in threads {
+            t.join().unwrap();
+        }
+        let header = fnv_save::read_header(&later_path).unwrap();
+        let (tw, th, rgba) = decode_thumbnail(&header.shot).expect("save 3 has a valid PNG thumbnail");
+        assert_eq!((tw, th), (THUMB_W, THUMB_H));
+        assert_eq!(&rgba[..4], &[15, 45, 220, 255]);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn aligned_rgba_row_unpadding_handles_aligned_and_padded_widths() {
+        assert_eq!(aligned_rgba_bytes_per_row(64), 256);
+        assert_eq!(aligned_rgba_bytes_per_row(65), 512);
+        // 2x2 image (8 bytes per row) padded to 256 bytes per row.
+        let stride = aligned_rgba_bytes_per_row(2);
+        assert_eq!(stride, 256);
+        let mut mapped = vec![0xEEu8; (stride * 2) as usize];
+        mapped[0..8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        mapped[256..264].copy_from_slice(&[9, 10, 11, 12, 13, 14, 15, 16]);
+        let unpacked = unpad_rgba_rows(&mapped, 2, 2, stride).unwrap();
+        assert_eq!(unpacked, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+        // Exact multiple (64x1): zero-copy fast path matches.
+        let exact: Vec<u8> = (0u8..=255).collect();
+        assert_eq!(unpad_rgba_rows(&exact, 64, 1, 256).unwrap(), exact);
+        // Truncated or zero dimensions are rejected.
+        assert!(unpad_rgba_rows(&mapped[..100], 2, 2, stride).is_none());
+        assert!(unpad_rgba_rows(&mapped, 0, 2, stride).is_none());
+        assert!(unpad_rgba_rows(&mapped, 2, 0, stride).is_none());
     }
 }

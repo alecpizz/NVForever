@@ -127,7 +127,7 @@ original lacks it); **Save?**: *yes* (must be saved), *have* (already in the sna
 | Rounds in the clip | `Combat.cycle.magazine` | player record [hypothesis] | **yes: add** |
 | Flashlight (Pip-Boy light) | `Flashlight.on` | not found | **yes: add** |
 | Active quest in the Pip-Boy | `pipboy/data.rs` `DataState.active_quest` | global type 1 quest ref [hypothesis] | **yes: add** |
-| Sitting / lying | `PlayerSeat`; NPCs' seats in `Furnishings`/`OnFurniture` (engine/nvforever/src/furniture.rs); the use scripts read in `RefExtra::furniture` | not found | rebuild: a load stands the player and every NPC up (furniture stays free): `Game::restore` clears each actor's saved furniture use (`Game::stand_everyone_up`), so GetSitting and its kin read 0 until the engine seats the body again and reports it (`furniture: … goes to` / `is on`) [design, #1573 for the player, #2797 for NPCs]. Whether the original puts a seated NPC straight back on its seat is observer check 220 |
+| Sitting / lying | `PlayerSeat`; NPCs' seats in `Furnishings`/`OnFurniture` (engine/nvforever/src/furniture.rs); the use scripts read in `RefExtra::furniture` | not found | rebuild: a load stands the player and every NPC up (furniture stays free): `Game::restore` clears each actor's saved furniture use (`Game::stand_everyone_up`), so GetSitting and its kin read 0 until the engine seats the body again and reports it (`furniture: … goes to` / `is on`) [design, #1573 for the player, #2797 for NPCs]. The original keeps the seat: Easy Pete saved seated reads GetSitting 3 at his saved spot from the first sample after the load [observed 2026-11-25, observer check 220]; ours differs |
 | Current sky weather and fade | `SkyState` (engine/nvforever) | global type 8: two weather refs (§5.1) | **yes: add** the current and previous weather; the fade restarts |
 | Corpse poses | `Ragdolls.rest` | REFR/ACHR moved data [hypothesis] | optional: the corpse's `RefState.pos` is enough at first |
 | Music, radio playback position | `Music`, `Radio` | global type 10 [hypothesis] | drop: start a new track |
@@ -405,18 +405,24 @@ and Lonesome Road dropped, 36 more by the game layer; the base game's changes ba
   not done.
 - **Console**: `save <name>`, `load [name]` (the quicksave without a name), `saves` (the
   list: name, level, place, game date, kind).
-- **Thumbnail** (`save.rs`): the snapshot is taken at the end of the frame as before; that
-  frame is drawn without the UI (the root UI nodes are hidden for it, shown again the next
-  frame, so a menu blinks for one frame) and captured from the window. When the picture
+- **Thumbnail** (`save.rs`): the snapshot is taken at the end of the frame as before; the
+  render world blits the main 3D view's post-processed texture into a temporary RGBA8 sRGB
+  capture texture in `Core3d` after `Core3dSystems::PostProcess` and before `ui_pass` and
+  reads it back asynchronously after `RenderGraphSystems::Submit`, so the thumbnail has no
+  HUD or menus and no UI node is hidden or blinks on screen (#3808). When the picture
   arrives, a writer thread takes its middle 16:9, scales it to 512×288 by area averaging,
   encodes an RGB PNG (`png` crate, the version Bevy already builds) and writes the file.
   Measured in the smoke run: the frame spends about 1 ms on the snapshot; the file is on
   disk about 65 ms later; a thumbnail is 35–300 KB. No picture within 30 frames: the save
   is written without one. A load (the restart) and quitting wait for saves in flight.
-- **Pause menu** (`pause.rs`): *Save game* (N) saves to a new slot `Save <n>` and says when
-  it is written; *Load game* (L) lists the saves newest first (name, kind, game date per
-  row; the chosen save's thumbnail, player and level, place, game date, play time and when
-  it was saved), Up/Down, the wheel or the pointer choose, Enter or a click load through
+- **Pause menu** (`pause.rs`): *Save* (N) opens the save page listing *New Save* (next
+  numbered slot `Save <n>`) followed by existing manual saves newest first; choosing *New
+  Save* writes a new slot, while choosing an existing manual save asks to confirm
+  overwriting it (defaulting to No; Cancel leaves the existing file untouched, Yes
+  overwrites through `SaveRequest` with the existing atomic writer safeguards) [design:
+  #3758]. *Load* (L) lists all saves newest first (name, kind, game date per row; the
+  chosen save's thumbnail, player and level, place, game date, play time and when it was
+  saved), Up/Down, the wheel or the pointer choose, Enter or a click load through
   `LoadRequest`. Only the chosen save's thumbnail is read. Our own layout; nothing of the
   original's menus is copied.
 - **Smoke**: `save-write` also checks that its saves carry a 512×288 thumbnail, saves from

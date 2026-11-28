@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Original NVForever geometry; Rounded family. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="currentColor" color="#ffffff" fill-rule="evenodd" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+  <title>Aim</title>
+  <path d="M 13 6 Q 6 6 6 13 M 19 6 Q 26 6 26 13 M 26 19 Q 26 26 19 26 M 6 19 Q 6 26 13 26"/><circle cx="16" cy="16" r="2.5" fill="currentColor" stroke="none"/>
+</svg>

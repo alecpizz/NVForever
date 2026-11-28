@@ -25,7 +25,7 @@ use bevy_math::UVec4;
 use bevy_platform::collections::{hash_map::Entry, HashMap, HashSet};
 use bevy_tasks::ComputeTaskPool;
 use bevy_utils::{default, TypeIdHashMap};
-use bytemuck::{Pod, Zeroable};
+use bytemuck::{NoUninit, Pod, Zeroable};
 use encase::{internal::WriteInto, ShaderSize};
 use nonmax::NonMaxU32;
 use static_assertions::assert_eq_size;
@@ -35,8 +35,8 @@ use crate::{
     occlusion_culling::OcclusionCulling,
     render_phase::{
         BinnedPhaseItem, BinnedRenderPhaseBatch, BinnedRenderPhaseBatchSet,
-        BinnedRenderPhaseBatchSets, CachedRenderPipelinePhaseItem, PhaseItem,
-        PhaseItemBatchSetKey as _, PhaseItemExtraIndex, RenderMultidrawableBatchSet,
+        BinnedRenderPhaseBatchSets, CachedRenderPipelinePhaseItem, GpuRenderBinnedMeshInstance,
+        PhaseItem, PhaseItemBatchSetKey as _, PhaseItemExtraIndex, RenderMultidrawableBatchSet,
         SortedPhaseItem, SortedRenderPhase, UnbatchableBinnedEntityIndices, ViewBinnedRenderPhases,
         ViewSortedRenderPhases,
     },
@@ -1364,13 +1364,202 @@ impl Default for SceneUnpackingBuffers {
 
 /// GPU buffers for the bin unpacking shader that are specific to each phase of
 /// each view.
+///
+/// NVForever merged scene unpacking: every batch set of one (view, phase, mesh
+/// indexed-ness) is packed into one set of buffers (the idea of bevy#26580), so
+/// that `unpack_bins` and each step of `allocate_uniforms` run as one dispatch
+/// for all of them instead of one dispatch (and one barrier) per batch set.
 #[derive(Default)]
 pub struct ViewPhaseSceneUnpackingBuffers {
-    /// Metadata that describes each unpacking job, specific to indexed meshes.
-    pub indexed_unpacking_jobs: Vec<SceneUnpackingJob>,
-    /// Metadata that describes each unpacking job, specific to non-indexed
-    /// meshes.
-    pub non_indexed_unpacking_jobs: Vec<SceneUnpackingJob>,
+    /// The packed batch sets of indexed meshes.
+    pub indexed: SceneUnpackingClassBuffers,
+    /// The packed batch sets of non-indexed meshes.
+    pub non_indexed: SceneUnpackingClassBuffers,
+}
+
+/// NVForever merged scene unpacking: one batch set's entry in
+/// [`SceneUnpackingClassBuffers::jobs`]. The `first_*` fields are element
+/// offsets into the packed buffers, so that the shaders keep the batch-local
+/// bin and metadata indices they had with one buffer per batch set.
+#[derive(Clone, Copy, Default, Pod, Zeroable, ShaderType, PartialEq, Debug)]
+#[repr(C)]
+pub struct GpuSceneUnpackingJob {
+    /// The index of the first `PreprocessWorkItem` this batch set writes.
+    pub base_output_work_item_index: u32,
+    /// The index of the first GPU indirect parameters command for this batch set.
+    pub base_indirect_parameters_index: u32,
+    /// The number of binned mesh instances of this batch set.
+    pub binned_mesh_instance_count: u32,
+    /// Its first entry in [`SceneUnpackingClassBuffers::instances`].
+    pub first_instance: u32,
+    /// Its first entry in [`SceneUnpackingClassBuffers::bin_metadata`].
+    pub first_bin_metadata: u32,
+    /// Its first entry in [`SceneUnpackingClassBuffers::bin_indices`].
+    pub first_bin_index: u32,
+    /// Its first workgroup of the `unpack_bins` dispatch.
+    pub first_unpacking_workgroup: u32,
+    /// The index of this batch set in the `IndirectBatchSet` array.
+    pub batch_set_index: u32,
+    /// The number of bins (draws) in this batch set.
+    pub bin_count: u32,
+    /// The index of the first set of indirect parameters for this batch set.
+    pub first_indirect_parameters_index: u32,
+    /// The index of the first `MeshUniform` slot for this batch set.
+    pub first_output_mesh_uniform_index: u32,
+    /// Its first workgroup (256-bin chunk) of the `allocate_uniforms` dispatches.
+    pub first_allocation_workgroup: u32,
+}
+
+/// The workgroup size of `unpack_bins.wesl` (`allocate_uniforms.wesl`'s is
+/// [`crate::render_phase::UNIFORM_ALLOCATION_WORKGROUP_SIZE`]).
+pub const BIN_UNPACKING_WORKGROUP_SIZE: u32 = 64;
+
+/// NVForever merged scene unpacking: every batch set of one (view, phase, mesh
+/// indexed-ness), packed. Rebuilt on the CPU each frame from the batch sets'
+/// own [`RawBufferVec`]s (which are no longer uploaded) and written only where
+/// the bytes changed (#2064).
+pub struct SceneUnpackingClassBuffers {
+    /// One entry per batch set.
+    pub jobs: RawBufferVec<GpuSceneUnpackingJob>,
+    /// Every batch set's binned mesh instances.
+    pub instances: RawBufferVec<GpuRenderBinnedMeshInstance>,
+    /// Every batch set's bin metadata (both shaders read it).
+    pub bin_metadata: RawBufferVec<GpuBinMetadata>,
+    /// Every batch set's map from bin index to bin metadata index.
+    pub bin_indices: RawBufferVec<u32>,
+    /// The job of each `unpack_bins` workgroup.
+    pub unpacking_workgroup_jobs: RawBufferVec<u32>,
+    /// The job of each `allocate_uniforms` workgroup.
+    pub allocation_workgroup_jobs: RawBufferVec<u32>,
+    /// The scan's chunk totals, one per `allocate_uniforms` workgroup (GPU only).
+    pub fan: UninitBufferVec<u32>,
+    /// Whether any batch set has more than one 256-bin chunk, so that the
+    /// global scan and fan steps must run.
+    pub multi_chunk: bool,
+}
+
+impl Default for SceneUnpackingClassBuffers {
+    fn default() -> Self {
+        fn storage<T: NoUninit>(label: &str) -> RawBufferVec<T> {
+            let mut buffer = RawBufferVec::new(BufferUsages::STORAGE);
+            buffer.set_label(Some(label));
+            buffer
+        }
+        let mut fan = UninitBufferVec::new(BufferUsages::STORAGE);
+        fan.set_label(Some("scene unpacking fan buffer"));
+        Self {
+            jobs: storage("scene unpacking jobs"),
+            instances: storage("scene unpacking instances"),
+            bin_metadata: storage("scene unpacking bin metadata"),
+            bin_indices: storage("scene unpacking bin indices"),
+            unpacking_workgroup_jobs: storage("scene unpacking workgroup jobs"),
+            allocation_workgroup_jobs: storage("uniform allocation workgroup jobs"),
+            fan,
+            multi_chunk: false,
+        }
+    }
+}
+
+impl SceneUnpackingClassBuffers {
+    /// Empties the CPU side for a new frame (GPU buffers and the bytes last
+    /// written are kept, so an unchanged repack uploads nothing).
+    pub fn clear(&mut self) {
+        self.jobs.clear();
+        self.instances.clear();
+        self.bin_metadata.clear();
+        self.bin_indices.clear();
+        self.unpacking_workgroup_jobs.clear();
+        self.allocation_workgroup_jobs.clear();
+        self.fan.clear();
+        self.multi_chunk = false;
+    }
+
+    /// Whether no batch set was packed.
+    pub fn is_empty(&self) -> bool {
+        self.jobs.is_empty()
+    }
+
+    /// The number of `unpack_bins` workgroups to dispatch.
+    pub fn unpacking_workgroup_count(&self) -> u32 {
+        self.unpacking_workgroup_jobs.len() as u32
+    }
+
+    /// The number of workgroups each `allocate_uniforms` step dispatches.
+    pub fn allocation_workgroup_count(&self) -> u32 {
+        self.allocation_workgroup_jobs.len() as u32
+    }
+
+    /// Appends one batch set. `job` carries the batch set's own fields; the
+    /// offsets into the packed buffers and the workgroup ranges are filled in here.
+    pub fn push(
+        &mut self,
+        mut job: GpuSceneUnpackingJob,
+        instances: &[GpuRenderBinnedMeshInstance],
+        bin_metadata: &[GpuBinMetadata],
+        bin_indices: &[u32],
+    ) {
+        let index = self.jobs.len() as u32;
+        job.binned_mesh_instance_count = instances.len() as u32;
+        job.first_instance = self.instances.len() as u32;
+        job.first_bin_metadata = self.bin_metadata.len() as u32;
+        job.first_bin_index = self.bin_indices.len() as u32;
+        job.first_unpacking_workgroup = self.unpacking_workgroup_count();
+        job.first_allocation_workgroup = self.allocation_workgroup_count();
+        self.instances.values_mut().extend_from_slice(instances);
+        self.bin_metadata.values_mut().extend_from_slice(bin_metadata);
+        self.bin_indices.values_mut().extend_from_slice(bin_indices);
+        let unpacking = job.binned_mesh_instance_count.div_ceil(BIN_UNPACKING_WORKGROUP_SIZE);
+        let allocation = job
+            .bin_count
+            .div_ceil(crate::render_phase::UNIFORM_ALLOCATION_WORKGROUP_SIZE);
+        self.unpacking_workgroup_jobs
+            .values_mut()
+            .extend(core::iter::repeat_n(index, unpacking as usize));
+        self.allocation_workgroup_jobs
+            .values_mut()
+            .extend(core::iter::repeat_n(index, allocation as usize));
+        self.fan.add_multiple(allocation as usize);
+        if allocation > 1 {
+            info_once!("merged scene unpacking: a batch set of {} bins takes the multi-chunk scan", job.bin_count);
+        }
+        self.multi_chunk |= allocation > 1;
+        self.jobs.push(job);
+    }
+
+    /// Uploads what changed. An empty packed buffer gets one zeroed entry, so
+    /// that every binding exists whenever there are jobs (a batch set with bins
+    /// but no instances leaves the instances empty).
+    pub fn write(&mut self, render_device: &RenderDevice, render_queue: &RenderQueue) {
+        if self.is_empty() {
+            return;
+        }
+        fn upload<T: NoUninit + Zeroable>(
+            buffer: &mut RawBufferVec<T>,
+            render_device: &RenderDevice,
+            render_queue: &RenderQueue,
+        ) {
+            if buffer.is_empty() {
+                buffer.push(T::zeroed());
+            }
+            buffer.write_buffer_if_changed(render_device, render_queue);
+        }
+        upload(&mut self.jobs, render_device, render_queue);
+        upload(&mut self.instances, render_device, render_queue);
+        upload(&mut self.bin_metadata, render_device, render_queue);
+        upload(&mut self.bin_indices, render_device, render_queue);
+        // The tables' lengths are the dispatch sizes, so they are padded only
+        // after those were read: `allocate_uniforms` dispatches nothing for a
+        // class whose batch sets have no bins.
+        let (unpacking, allocation) = (self.unpacking_workgroup_count(), self.allocation_workgroup_count());
+        upload(&mut self.unpacking_workgroup_jobs, render_device, render_queue);
+        upload(&mut self.allocation_workgroup_jobs, render_device, render_queue);
+        self.unpacking_workgroup_jobs.truncate(unpacking as usize);
+        self.allocation_workgroup_jobs.truncate(allocation as usize);
+        if self.fan.is_empty() {
+            self.fan.add();
+        }
+        self.fan.write_buffer(render_device);
+    }
 }
 
 /// A key used to look up the bin unpacking buffers for a specific phase of a
@@ -2897,13 +3086,9 @@ pub fn write_binned_instance_buffers<BPI, GFBD>(
             })
             .or_default();
 
-        // Clear out the list of jobs.
-        view_phase_bin_unpacking_buffers
-            .indexed_unpacking_jobs
-            .clear();
-        view_phase_bin_unpacking_buffers
-            .non_indexed_unpacking_jobs
-            .clear();
+        // Clear out the packed batch sets (NVForever merged scene unpacking).
+        view_phase_bin_unpacking_buffers.indexed.clear();
+        view_phase_bin_unpacking_buffers.non_indexed.clear();
 
         // Our goal is to extract the output work item location and indirect
         // parameters info from the flat `batch_sets` list and to use it to
@@ -2942,10 +3127,9 @@ pub fn write_binned_instance_buffers<BPI, GFBD>(
         }
 
         // Now loop over all the batch sets in the phase. Look up the
-        // corresponding `BatchSetBinUnpackingMetadata`, and use it to prepare
-        // the `GpuBinUnpackingMetadata` and the `BinUnpackingJob`s. Also, kick
-        // off writes for all the associated GPU buffers that we'd been building
-        // up in earlier phases.
+        // corresponding `BatchSetSceneUnpackingMetadata` and pack the batch
+        // set into its class's buffers (NVForever merged scene unpacking). The
+        // batch sets' own buffers are CPU staging only now and never uploaded.
         for (batch_set_key, batch_set) in view_binned_render_phase.multidrawable_meshes.iter_mut() {
             let Some(representative_entity) = batch_set.representative_entity() else {
                 continue;
@@ -2957,118 +3141,39 @@ pub fn write_binned_instance_buffers<BPI, GFBD>(
                 continue;
             };
 
-            // Write the various buffers to the GPU. NVForever unchanged uploads: the three
-            // the CPU alone writes only when their bytes changed (#2064).
-
-            batch_set
-                .gpu_buffers
-                .render_binned_mesh_instance_buffer
-                .write_buffer_if_changed(&render_device, &render_queue);
-            batch_set
-                .gpu_buffers
-                .bin_metadata_buffer
-                .write_buffer_if_changed(&render_device, &render_queue);
-            batch_set
-                .gpu_buffers
-                .fan_buffer
-                .write_buffer(&render_device);
-            batch_set
-                .gpu_buffers
-                .bin_index_to_bin_metadata_index_buffer
-                .write_buffer_if_changed(&render_device, &render_queue);
-
-            let (
-                Some(render_bin_entry_buffer),
-                Some(bin_metadata_buffer),
-                Some(fan_buffer),
-                Some(bin_index_to_bin_metadata_index_buffer),
-            ) = (
-                batch_set
-                    .gpu_buffers
-                    .render_binned_mesh_instance_buffer
-                    .buffer(),
-                batch_set.gpu_buffers.bin_metadata_buffer.buffer(),
-                batch_set.gpu_buffers.fan_buffer.buffer(),
-                batch_set
-                    .gpu_buffers
-                    .bin_index_to_bin_metadata_index_buffer
-                    .buffer(),
-            )
-            else {
-                continue;
+            let job = GpuSceneUnpackingJob {
+                base_output_work_item_index: scene_unpacking_metadata.base_output_work_item_index,
+                base_indirect_parameters_index: scene_unpacking_metadata
+                    .base_indirect_parameters_index,
+                batch_set_index: scene_unpacking_metadata.batch_set_index,
+                bin_count: batch_set.bin_count() as u32,
+                first_indirect_parameters_index: scene_unpacking_metadata
+                    .first_indirect_parameters_index,
+                first_output_mesh_uniform_index: scene_unpacking_metadata
+                    .first_output_mesh_uniform_index,
+                ..default()
             };
-
-            let binned_mesh_instance_count = batch_set
-                .gpu_buffers
-                .render_binned_mesh_instance_buffer
-                .len() as u32;
-            let bin_count = batch_set.bin_count() as u32;
-
-            // Build up the `GpuBinUnpackingMetadata` for this batch set.
-            let gpu_bin_unpacking_metadata_index = bin_unpacking_buffers
-                .bin_unpacking_metadata
-                .push(GpuBinUnpackingMetadata {
-                    base_output_work_item_index: scene_unpacking_metadata
-                        .base_output_work_item_index,
-                    base_indirect_parameters_index: scene_unpacking_metadata
-                        .base_indirect_parameters_index,
-                    binned_mesh_instance_count,
-                    pad: [0; _],
-                });
-
-            // Build up the `GpuUniformAllocationMetadata` for this batch set.
-            let gpu_uniform_allocation_metadata_index = bin_unpacking_buffers
-                .uniform_allocation_metadata
-                .push(GpuUniformAllocationMetadata {
-                    batch_set_index: scene_unpacking_metadata.batch_set_index,
-                    bin_count,
-                    first_indirect_parameters_index: scene_unpacking_metadata
-                        .first_indirect_parameters_index,
-                    first_output_mesh_uniform_index: scene_unpacking_metadata
-                        .first_output_mesh_uniform_index,
-                    pad: [0; _],
-                });
-
-            let (
-                Some(gpu_bin_unpacking_metadata_index),
-                Some(gpu_uniform_allocation_metadata_index),
-            ) = (
-                NonMaxU32::new(gpu_bin_unpacking_metadata_index as u32),
-                NonMaxU32::new(gpu_uniform_allocation_metadata_index as u32),
-            )
-            else {
-                continue;
-            };
-
-            // Create the [`BinUnpackingJob`].
-            let job = SceneUnpackingJob {
-                render_binned_mesh_instance_buffer: render_bin_entry_buffer.clone(),
-                bin_metadata_buffer: bin_metadata_buffer.clone(),
-                fan_buffer: fan_buffer.clone(),
-                bin_index_to_bin_metadata_index_buffer: bin_index_to_bin_metadata_index_buffer
-                    .clone(),
-                bin_unpacking_metadata_index: BinUnpackingMetadataIndex(
-                    gpu_bin_unpacking_metadata_index,
-                ),
-                uniform_allocation_metadata_index: UniformAllocationMetadataIndex(
-                    gpu_uniform_allocation_metadata_index,
-                ),
-                mesh_instance_count: binned_mesh_instance_count,
-                bin_count,
-            };
-
-            if batch_set_key.indexed() {
-                view_phase_bin_unpacking_buffers
-                    .indexed_unpacking_jobs
-                    .push(job);
+            let class = if batch_set_key.indexed() {
+                &mut view_phase_bin_unpacking_buffers.indexed
             } else {
-                view_phase_bin_unpacking_buffers
-                    .non_indexed_unpacking_jobs
-                    .push(job);
-            }
+                &mut view_phase_bin_unpacking_buffers.non_indexed
+            };
+            let gpu_buffers = &batch_set.gpu_buffers;
+            class.push(
+                job,
+                gpu_buffers.render_binned_mesh_instance_buffer.values(),
+                gpu_buffers.bin_metadata_buffer.values(),
+                gpu_buffers.bin_index_to_bin_metadata_index_buffer.values(),
+            );
         }
-    }
 
+        view_phase_bin_unpacking_buffers
+            .indexed
+            .write(&render_device, &render_queue);
+        view_phase_bin_unpacking_buffers
+            .non_indexed
+            .write(&render_device, &render_queue);
+    }
     // Delete buffers corresponding to dead views.
     bin_unpacking_buffers
         .view_phase_buffers
@@ -3082,6 +3187,10 @@ pub fn write_binned_instance_buffers<BPI, GFBD>(
 pub fn clear_scene_unpacking_buffers(mut scene_unpacking_buffers: ResMut<SceneUnpackingBuffers>) {
     scene_unpacking_buffers.bin_unpacking_metadata.clear();
     scene_unpacking_buffers.uniform_allocation_metadata.clear();
+    for buffers in scene_unpacking_buffers.view_phase_buffers.values_mut() {
+        buffers.indexed.clear();
+        buffers.non_indexed.clear();
+    }
 }
 
 /// CPU-side metadata needed to drive the uniform allocation and bin unpacking

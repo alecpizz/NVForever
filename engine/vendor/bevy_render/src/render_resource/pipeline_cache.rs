@@ -80,9 +80,6 @@ pub(crate) mod nvf_timing {
             self.modules_after = modules();
         }
         pub(crate) fn log(&self, label: Option<&str>) {
-            if !enabled() {
-                return;
-            }
             let ms = |a: Option<Instant>, b: Option<Instant>| match (a, b) {
                 (Some(a), Some(b)) => b.saturating_duration_since(a).as_secs_f64() * 1000.0,
                 _ => 0.0,
@@ -91,6 +88,16 @@ pub(crate) mod nvf_timing {
             let naga = self.modules_after.0.saturating_sub(self.modules_before.0).as_secs_f64() * 1000.0;
             let made = self.modules_after.1.saturating_sub(self.modules_before.1);
             let shaders = ms(self.locked, self.shaders);
+            super::nvf_add_pipeline_time([
+                ms(Some(self.spawned), self.started),
+                ms(self.started, self.locked),
+                (shaders - naga).max(0.0),
+                naga,
+                ms(self.shaders, done),
+            ]);
+            if !enabled() {
+                return;
+            }
             bevy_log::info!(
                 "pipeline timing: queued {:.1} ms, lock {:.1} ms, compose {:.1} ms, naga {:.1} ms ({} modules), create {:.1} ms: {}",
                 ms(Some(self.spawned), self.started),
@@ -103,6 +110,59 @@ pub(crate) mod nvf_timing {
             );
         }
     }
+}
+
+/// NVForever pipeline timing: the time of every pipeline the game asked for and that was
+/// compiled for it (not those the pipeline list's pool built ahead), summed over the run
+/// and the threads, as `nvf_timing::Spans` splits it (#2407: player reports' loads wait for
+/// "pipelines" 15 s and more on machines whose driver cache is warm, and nothing said
+/// whether the time went waiting for a compile thread, for the shader cache's lock, in
+/// composing, in naga or in the driver). Read it twice and take [`NvfPipelineTime::since`]
+/// for a stretch of the run.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct NvfPipelineTime {
+    /// Pipelines finished.
+    pub pipelines: u64,
+    /// Milliseconds: waiting for a compile thread, for the shader cache's lock, composing,
+    /// making shader modules (naga and `vkCreateShaderModule`), and creating the pipeline
+    /// (the driver's compile, or the wait for the list's pool to hand it over).
+    pub queued_ms: f64,
+    pub lock_ms: f64,
+    pub compose_ms: f64,
+    pub naga_ms: f64,
+    pub create_ms: f64,
+}
+
+impl NvfPipelineTime {
+    /// What was added after `before`.
+    pub fn since(&self, before: &NvfPipelineTime) -> NvfPipelineTime {
+        NvfPipelineTime {
+            pipelines: self.pipelines.saturating_sub(before.pipelines),
+            queued_ms: (self.queued_ms - before.queued_ms).max(0.0),
+            lock_ms: (self.lock_ms - before.lock_ms).max(0.0),
+            compose_ms: (self.compose_ms - before.compose_ms).max(0.0),
+            naga_ms: (self.naga_ms - before.naga_ms).max(0.0),
+            create_ms: (self.create_ms - before.create_ms).max(0.0),
+        }
+    }
+}
+
+/// The sums of [`NvfPipelineTime`]: pipelines, then each part in microseconds.
+static NVF_PIPELINE_TIME: [core::sync::atomic::AtomicU64; 6] = [const { core::sync::atomic::AtomicU64::new(0) }; 6];
+
+fn nvf_add_pipeline_time(ms: [f64; 5]) {
+    use core::sync::atomic::Ordering::Relaxed;
+    NVF_PIPELINE_TIME[0].fetch_add(1, Relaxed);
+    for (slot, v) in NVF_PIPELINE_TIME[1..].iter().zip(ms) {
+        slot.fetch_add((v * 1000.0) as u64, Relaxed);
+    }
+}
+
+/// The pipeline time so far in this run ([`NvfPipelineTime`]).
+pub fn nvf_pipeline_time() -> NvfPipelineTime {
+    use core::sync::atomic::Ordering::Relaxed;
+    let us = |i: usize| NVF_PIPELINE_TIME[i].load(Relaxed) as f64 / 1000.0;
+    NvfPipelineTime { pipelines: NVF_PIPELINE_TIME[0].load(Relaxed), queued_ms: us(1), lock_ms: us(2), compose_ms: us(3), naga_ms: us(4), create_ms: us(5) }
 }
 
 /// A pipeline defining the data layout and shader logic for a specific GPU task.

@@ -83,6 +83,11 @@ pub struct Jip14State {
     /// AddNewEffect's entries, by magic item: those put at the top (newest first) and
     /// those appended.
     pub added_effects: BTreeMap<FormId, (Vec<EffectItem>, Vec<EffectItem>)>,
+    /// Signed script-level `[magnitude, area, duration]` trait overrides for `AddNewEffect`
+    /// slots, keyed by `(item, back, at)` so `SetNthEffectTraitNumeric` preserves negative
+    /// values while `EffectItem` keeps unsigned fields [observed:
+    /// `w6d2_05_nth_effect_traits_and_base_edges`; design].
+    pub added_effect_traits: BTreeMap<(FormId, bool, usize), [f64; 3]>,
     /// AddPrimitive's primitives and SetPrimitiveBound's changes, by reference.
     pub primitives: BTreeMap<FormId, ScriptPrimitive>,
     /// SetRefrModelPath's models (`None`: the base's again), by reference.
@@ -231,7 +236,7 @@ impl<'a> Game<'a> {
     /// Nth-effect function indexes this list (`EffectSlot`, #2016).
     pub fn effect_list(&self, item: FormId) -> std::borrow::Cow<'a, [EffectItem]> {
         let data: &'a crate::data::GameData = self.data;
-        let own = data.effect_items.get(&item).map(Vec::as_slice).unwrap_or(&[]);
+        let own = data.effect_items.get(&self.unclone(item)).map(Vec::as_slice).unwrap_or(&[]);
         let added = self.other.jip14.added_effects.get(&item);
         if added.is_none() && !self.other.jip11.removed_effects.contains_key(&item) {
             return std::borrow::Cow::Borrowed(own);
@@ -248,10 +253,31 @@ impl<'a> Game<'a> {
     /// effects take hold in is not the list's].
     pub fn applied_effects(&self, item: FormId) -> std::borrow::Cow<'a, [EffectItem]> {
         let data: &'a crate::data::GameData = self.data;
-        let own = data.effect_items.get(&item).map(Vec::as_slice).unwrap_or(&[]);
+        let own = data.effect_items.get(&self.unclone(item)).map(Vec::as_slice).unwrap_or(&[]);
         match self.other.jip14.added_effects.get(&item) {
             None => std::borrow::Cow::Borrowed(own),
             Some((front, back)) => std::borrow::Cow::Owned(own.iter().chain(front.iter().rev()).chain(back).cloned().collect()),
+        }
+    }
+
+    /// Snapshot `source`'s session magic-item effect list edits (`AddNewEffect`,
+    /// `RemoveNthEffect`, `SetNthEffectBase`, `SetNthEffectTraitNumeric`) onto its
+    /// `TempCloneForm` `clone` so pre-clone edits carry over while post-clone edits stay
+    /// isolated [observed: `w6d2_06_magic_effects_tempclone_isolation`; design].
+    pub(crate) fn snapshot_magic_effects(&mut self, source: FormId, clone: FormId) {
+        if let Some(added) = self.other.jip14.added_effects.get(&source).cloned() {
+            self.other.jip14.added_effects.insert(clone, added);
+        }
+        if let Some(removed) = self.other.jip11.removed_effects.get(&source).cloned() {
+            self.other.jip11.removed_effects.insert(clone, removed);
+        }
+        let bases: Vec<(usize, FormId)> = self.gaps.effect_bases.iter().filter(|(&(f, _), _)| f == source).map(|(&(_, r), &b)| (r, b)).collect();
+        for (r, b) in bases {
+            self.gaps.effect_bases.insert((clone, r), b);
+        }
+        let traits: Vec<(usize, usize, f64)> = self.effect_overrides.iter().filter(|(&(f, _, _), _)| f == source).map(|(&(_, r, t), &v)| (r, t, v)).collect();
+        for (r, t, v) in traits {
+            self.effect_overrides.insert((clone, r, t), v);
         }
     }
 
@@ -290,12 +316,59 @@ impl<'a> Game<'a> {
         self.other.jip14.added_effects.get(&item).and_then(|(f, b)| if back { b.get(at) } else { f.get(at) })
     }
 
+    /// Script-visible `[magnitude, area, duration]` trait for an `AddNewEffect` slot,
+    /// reading signed `SetNthEffectTraitNumeric` overrides before falling back to `EffectItem`.
+    pub fn added_effect_trait(&self, item: FormId, back: bool, at: usize, trait_idx: usize) -> Option<f64> {
+        let e = self.added_effect(item, back, at)?;
+        if let Some(ov) = self.other.jip14.added_effect_traits.get(&(item, back, at)) {
+            return ov.get(trait_idx).copied();
+        }
+        match trait_idx {
+            0 => Some(f64::from(e.magnitude)),
+            1 => Some(f64::from(e.area)),
+            2 => Some(f64::from(e.duration)),
+            _ => None,
+        }
+    }
+
+    /// Store a `SetNthEffectTraitNumeric` value on an `AddNewEffect` slot, keeping signed
+    /// script-visible storage alongside the clamped `u32` `EffectItem` field.
+    pub fn set_added_effect_trait(&mut self, item: FormId, back: bool, at: usize, trait_idx: usize, v: f64) {
+        if trait_idx >= 3 {
+            return;
+        }
+        let Some(e) = self.added_effect_mut(item, back, at) else { return };
+        let base = [f64::from(e.magnitude), f64::from(e.area), f64::from(e.duration)];
+        match trait_idx {
+            0 => e.magnitude = v.max(0.0) as u32,
+            1 => e.area = v.max(0.0) as u32,
+            _ => e.duration = v.max(0.0) as u32,
+        }
+        let entry = self.other.jip14.added_effect_traits.entry((item, back, at)).or_insert(base);
+        entry[trait_idx] = v;
+    }
+
     /// RemoveNthEffect on one of AddNewEffect's entries: it leaves the list.
     pub fn remove_added_effect(&mut self, item: FormId, back: bool, at: usize) {
         if let Some((f, b)) = self.other.jip14.added_effects.get_mut(&item) {
             let v = if back { b } else { f };
             if at < v.len() {
                 v.remove(at);
+                self.other.jip14.added_effect_traits.remove(&(item, back, at));
+                let shifted: Vec<(usize, [f64; 3])> = self
+                    .other
+                    .jip14
+                    .added_effect_traits
+                    .iter()
+                    .filter(|(&(i, bk, idx), _)| i == item && bk == back && idx > at)
+                    .map(|(&(_, _, idx), &vals)| (idx, vals))
+                    .collect();
+                for (idx, _) in &shifted {
+                    self.other.jip14.added_effect_traits.remove(&(item, back, *idx));
+                }
+                for (idx, vals) in shifted {
+                    self.other.jip14.added_effect_traits.insert((item, back, idx - 1), vals);
+                }
             }
         }
     }
@@ -378,7 +451,7 @@ impl<'a> Game<'a> {
             if *id != r {
                 break;
             }
-            if key.eq_ignore_ascii_case(sequence) {
+            if crate::nvse_anim::same(key, sequence) {
                 if let Some(clean) = sanitize_anim_frequency(freq) {
                     return Some(clean);
                 }
@@ -403,11 +476,11 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
         // and `w4d_16_add_new_effect_edges` (`tools/capture/nvse/catalogs/wave4d_extenders.json`,
         // #3679): n0=4 -> prepend ret=5, n=5, e0=00066EB8, e1=0000014E; duplicate append
         // ret=5, n=6, last=00066EB8; non-MGEF ret=-1, n=6; no DLL or source consulted];
-        // for the session [hypothesis: the page says nothing of saving].
+        // for the session (see docs/spec-notes/jip-last-14.md §1).
         "addneweffect" => {
             let (Some(item), Some(mgef), Some(dur), Some(mag)) = (form(args, 0), form(args, 1), num(args, 2), num(args, 3)) else { return Some(Ok(XVal::Num(-1.0))) };
-            let kind_ok = g.data.sig(item).is_some_and(|s| MAGIC_ITEMS.contains(&&s));
-            if !kind_ok || g.data.sig(mgef) != Some(*b"MGEF") {
+            let kind_ok = g.data.sig(g.unclone(item)).is_some_and(|s| MAGIC_ITEMS.contains(&&s));
+            if !kind_ok || g.data.sig(g.unclone(mgef)) != Some(*b"MGEF") {
                 return Some(Ok(XVal::Num(-1.0)));
             }
             // [decision: the range is not kept, as NVForever's effect entries have none]
@@ -517,7 +590,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
             zero
         }
         // At the node's place in the reference's 3D [documented]; at the reference while
-        // its 3D is not known yet [hypothesis].
+        // its 3D is not known yet (see docs/spec-notes/jip-last-14.md §3).
         "playsound3dnode" => {
             let (Some(r), Some(s), Some(node)) = (subject, form(args, 0), text(args, 1)) else { return Some(Ok(zero)) };
             let point = node_place(g, r, &node, true).map(|(p, _)| p);
@@ -526,7 +599,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
         }
         // Whether the actor wobbles its gun [documented: ToggleNoGunWobble, alias
         // SetNoGunWobble, "0/1"]: 1, or no argument as the page's example, no wobble; 0
-        // the wobble again [hypothesis: 1 is "no wobble", by the name]. The catalogue's
+        // the wobble again (see docs/spec-notes/jip-last-14.md §3). The catalogue's
         // parameter has no name and does not reach here yet (a follow-up): every call
         // switches the wobble off.
         "setnogunwobble" => {
@@ -597,8 +670,8 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
             zero
         }
         // The weapon that fired the live projectile [documented]; the shot's record, read
-        // by the projectile getters and at the impact [hypothesis: what the impact
-        // inherits]. Returns the weapon.
+        // by the projectile getters and at the impact (see docs/spec-notes/jip-last-14.md §5).
+        // Returns the weapon.
         "setprojectilerefweapon" => {
             let (Some(r), Some(w)) = (subject, form(args, 0)) else { return Some(Ok(XVal::Ref(0))) };
             match g.gaps.projs.shots.get_mut(&r) {
@@ -620,15 +693,22 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
             None => return Some(Err(fnv_script::vm::VmError::NoReference(name.to_string()).to_string())),
         },
         // ---- animation sequences ----
-        // The frequency a script set; else 1 for a sequence of the drawn model [hypothesis:
-        // a sequence's own is 1 unless its file says otherwise]; -1 for a sequence the
+        // The frequency a script set; else 1 for a sequence of the drawn model (see
+        // docs/spec-notes/jip-last-14.md §4); -1 for a sequence the
         // model lacks [observed: jip14 seqfreq.doc]. Drawn object sequences are played at
         // this frequency by `nvforever::object_anims` (actor `.kf` paths remain stored
         // only [design]).
         // [decision: only drawn objects' sequences are told by the engine; an actor's
         // animation files are not, so an actor's unset sequence is -1]
+        // "*" is a setter-only wildcard and is not a queryable sequence name: querying "*"
+        // returns -1.0 even after `SetAnimSequenceFrequency "*" 1.5` [observed: Fallout: New
+        // Vegas 1.4.0.525 + xNVSE 6.4.9 + JIP LN 57.30, 2026-11-24, `GSDocMitchellHouse`
+        // (`0x00103DF9`), 10 official base masters, `w4c_b1_22_sound3d_anim_freq`].
         "getanimsequencefrequency" | "getanimseqfreq" => {
             let (Some(r), Some(s)) = (subject, text(args, 0)) else { return Some(Ok(zero)) };
+            if s == "*" {
+                return Some(Ok(XVal::Num(-1.0)));
+            }
             let lower = s.to_ascii_lowercase();
             let has = g.other.jip14.sequences.get(&r).is_some_and(|n| n.contains(&lower));
             XVal::Num(match g.anim_frequency(r, &s) {
@@ -642,6 +722,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
         "setanimsequencefrequency" | "setanimseqfreq" => {
             let (Some(r), Some(s), Some(f)) = (subject, text(args, 0), num(args, 1)) else { return Some(Ok(zero)) };
             let Some(freq) = sanitize_anim_frequency(f.max(0.0) as f32) else { return Some(Ok(zero)) };
+            g.flush_script_sequence_clocks(r);
             g.other.jip14.anim_freq.insert((r, s.to_ascii_lowercase()), freq);
             zero
         }

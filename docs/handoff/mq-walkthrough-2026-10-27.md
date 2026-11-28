@@ -525,16 +525,20 @@ Jules' Topic007 borrow another topic's line (INFC/INFX).
    old-world-blues and the chains that copy its start talk to Dr. Klein in the same second
    the quest starts; MQ01 reaches 100 before its 5 s script has run, so the Act XP values and
    NVDLC03Enc 10 are never set there. old-world-blues-setups spends 6 s first and reaches
-   them [observed]. Observer check 43.
+   them [observed]. Observer check 43. **The original's too (#1113)**: started and set to
+   100 at once, MQ01's script never runs there either (o34_43, 2026-11-26).
 3. **Soft: `RemoveItem x 0` is refused** (Loyal's reward line, INFO 0x0010A1BF, when the
    arrays were fixed by hand). Not blocking. Observer check 44. **Fixed (#1113)**: the
    original removes nothing and goes on (o5_00); ours does the same.
 4. **Soft:** a second Nelson explorer force-greets at once (the any-distance
    StartConversation stall, check 45; since #1113 it finds no greeting, the explorers'
-   0x0014E9FF being Say Once and held for every actor once said, check 31); the HELIOS One west-terminal password lands on
-   Fantastic as the speaker (check 46); Kilborn's conversation ends when stage 100 stops
+   0x0014E9FF being Say Once and held for every actor once said, check 31; answered: in the
+   original the far explorers do not come at all, #4919); the HELIOS
+   One west-terminal password was the walkthrough's own (check 46, #1113: it comes with
+   Fantastic's GOODBYE line, and the chain now says goodbye and finds the note with the
+   player); Kilborn's conversation ends when stage 100 stops
    vNiptonVulpes: every line he has as a fixed speaker is that quest's, so nothing is left
-   to offer and ours closes it, as dialogue.md's [hypothesis] says (check 72). Two are the
+   to offer and ours closes it, as the original does (check 72, answered 2026-11-26). Two are the
    data's own (#1113) [observed]: Doctors 30's line (DoctorRadiationYES 0x000BE417, Info
    Refusal, no conditions) can be said by no placed actor: Doctors' quest conditions ask
    for DoctorsDialogueFaction and not Doc Mitchell's voice type 0x0010512F; of the
@@ -608,7 +612,8 @@ chains using the op still pass.
    (VMS31 60, check 50); Jed and the caravan guards are essential until stage 100, so
    NVDLC02MQ00 255 cannot be reached; CGTutorial 214 counts only markers play discovers.
 4. **Soft:** Oliver's Topic065 has two lines with the same conditions; ours always says
-   0x00159932, so his retreat lines are never offered (check 48). EDEScript calls on an
+   0x00159932, so his retreat lines are never offered (check 48: the original says
+   0x00159932 too, the data's own, #1113). EDEScript calls on an
    empty reference every frame: the original does not short-circuit `&&` either (check 51);
    since #1112 the failure is traced once.
 

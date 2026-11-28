@@ -101,6 +101,12 @@ pub struct PhysState {
     /// Placed references whose pose [`PhysState::settle_placed`] wrote to the simulation
     /// this frame (for `crate::moved`).
     pub moved_now: Vec<u32>,
+    /// Placed references whose pose another game owns: a co-op guest's copies of what the
+    /// host's world moves (`nvforever::coop::replication`). [`PhysState::settle_placed`]
+    /// does not write them back, so this game's own simulation of them never overrides
+    /// the host's pose; their collision is built again where the host puts them. Always
+    /// empty outside co-op.
+    pub follow_only: BTreeSet<u32>,
     /// Placed clutter and dropped items drawn between physics steps this frame
     /// ([`PhysState::drawn_ref_pose`]).
     pub between: DrawnBetween,
@@ -148,6 +154,10 @@ pub struct PhysState {
     /// landscape, and how far below them the body is drawn
     /// ([`PhysState::standing_drawn_feet`]).
     standing: HashMap<u32, ([f32; 3], bool, f32)>,
+    /// Named NVForever option `sneak-bounding-box` (off by default; #3845): shrink crouch
+    /// collider height for the player and crouching human companions, synced live from
+    /// `crate::player::SneakBoundingBox`.
+    pub sneak_bounding_box_fix: bool,
     /// Where each actor's character stood, and how far below it its body was drawn, when
     /// the character was taken away ([`PhysState::remove_npc`]): feet still there came
     /// from physics and are drawn as the character was, never lifted onto the landscape
@@ -226,6 +236,7 @@ impl Default for PhysState {
             created: BTreeMap::new(),
             placed_dynamic: BTreeMap::new(),
             moved_now: Vec::new(),
+            follow_only: BTreeSet::new(),
             between: DrawnBetween::default(),
             doors: BTreeMap::new(),
             animated: BTreeMap::new(),
@@ -241,6 +252,7 @@ impl Default for PhysState {
             actor_heights: HashMap::new(),
             actor_block_radii: HashMap::new(),
             standing: HashMap::new(),
+            sneak_bounding_box_fix: false,
             left: HashMap::new(),
             stats: PhysStats::default(),
             prev_feet: [0.0; 3],
@@ -362,6 +374,11 @@ pub struct NpcBody {
     pub sink: f32,
     /// Drawn above that after a step or a bump ([`step_lift::StepLift`]).
     pub lift: step_lift::StepLift,
+    /// Standing capsule height (for optional `sneak-bounding-box` crouch resizing, #3845).
+    pub standing_height: f32,
+    /// Whether this actor is a crouching human companion whose capsule should shrink under
+    /// `sneak-bounding-box` (synced live from `Game` by `crate::player::sync_sneak_bounding_box`).
+    pub sneak_crouch: bool,
 }
 
 /// Why [`PhysState::npc_spot`] found no place.
@@ -737,9 +754,10 @@ impl PhysState {
     ///
     /// A child worldspace (WRLD `WNAM`) takes land, water and other data from its parent
     /// by its `PNAM` flags; the world index has followed them already
-    /// (`fnv_world::WorldIndex::take_parent_data`, #2345: a cell without LAND has its
-    /// parent's, the default heights and water type are the parent's where the child has
-    /// none), so the records read here are the ones to use. Logged once per start of
+    /// (`fnv_world::WorldIndex::take_parent_data`, #2345: a cell has its parent's LAND
+    /// where the parent has one, its own too since #3755; the default heights and water
+    /// type are the parent's where the child has none), so the records read here are the
+    /// ones to use. Logged once per start of
     /// play in such a worldspace.
     ///
     /// The first time a worldspace is played its reach index is built
@@ -1339,6 +1357,19 @@ impl PhysState {
         }
     }
 
+    /// Where a reference with one dynamic body is now, by its body (position and angles,
+    /// as the settle write-back would put them), and whether the body sleeps. Co-op
+    /// replication sends a guest's carried object to the host with it.
+    pub fn ref_pose_now(&self, id: u32) -> Option<([f32; 3], [f32; 3], bool)> {
+        let (local, scale) = match self.created.get(&id) {
+            Some(cb) => cb.local.filter(|_| cb.dynamic).map(|l| (l, 1.0))?,
+            None => self.placed_dynamic.get(&id).map(|p| (p.local, p.scale))?,
+        };
+        let b = self.world.ref_bodies(id).first().copied()?;
+        let (pos, rot) = dropped::ref_pose_from_body(&b, &local, scale);
+        Some((pos, ref_angles(&rot), b.sleeping))
+    }
+
     /// A script moved or turned reference `id` (SetPos, SetAngle, Rotate, SetScale, the
     /// console's too) at time `now` (seconds): its collision is built again at the
     /// simulation's pose when it is not there already.
@@ -1710,6 +1741,9 @@ impl PhysState {
     pub fn settle_placed(&mut self, sim: &mut World) -> Vec<u32> {
         let mut changed = Vec::new();
         for (&id, p) in self.placed_dynamic.iter_mut() {
+            if self.follow_only.contains(&id) {
+                continue;
+            }
             let Some(b) = self.world.ref_bodies(id).first().copied() else { continue };
             if b.sleeping && !p.moved {
                 continue;
@@ -1760,7 +1794,8 @@ impl PhysState {
         ch.ignore_layers = fnv_phys::layers::character_ignores().union(fnv_phys::layers::actor_volumes());
         // A stuck actor's move is not swept again every step (`fnv_phys` `Held`, issue #1797).
         ch.hold_when_stuck = true;
-        let mut b = NpcBody { prev_feet: ch.feet, ch, velocity: [0.0, 0.0], jump: false, sink: 0.0, lift: Default::default() };
+        let standing_height = ch.params.height;
+        let mut b = NpcBody { prev_feet: ch.feet, ch, velocity: [0.0, 0.0], jump: false, sink: 0.0, lift: Default::default(), standing_height, sneak_crouch: false };
         b.sink = drawn_sink(&b.ch, self.drawn_ground(&b.ch));
         self.npcs.insert(id, b);
         true

@@ -38,7 +38,12 @@ behind the screen).
    screen), the pipelines they are drawn with are ready (`pipeline_gate.rs`, reported
    through `Loading::pipelines_busy`, #1520), and that has been so
    for 0.25 s and 3 frames (`SETTLE_SECS`, `SETTLE_FRAMES`: time for textures and meshes
-   to reach the graphics card). `PlayState` returns to `Playing`, the clock runs again.
+   to reach the graphics card). With Volumetric clouds on, a screen that has settled stays up
+   until every texel of their picture has been cast (`Loading::clouds_busy`, nvforever `medium.rs`
+   `clouds_wait`: drawn from nine casts since the last history cut, three frames in a row), but never
+   past 1 s from when all else was in (`CLOUDS_HOLD_SECS`, the settle time counted) [design]:
+   volumetric-medium.md "Under a loading screen". `PlayState` returns to `Playing`, the clock
+   runs again.
 6. If loading has not finished after 120 s (`TIMEOUT_SECS`) the screen comes down with a
    warning, so an unattended run cannot hang there.
    Pipelines have a shorter limit of their own: 15 s (`PIPELINE_CAP_SECS`) once they alone
@@ -55,7 +60,7 @@ behind the screen).
 
 7. Where the time went (#2407): when the screen comes down, `loading screen phases: up
    <s> s; <wait> <s> s, ...; longest frame <s> s of <n>; read <files> files, <MB> MB, <s> s
-   reading, <s> s queued for an archive` (`LoadPhases`). Each wait (step 5's, plus the
+   reading, <s> s queued for an archive` (`LoadPhases`). Each wait (step 5's, `the clouds` among them, plus the
    start's scripts, its residents to draw, `actors to place` (§1a), and Pip-Boy warm-up,
    and the two frames before the travel goes out) is
    given the time from the screen coming up to the last frame it was still missing, so
@@ -321,7 +326,8 @@ cancellation and a cold New Game gift at 16:9 and 4:3 after this review revision
   screen up and clock paused before the travel goes out, held while the renderer is busy,
   down and playing again after; held while actors are read; the start's screen and its
   clock; a travel under the start's screen; the start held while residents in view are to
-  place, not with the aid, and let go at the cap, counted only while they may be drawn), `loading_look::tests` (the tip's box and band
+  place, not with the aid, and let go at the cap, counted only while they may be drawn; the clouds'
+  hold and its limit, which never hangs a screen), `loading_look::tests` (the tip's box and band
   and the emblem's place at 1280x720 and 1280x1024, its turning).
 - `nvforever`: `residents::tests` (the start's residents drawn where the AI takes them up,
   the frame's budget, the aid).

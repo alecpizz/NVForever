@@ -55,6 +55,13 @@ impl Game<'_> {
         r != FormId::PLAYER_REF && self.extra.get(&r).is_some_and(|e| e.teammate && !e.dead)
     }
 
+    /// Whether `actor` resolves to an `NPC_` record (including placed `LVLN` leveled NPCs,
+    /// without following actor templates; same resolver as `nvse_nx::is_creature`).
+    pub fn is_human_npc(&self, actor: FormId) -> bool {
+        let Some(base) = crate::functions::base_of(self, actor) else { return false };
+        self.template_source(base, actor, |_| false).is_some_and(|(_, d)| &d.sig == b"NPC_")
+    }
+
     /// Companion Nerve of `actor`: for a teammate, the share its damage and armour go up
     /// by, 0.05 per point of the player's Charisma (0.25 at 5, 0.5 at 10) [documented:
     /// Fallout Wiki, Fallout: New Vegas derived statistics, "(CHA × 5)%"; Charisma (Fallout:
@@ -63,6 +70,10 @@ impl Game<'_> {
     /// player's current Charisma within 1 to 10 [hypothesis: current, not permanent, as
     /// the other derived statistics here, docs/spec-notes/actor-values.md §1].
     pub fn companion_nerve(&mut self, actor: FormId) -> f64 {
+        // In co-op the player is the other players' companion (`crate::coop_perks`).
+        if actor == FormId::PLAYER_REF {
+            return self.coop_from_others.nerve;
+        }
         if !self.is_teammate(actor) {
             return 0.0;
         }
@@ -92,12 +103,15 @@ impl Game<'_> {
             .extra
             .iter()
             .filter_map(|(&actor, e)| {
-                if actor == leader || actor == FormId::PLAYER_REF || e.dead || !self.present(actor) {
+                if actor == leader || actor == FormId::PLAYER_REF || e.dead {
                     return None;
                 }
                 let pkg = e.current_package?;
                 let def = self.package_def(&pkg)?;
-                (matches!(def.ty, PackageType::Follow | PackageType::Accompany) && self.package_target(actor, def) == Some(leader)).then_some(actor)
+                if !matches!(def.ty, PackageType::Follow | PackageType::Accompany) {
+                    return None;
+                }
+                (self.present(actor) && self.package_target(actor, def) == Some(leader)).then_some(actor)
             })
             .collect();
         out.sort_unstable();

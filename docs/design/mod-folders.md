@@ -104,9 +104,9 @@ into the profile; a save is only ever written to NVForever's own folder.
   instance's own settings) are not read: a profile with neither the key nor its folder/copies
   is taken as off.
 - **The INI text the game reads**, lowest precedence first:
-  1. `<profile>/Fallout.ini`, then `<profile>/FalloutPrefs.ini` — the profile's own copies,
-     only with local settings on. The prefs file wins a key in both, as the game reads it
-     after `Fallout.ini`.
+  1. `<profile>/Fallout.ini`, then `<profile>/FalloutPrefs.ini`, then
+     `<profile>/FalloutCustom.ini` — the profile's own copies, only with local settings on.
+     A later file wins a key in several, as the game reads them in that order (#4491).
   2. `<profile>/initweaks.ini` — MO2 rewrites this file from the enabled mods' INI tweaks in
      priority order plus the profile's own, and adds `[Archive] bInvalidateOlderFiles=1`
      [documented: MO2 `Profile::createTweakedIniFile`]. Its keys sit above the INIs'.

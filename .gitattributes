@@ -5,3 +5,9 @@ tools/smoke/scenarios.toml merge=smoke-scenarios
 
 # NVIDIA's licence text, kept byte for byte (its SHA-256 is pinned by a test): no line-ending conversion.
 engine/nvforever/src/dlss_download/nvngx_dlss.license.txt -text
+
+# Published Rapier sources and licence retain their reviewed bytes on Windows too.
+vendor/rapier3d/** -text
+
+# Preserve exact upstream winit archive bytes.
+engine/vendor/winit/** -text

@@ -213,6 +213,7 @@ pub fn update_point_light_bounding_spheres(
 pub fn update_point_light_frusta(
     mut views: Query<
         (
+            Entity,
             &GlobalTransform,
             &PointLight,
             &mut CubemapFrusta,
@@ -224,19 +225,26 @@ pub fn update_point_light_frusta(
             Changed<ViewVisibility>,
         )>,
     >,
+    // NVForever shown shadow lights (lib.rs `NvfShadowLightsShown`, engine/vendor/README.md).
+    nvf_shown: Option<Res<crate::NvfShadowLightsShown>>,
 ) {
     let view_rotations = CUBE_MAP_FACES
         .iter()
         .map(|CubeMapFace { target, up }| Transform::IDENTITY.looking_at(*target, *up))
         .collect::<Vec<_>>();
 
-    for (transform, point_light, mut cubemap_frusta, view_visibility) in &mut views {
+    for (entity, transform, point_light, mut cubemap_frusta, view_visibility) in &mut views {
         // The frusta are used for culling meshes to the light for shadow mapping
         // so if shadow mapping is disabled for this light, then the frusta are
         // not needed.
         // Also, if the light is not relevant for any cluster, it will not be in the
         // global lights set and so there is no need to update its frusta.
-        if !point_light.shadow_maps_enabled || !view_visibility.get() {
+        // NVForever shown shadow lights: a light the game shows is not visible yet here
+        // (`check_point_light_mesh_visibility` marks it, after this system), and one no
+        // camera ever saw would keep the default frusta, which cull every caster: its maps
+        // were drawn empty (2026-11-25).
+        let nvf_shown = nvf_shown.as_deref().is_some_and(|shown| shown.lights.contains(&entity));
+        if !point_light.shadow_maps_enabled || !(view_visibility.get() || nvf_shown) {
             continue;
         }
 

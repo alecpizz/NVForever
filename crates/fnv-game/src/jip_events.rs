@@ -215,8 +215,6 @@ pub struct MainLoop {
     pub flags: u32,
     pub due: u64,
     pub(crate) seq: u64,
-    /// Quantized game clock at registration or the last actual invocation.
-    pub(crate) last_clock: f64,
 }
 
 impl MainLoop {
@@ -244,7 +242,14 @@ fn slots(event: &str) -> &'static [Slot] {
         "hit" | "healthdamage" | "crippledlimb" | "fireweapon" | "projectileimpact" => &[Slot::On],
         "animaction" | "playgroup" => &[Slot::On, Slot::ExactArg(0)],
         "criticalhit" => &[Slot::On, Slot::Arg(0), Slot::Arg(1)],
-        "queststage" => &[Slot::Arg(0), Slot::Arg(1)],
+        // Stage 0 matches only stage 0, not every stage [observed: 2026-11-24, Fallout:
+        // New Vegas 1.4.0.525, xNVSE 6.4.9, JIP LN 57.30, GSDocMitchellHouse (0x00103DF9),
+        // 10 official base masters,
+        // `tools/capture/nvse/catalogs/wave6d1_jip_quest_stage_exact_and_dup.json` probe
+        // `w6d1_23_jip_quest_stage_and_skip_script`:
+        // `ret=1,0,1,0|n1=1,n2=0|s0=1,qOk=1,arg=10,in=10,post=10`; no DLL, PDB, or
+        // third-party source consulted].
+        "queststage" => &[Slot::Arg(0), Slot::ExactArg(1)],
         "controldown" | "controlup" | "triggerdown" | "triggerup" => &[Slot::ExactArg(0)],
         "useaiditem" | "dialogtopic" | "keydown" | "keyup" | "menuopen" | "menuclose" | "mouseoverchange" => &[Slot::Arg(0)],
         _ => &[],
@@ -315,7 +320,15 @@ impl Game<'_> {
         };
         if add {
             if self.jip.handlers.iter().any(same) {
-                return true;
+                // `SetOnQuestStageEventHandler` returns 0 on duplicate registration
+                // [observed: 2026-11-24, Fallout: New Vegas 1.4.0.525, xNVSE 6.4.9,
+                // JIP LN 57.30, GSDocMitchellHouse (0x00103DF9), 10 official base masters,
+                // `tools/capture/nvse/catalogs/wave6d1_jip_quest_stage_exact_and_dup.json`
+                // probe `w6d1_23_jip_quest_stage_and_skip_script`:
+                // `ret=1,0,1,0|n1=1,n2=0|s0=1,qOk=1,arg=10,in=10,post=10`; no DLL, PDB, or
+                // third-party source consulted]. Other JIP event handlers keep returning 1
+                // on duplicate registration unless probed individually.
+                return event != "queststage";
             }
             self.jip.seq += 1;
             let seq = self.jip.seq;
@@ -381,7 +394,6 @@ impl Game<'_> {
             flags,
             due: self.frame + delay,
             seq,
-            last_clock: crate::functions::clock_now(self.time),
         });
         if let Some(registrar) = registrar {
             self.jip.registrars.insert(seq, registrar);
@@ -455,7 +467,7 @@ impl Game<'_> {
             .filter_map(|h| {
                 let matched = match h.filters.first() {
                     None => Some(topic_val.clone()),
-                    Some(f) if self.jip_wildcard(f) => Some(topic_val.clone()),
+                    Some(f) if self.jip_wildcard("dialogtopic", f) => Some(topic_val.clone()),
                     Some(f) if self.filter_matches(f, &info_val, false) => Some(info_val.clone()),
                     Some(f) if self.filter_matches(f, &topic_val, false) => Some(topic_val.clone()),
                     Some(_) => None,
@@ -509,7 +521,7 @@ impl Game<'_> {
 
     fn jip_matches(&self, h: &JipHandler, on: Option<FormId>, args: &[XVal]) -> bool {
         slots(&h.event).iter().zip(&h.filters).all(|(s, f)| {
-            if !matches!(s, Slot::ExactArg(_)) && self.jip_wildcard(f) {
+            if !matches!(s, Slot::ExactArg(_)) && self.jip_wildcard(&h.event, f) {
                 return true;
             }
             let v = match s {
@@ -520,12 +532,24 @@ impl Game<'_> {
         })
     }
 
-    /// A filter that lets everything through: none (0), XMarker, or an empty form list
-    /// [documented: SetOnAnimActionEventHandler, an empty list means any actor].
-    fn jip_wildcard(&self, f: &XVal) -> bool {
+    /// A filter that lets everything through: none (0), an empty form list
+    /// [documented: SetOnAnimActionEventHandler, an empty list means any actor],
+    /// or `XMarker` (`0x3B`) strictly for `SetOnCriticalHitEventHandler` where 0 is
+    /// refused [documented: SetOnCriticalHitEventHandler; observed: 2026-11-24,
+    /// Fallout: New Vegas 1.4.0.525, xNVSE 6.4.9, JIP LN 57.30, GSDocMitchellHouse
+    /// (0x00103DF9), 10 official base masters,
+    /// `tools/capture/nvse/catalogs/wave6d1_jip_xmarker_wildcard_scope.json` probes
+    /// `w6d1_21_jip_health_damage_filters_dups_rem` (`xm=0`),
+    /// `w6d1_22_jip_use_aid_item_filters` (`xm=0`),
+    /// `w6d1_24_jip_anim_action_and_play_group` (`draw(1,0,0)|jam(1,1,0)`), and
+    /// `w6d1_25_jip_crippled_limb_and_note_added` (`xm=0`); no DLL, PDB, or
+    /// third-party source consulted; design: other unprobed JIP events also exclude
+    /// `XMarker` wildcard].
+    fn jip_wildcard(&self, event: &str, f: &XVal) -> bool {
         match f {
             XVal::Num(x) => *x == 0.0,
-            XVal::Ref(0) | XVal::Ref(XMARKER) => true,
+            XVal::Ref(0) => true,
+            XVal::Ref(XMARKER) => event == "criticalhit",
             XVal::Ref(r) => self.jip_empty_form_list(FormId(*r)),
             _ => false,
         }
@@ -836,7 +860,12 @@ impl Game<'_> {
     /// When `dedup_same_frame` is true (`Game::projectile_fired`), skip if
     /// `(self.frame, actor, weapon)` already fired this frame so a player shot
     /// (`weapon_fired` followed by `projectile_fired`) or a multi-pellet shotgun burst
-    /// fires once per round [hypothesis].
+    /// fires once per round [hypothesis]. Player normal firing (`so=1,jp=1`) and player
+    /// god-mode suppression (`so=1,jp=0`) are [observed 2026-11-24: Fallout: New Vegas
+    /// 1.4.0.525 + xNVSE 6.4.9 + JIP LN 57.30 + ShowOffNVSE 184, 10 official base masters,
+    /// `GSDocMitchellHouse`, committed probe `w6t2p3_04_fire_god_melee`
+    /// (`tools/capture/nvse/catalogs/wave6_t2_observed_matches.json`):
+    /// `norm(so=1,jp=1)|god(so=1,jp=0)|melee(so=1,jp=1)`].
     pub(crate) fn fire_weapon_jip_event(&mut self, actor: FormId, weapon: FormId, dedup_same_frame: bool) -> usize {
         let is_actor = actor == FormId::PLAYER_REF
             || matches!(
@@ -887,12 +916,12 @@ impl Game<'_> {
             .filter(|m| m.due <= frame && m.flags & want != 0)
             .map(|m| (m.clone(), self.jip.registrars.get(&m.seq).cloned()))
             .collect();
+        // Main-loop callbacks observe the single-frame delta, not accumulated time across
+        // skipped callDelay frames [observed: w4g_03_jip_callback_getsecondspassed].
+        let seconds = self.stateless_udf_seconds();
         for (m, registrar) in due {
-            let now = crate::functions::clock_now(self.time);
-            let seconds = (now - m.last_clock).max(0.0);
             for x in self.jip.main_loop.iter_mut().filter(|x| x.func == m.func && x.on == m.on) {
                 x.due = frame + x.delay;
-                x.last_clock = now;
             }
             let on = m.on.unwrap_or(FormId::PLAYER_REF);
             let ctx = RunCtx { self_ref: Some(on), ..RunCtx::default() };

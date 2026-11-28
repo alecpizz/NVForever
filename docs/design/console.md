@@ -183,7 +183,7 @@ menu words `delete`, `depth`, `front`, `iso`, `reload`, `stack`,
 `use`, `usz`, `visible` [hypothesis for each: from its catalogue summary; revisit one
 when a player or a capture campaign asks for it].
 
-**The other 77** are script functions no master calls, many listed by the wiki as
+**The other 76** are script functions no master calls, many listed by the wiki as
 unused in New Vegas (`ModPCSkill`, `GetFactionReaction`, …) or as conditions with an opcode
 (`GetGold`, …). `GetCurrentWeatherPercent`, `IsSnowing`,
 `IsPleasant` and `IsCloudy` now read the reported weather sample and are no longer
@@ -192,7 +192,7 @@ the existing source compiler fallback; `AdvancePCLevel` was already excluded as 
 engine word. The expected source census was 33/90, then 33/85; 33/77 since #3615
 (2026-11-23) registered eight base-game functions players' games call (SameFaction,
 SameSex, HasFriendDisposition, GetFatiguePercentage, GetTimeDead, GetLastHitCritical,
-GetIsObjectType, GetVampire). All four console controls,
+GetIsObjectType, GetVampire); 33/76 since #3787 registered SameSexAsPC. All four console controls,
 including that census, passed in hosted checkout `098f6d07` (parents `72b385a5`,
 `c7aa2c76`; [run](https://github.com/LootJunkieAzza/NVForever/actions/runs/44168232041)).
 Earlier partial results remain recorded in PR #2772. Native

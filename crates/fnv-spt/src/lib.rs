@@ -10,7 +10,7 @@ pub mod generate;
 pub mod probe;
 
 pub use curve::Curve;
-pub use generate::{generate, Geometry, Leaf};
+pub use generate::{canopy_normals, generate, Geometry, Leaf};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum SptError {

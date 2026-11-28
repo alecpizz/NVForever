@@ -795,6 +795,10 @@ where
 {
     /// Information that we use to identify a cached entity in a bin.
     pub cached_bin_key: Option<CachedBinKey<BPI>>,
+    /// NVForever kept shadow phases (engine/vendor/README.md): the input uniform index the
+    /// entity was binned with (`add`), so a phase kept without its view can tell an entity
+    /// whose mesh instance was dropped and made again (a new index) from one still good.
+    pub nvf_input_uniform_index: InputUniformIndex,
 }
 
 /// Information that we use to identify a cached entity in a bin.
@@ -818,6 +822,7 @@ where
     fn clone(&self) -> Self {
         CachedBinnedEntity {
             cached_bin_key: self.cached_bin_key.clone(),
+            nvf_input_uniform_index: self.nvf_input_uniform_index,
         }
     }
 }
@@ -1152,6 +1157,10 @@ where
                 phase_type,
             }),
         );
+        // NVForever kept shadow phases: the index it was binned with.
+        if let Some(cached) = self.cached_entity_bin_keys.get_mut(&main_entity) {
+            cached.nvf_input_uniform_index = input_uniform_index;
+        }
     }
 
     /// Inserts an entity into the cache with the given change tick.
@@ -1160,7 +1169,10 @@ where
         main_entity: MainEntity,
         cached_bin_key: Option<CachedBinKey<BPI>>,
     ) {
-        let new_cached_binned_entity = CachedBinnedEntity { cached_bin_key };
+        let new_cached_binned_entity = CachedBinnedEntity {
+            cached_bin_key,
+            nvf_input_uniform_index: InputUniformIndex::default(),
+        };
         self.cached_entity_bin_keys
             .insert(main_entity, new_cached_binned_entity);
     }
@@ -1429,14 +1441,20 @@ where
         self.cached_entity_bin_keys.contains_key(&main_entity)
     }
 
-    /// NVForever kept shadow phases: removes every binned entity `keep` refuses, as
-    /// [`Self::remove`] does, and returns how many went.
-    pub fn nvf_retain_binned(&mut self, mut keep: impl FnMut(MainEntity) -> bool) -> usize {
+    /// NVForever kept shadow phases: how many entities are binned.
+    pub fn nvf_binned_len(&self) -> usize {
+        self.cached_entity_bin_keys.len()
+    }
+
+    /// NVForever kept shadow phases: removes every binned entity `keep` refuses (it is given
+    /// the entity and the input uniform index it was binned with), as [`Self::remove`] does,
+    /// and returns how many went.
+    pub fn nvf_retain_binned(&mut self, mut keep: impl FnMut(MainEntity, InputUniformIndex) -> bool) -> usize {
         let gone: Vec<MainEntity> = self
             .cached_entity_bin_keys
-            .keys()
-            .copied()
-            .filter(|main_entity| !keep(*main_entity))
+            .iter()
+            .filter(|(main_entity, cached)| !keep(**main_entity, cached.nvf_input_uniform_index))
+            .map(|(main_entity, _)| *main_entity)
             .collect();
         for main_entity in &gone {
             self.remove(*main_entity);

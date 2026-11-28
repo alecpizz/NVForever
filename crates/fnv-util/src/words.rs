@@ -191,6 +191,33 @@ pub fn for_code_page(page: CodePage) -> Option<&'static str> {
     }
 }
 
+/// The code page of the game's text and the language of NVForever's own words for the
+/// language Steam installed the game in (a Steamworks language name, lower case, as
+/// `fnv_install::steam::manifest_language` reads it) (#1443). It tells the languages the
+/// text cannot: Windows-1252 is English, French, German, Italian or Spanish, and 1250 is
+/// Polish, Czech or Hungarian [documented: the Windows code pages' scripts]; the words'
+/// language is the one of the shipped files (`lang/`), none for English and for 1250's.
+/// `None`: a name this build does not know.
+pub fn for_steam_language(name: &str) -> Option<(CodePage, Option<&'static str>)> {
+    Some(match name.trim().to_ascii_lowercase().as_str() {
+        "english" => (CodePage::Windows1252, None),
+        "german" => (CodePage::Windows1252, Some("de")),
+        "french" => (CodePage::Windows1252, Some("fr")),
+        "italian" => (CodePage::Windows1252, Some("it")),
+        "spanish" | "latam" => (CodePage::Windows1252, Some("es")),
+        "russian" => (CodePage::Windows1251, Some("ru")),
+        "polish" | "czech" | "hungarian" => (CodePage::Windows1250, None),
+        _ => return None,
+    })
+}
+
+/// At the start, before NVForever.ini's rows are applied: choose `id` (the language Steam
+/// installed the game in, [`for_steam_language`]) when a file of it was read. The id
+/// chosen, if one was.
+pub fn follow_language(id: &str) -> Option<&'static str> {
+    set_language(id).then(language)
+}
+
 /// At the start, before NVForever.ini's rows are applied: choose the language of the
 /// game's text ([`for_code_page`]) when a file of it was read. A `language=` in the INI,
 /// applied after, still wins. The id chosen, if one was.
@@ -335,6 +362,12 @@ mod tests {
     #[test]
     fn only_a_code_page_of_one_language_names_it() {
         assert_eq!(for_code_page(CodePage::Windows1251), Some("ru"));
+        // Steam's language names tell what the code page cannot (#1443).
+        assert_eq!(for_steam_language("english"), Some((CodePage::Windows1252, None)));
+        assert_eq!(for_steam_language("German"), Some((CodePage::Windows1252, Some("de"))));
+        assert_eq!(for_steam_language("polish"), Some((CodePage::Windows1250, None)));
+        assert_eq!(for_steam_language("russian"), Some((CodePage::Windows1251, Some("ru"))));
+        assert_eq!(for_steam_language("klingon"), None);
         assert_eq!(for_code_page(CodePage::Windows1250), None);
         assert_eq!(for_code_page(CodePage::Windows1252), None);
         assert_eq!(for_code_page(CodePage::Windows936), None);

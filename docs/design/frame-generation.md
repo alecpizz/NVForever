@@ -177,7 +177,9 @@ Limits and notes:
   apart). The real frame's present falls about 1 ms after the next frame's submit, so the
   render thread is not held [observed 2026-11-08: it kept the cap].
 - **Variable refresh** keeps vsync on (FIFO relaxed); the cap is the lower of the frame
-  generation cap and the page's cap.
+  generation cap and half the page's or variable refresh's cap: those count frames shown, two
+  for each real frame, as they do for DLSS-G (`frame_pace::own_cap`; until 2026-11-23 the
+  page's cap held the real frames here, so a limit of 60 showed 120).
 - **Vsync off** is not supported: the second present would replace the first at once.
 - **Screenshots** (`--screenshot`, F12): Bevy points the camera's output at a screenshot
   texture of its own, and only after the render graph copies it to the screenshot's buffer and

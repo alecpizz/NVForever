@@ -55,6 +55,11 @@ A layout without alpha reads as opaque; luminance is copied to all three colours
 (A8) is not read: Direct3D samples it with black colour, so what it would look like
 in the game is not known.
 
+A FourCC file may also set `DDPF_ALPHAPIXELS` (flags 0x5): it reads as the 0x4 row of
+its FourCC, the bit adds nothing [observed: Honest Hearts' tree textures, e.g.
+`textures\nvdlc02\landscape\trees\nvdlc02treebark.dds`, `DXT5`/`DXT1` with flags 0x5,
+which the original draws textured; refused, they drew white (#4488)].
+
 ## 3. Sizes [observed: exact for all 26,907 files]
 
 - Width and height are powers of two in every file, 4096 at most [observed]. A texture
@@ -100,7 +105,7 @@ explicitly, so rendering does not rely on the naming convention.
 ```
 
 `mip_count` is the stored value; `levels` the number used (§3). `format` is a name from
-§2 (a row matches on the whole pixel-format flags value), or, for anything else,
+§2 (a row matches on the whole pixel-format flags value; 0x5 reads as 0x4, §2.1), or, for anything else,
 `unknown(flags=0x%x,fourcc=<4 ASCII chars, or 0x + 8 hex digits>,bits=%d,masks=0x%08x/0x%08x/0x%08x/0x%08x)`
 with `expected_size` `null`. For a file with a DX10 header (§6), `format` is the DXGI
 name of its code (`BC7_UNORM_SRGB`), or `unknown(dxgi=N)` for a code not read, and
@@ -227,3 +232,18 @@ their numbers.] A mod texture in BC6H is drawn as missing and listed in the log.
   for BC4 and BC7, and the generated terrain LOD bake reads no BC4 or BC7 texture.
 - Like legacy files, `Dds::parse` takes up to 32 levels and leaves bytes after the
   counted ones alone (§3); the GPU upload refuses more levels than the size allows.
+
+## Device without BC sampling
+
+[documented: wgpu 30 `Features::TEXTURE_COMPRESSION_BC`,
+https://docs.rs/wgpu/30.0.0/wgpu/struct.Features.html]
+BC1/BC2/BC3 GPU textures require the renderer's BC compression feature.
+
+[design, Android #2436] The shared texture loader uses the existing fnv-dds DXT1/3/5
+block decoder when BC sampling is unavailable, as it already does for non-block-aligned
+source dimensions (#2164). Decode each validated mip into RGBA8 at that mip's dimensions;
+retain the caller's sRGB diffuse or linear data intent and normal sampler. A BC-capable
+renderer keeps aligned compressed bytes and formats. This changes no DDS format facts,
+worker-cache coordination or source game files. Cubemaps and unsupported/truncated DDS
+remain errors. Authored colour/alpha/mip/capability controls are source-only until run;
+GPU output and the reported exterior symptom are not established by this policy.

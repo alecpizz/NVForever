@@ -153,7 +153,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
             zero
         }
         // ---- the Anim Object's idle (ANIO DATA) [documented: Get/SetAnimObjectIdle];
-        // the setter takes an IDLE only [hypothesis].
+        // the setter takes an IDLE only (see docs/spec-notes/ext-lutana.md §10).
         "getanimobjectidle" | "getanioidle" => {
             let Some(a) = form(args, 0).filter(|&a| of_sig(g, a, &[b"ANIO"])) else { return Some(Ok(XVal::Ref(0))) };
             match crate::nvse::record_value(g, a, "DATA", "") {
@@ -293,8 +293,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         }
         // `newBase` on a reference: its base for the session, of another type too
         // [documented: SetBaseForm, JIP LN 56.70]. The drawn reference changes when its
-        // 3D is built again [hypothesis: the page says it updates loaded 3D; engine
-        // follow-up].
+        // 3D is built again (see docs/spec-notes/ext-lutana.md §10; engine follow-up).
         "setbaseform" => {
             if let (Some(r), Some(b)) = (subject, form(args, 0)) {
                 if g.data.sig(b).is_some() && r != FormId::PLAYER_REF {

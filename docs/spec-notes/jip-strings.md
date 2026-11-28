@@ -40,8 +40,15 @@ statement fails, the script goes on), the same decision as for Sv_Replace with a
 old text.
 
 **Dialect.** The wiki does not name it. ValidateRegex's error names are the error kinds
-of the C++ standard library's regex [hypothesis: the dialect is that library's default,
-ECMAScript]. Behaviour to keep: whole-string match for RegexMatch, `\b`, groups,
+of the C++ standard library's regex (`std::regex` ECMAScript dialect: `\d+`, lookahead
+`(?=...)`, lazy quantifier `+?`, backreference `\1`, and `ValidateRegex "[unclosed"`
+returning `5`) [observed: Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 + JIP LN 57.30,
+2026-11-24, `GSDocMitchellHouse` (`0x00103DF9`), 10 official base masters, read-only
+`PrintToConsole` probe `w4c_b1_24_jip_regex`
+(`tools/capture/nvse/catalogs/wave4c_extenders.json`, #3679, testing `sv_RegexMatch`,
+`sv_RegexReplace`, `sv_RegexSearch`, and `ValidateRegex`):
+`PROBE|w4c_b1_24_jip_regex|dig=1,look=1,lazy=1,back=1,rep=[item X cost X],srchN=3(s0=[1]),valBad=5`;
+no DLL or source consulted]. Behaviour to keep: whole-string match for RegexMatch, `\b`, groups,
 `[^ ]`, `.*`. A Rust implementation needs back-references (ECMAScript has them), which
 the `regex` crate lacks. Candidate: `fancy-regex` (dependencies.md), anchored with
 `^(?:…)$` for RegexMatch. Owner review is not needed: the observed cases decide it.

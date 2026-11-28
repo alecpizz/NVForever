@@ -848,18 +848,18 @@ Great Khans (30), Followers (50), Freeside (70) (scale = the REPU's DATA value, 
   fame or infamy below 15 % counts as none (fame 1 of 10: all three axes 1).
 - **Grid.** Fame and infamy each at 0, 5, … 100 % of the scale (21 × 21) on all five
   reputations: identical tables, a 4 × 4 grid of the two levels. GetReputationThreshold
-  (mixed, good, bad) and the title from the GECK wiki's GetReputationThreshold page
-  [documented]:
+  (mixed, good, bad):
 
 | fame level \ infamy level | 0 (< 15 %) | 1 (15–50 %) | 2 (50–100 %) | 3 (≥ 100 %) |
 |---|---|---|---|---|
-| 0 | 1, 1, 1 Neutral | 0, 0, 4 Shunned | 0, 0, 5 Hated | 0, 0, 6 Vilified |
-| 1 | 0, 4, 0 Accepted | 3, 0, 0 Mixed | 0, 0, 2 Sneering Punk | 0, 0, 3 Merciful Thug |
-| 2 | 0, 5, 0 Liked | 0, 2, 0 Smiling Troublemaker | 4, 0, 0 Unpredictable | 2, 0, 0 Dark Hero / Soft-Hearted Devil |
-| 3 | 0, 6, 0 Idolized | 0, 3, 0 Good-Natured Rascal | 2, 0, 0 Dark Hero / Soft-Hearted Devil | 5, 0, 0 Wild Child |
+| 0 | 1, 1, 1 | 0, 0, 4 | 0, 0, 5 | 0, 0, 6 |
+| 1 | 0, 4, 0 | 3, 0, 0 | 0, 0, 2 | 0, 0, 3 |
+| 2 | 0, 5, 0 | 0, 2, 0 | 4, 0, 0 | 2, 0, 0 |
+| 3 | 0, 6, 0 | 0, 3, 0 | 2, 0, 0 | 5, 0, 0 |
 
-  Exactly one axis is non-zero, except Neutral, where all three are 1 (as the wiki says).
-  Which of the two names of mixed 2 the game shows is not visible through these functions
+  Exactly one axis is non-zero, except with neither fame nor infamy, where all three are 1
+  (as the wiki says). Fame 2 with infamy 3 and fame 3 with infamy 2 share mixed tier 2;
+  which title the game shows for each is not visible through these functions
   [hypothesis: it depends on which level is higher].
 
 **(b) Effect scripts of aid items** (`q5c_trial_fx`, save `nvfdoc`; scenarios
@@ -989,7 +989,7 @@ C:/fnv-private/goldens/quest3/quest3_<name>.trace.json`.
 - Script order: one quest script against one kind of object script (§9.3 c). Effect
   scripts, inventory items' scripts and actors' scripts against quest scripts in a frame
   are not captured; MenuMode quest delays still not (scripts.md §10).
-- Which name of mixed level 2 (Dark Hero or Soft-Hearted Devil) applies, and anything that
+- Which title the original shows for each of the two cells of mixed tier 2, and anything that
   is shown only in the Pip-Boy, are not visible through script functions.
 - Effects: a duration-0 effect's Update and Finish run inside the call or not at all (not
   distinguishable with RestoreAllLimbs, whose three blocks do the same). Effects on actors

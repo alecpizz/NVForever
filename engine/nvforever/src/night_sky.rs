@@ -846,7 +846,7 @@ mod tests {
         let (star, dome, cloud) = (part_material(&mut app), part_material(&mut app), part_material(&mut app));
         app.world_mut().spawn((Stars, MeshMaterial3d(star.clone())));
         app.world_mut().spawn((SkyDome::for_test(), MeshMaterial3d(dome.clone())));
-        app.world_mut().spawn((CloudLayer::for_test(), MeshMaterial3d(cloud.clone())));
+        app.world_mut().spawn((CloudLayer::for_test(0), MeshMaterial3d(cloud.clone())));
         app.update();
         let first = light(&app, &star);
         assert!(first.night.x > 0.0 && first.moon == Vec4::ZERO, "{first:?}");

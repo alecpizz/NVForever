@@ -571,6 +571,97 @@ pub fn meter_box(ui: &Ui) -> Option<super::layout::Rect> {
     super::layout::layout(ui, meter, &|_, _, _| (0.0, 0.0), true).into_iter().find(|i| i.tile == meter).map(|i| i.rect)
 }
 
+/// Whether the tiled `QuantityMenu` is built and currently visible.
+pub(crate) fn normal_touch_quantity_shown(ui: &Ui) -> bool {
+    quantity_built(ui).yes() && ui.menu(QUANTITY_MENU).is_some_and(|menu| fnv_ui::input::shown(ui, menu))
+}
+
+/// [design: docs/design/android.md] Touch hit-testing for the tiled `QuantityMenu`,
+/// independent of whether the menu beneath it (Barter, Container, Inventory) is tiled
+/// or hand-built. Exact tile hits return `Source::Tile` (routing through the native
+/// tile pointer), while padded arrow/button/meter targets and backdrop taps outside
+/// `QM_MainRect` return `Source::Direct` so touch never soft-locks the prompt.
+pub(crate) fn normal_touch_quantity_hit(
+    ui: &Ui,
+    point: bevy::prelude::Vec2,
+    window: bevy::prelude::Vec2,
+) -> Option<crate::menu::normal_touch::Hit> {
+    use crate::menu::{model::Command, normal_touch::{Hit, Source, Target}};
+    use fnv_ui::input::{hit_candidates, no_measure, top_hit};
+    let menu = ui.menu(QUANTITY_MENU)?;
+    if !fnv_ui::input::shown(ui, menu) {
+        return None;
+    }
+    let at = super::input::to_menu_units(point, window, bevy::prelude::Vec2::splat(0.5));
+    let candidates = hit_candidates(ui, menu, &no_measure);
+    if let Some(picked) = top_hit(ui, &candidates, at) {
+        if let Some(kind) = quantity_tile(ui, picked.tile) {
+            let target = match kind {
+                QuantityTile::Ok => Target::Command(Command::AmountOk),
+                QuantityTile::Cancel => Target::Command(Command::AmountCancel),
+                QuantityTile::Decrease => Target::Command(Command::AmountStep(-1)),
+                QuantityTile::Increase => Target::Command(Command::AmountStep(1)),
+                QuantityTile::Meter => {
+                    let b = meter_box(ui)?;
+                    if !b.width.is_finite() || b.width <= 0.0 {
+                        return None;
+                    }
+                    Target::Meter(((at.0 - b.left) / b.width).clamp(0.0, 1.0) as f32)
+                }
+            };
+            return Some(Hit { source: Source::Tile(menu, picked.tile), target, pane: None, row_step: 0.0 });
+        }
+    }
+    // Padded finger targets for the prompt's arrows, buttons, and meter.
+    const PAD: f64 = 16.0;
+    for c in candidates.iter().rev() {
+        let Some(kind) = quantity_tile(ui, c.under) else { continue };
+        let r = c.region();
+        if r.width <= 0.0 || r.height <= 0.0 {
+            continue;
+        }
+        let (px, py) = match kind {
+            QuantityTile::Meter => (4.0, 12.0),
+            _ => (PAD, PAD),
+        };
+        if at.0 >= r.left - px && at.0 < r.left + r.width + px && at.1 >= r.top - py && at.1 < r.top + r.height + py {
+            let target = match kind {
+                QuantityTile::Ok => Target::Command(Command::AmountOk),
+                QuantityTile::Cancel => Target::Command(Command::AmountCancel),
+                QuantityTile::Decrease => Target::Command(Command::AmountStep(-1)),
+                QuantityTile::Increase => Target::Command(Command::AmountStep(1)),
+                QuantityTile::Meter => {
+                    let b = meter_box(ui)?;
+                    if !b.width.is_finite() || b.width <= 0.0 {
+                        return None;
+                    }
+                    Target::Meter(((at.0 - b.left) / b.width).clamp(0.0, 1.0) as f32)
+                }
+            };
+            return Some(Hit { source: Source::Direct(menu, c.under), target, pane: None, row_step: 0.0 });
+        }
+    }
+    // Tapping outside the modal dialog card cancels the prompt cleanly.
+    if let Some(main) = ui.find_tile("QuantityMenu/NOGLOW_BRANCH/QM_MainRect") {
+        let inside = super::layout::layout(ui, main, &|_, _, _| (0.0, 0.0), true)
+            .into_iter()
+            .find(|i| i.tile == main)
+            .is_some_and(|i| {
+                let r = i.rect;
+                at.0 >= r.left && at.0 < r.left + r.width && at.1 >= r.top && at.1 < r.top + r.height
+            });
+        if !inside {
+            return Some(Hit {
+                source: Source::Direct(menu, menu),
+                target: Target::Command(Command::AmountCancel),
+                pane: None,
+                row_step: 0.0,
+            });
+        }
+    }
+    None
+}
+
 /// What a text tile's size was last measured from, and the size written.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Measured {
@@ -683,6 +774,12 @@ pub fn describe_quantity(ui: &Ui) -> String {
     let shown = ui.get_string(&format!("{}/QM_AmountChosen/string", METER.rsplit_once('/').map_or("", |(p, _)| p))).unwrap_or_default();
     let most = ui.get_float(&format!("{METER}/user0")).unwrap_or(0.0);
     format!("tiles: {QUANTITY_MENU} drawn from tiles: amount {shown} of {}", Value::Num(most).text())
+}
+
+/// Module-owned authored prompt fixture, no production API or game file access.
+#[cfg(test)]
+pub(crate) fn load_quantity_fixture_for_touch_tests(ui:&mut Ui,change:impl FnOnce(&str)->String) {
+    tests::load_whole_prompt(ui,change);
 }
 
 #[cfg(test)]
@@ -858,10 +955,12 @@ mod tests {
 
     /// A prompt's file with every path the model writes.
     fn whole_prompt() -> Ui {
-        let src = MemSource::default().with("q.xml", r#"<menu name="QuantityMenu"><rect name="NOGLOW_BRANCH"><image name="QM_Background"/><rect name="QM_MainRect"><rect name="QM_AmountMeter"/></rect></rect></menu>"#);
-        let mut ui = Ui::new();
-        ui.load_menu(&src, "q.xml").unwrap();
-        ui
+        let mut ui=Ui::new();load_whole_prompt(&mut ui,str::to_owned);ui
+    }
+    pub(super) fn load_whole_prompt(ui:&mut Ui,change:impl FnOnce(&str)->String) {
+        let xml=r#"<menu name="QuantityMenu"><rect name="NOGLOW_BRANCH"><image name="QM_Background"/><rect name="QM_MainRect"><rect name="QM_AmountMeter"/></rect></rect></menu>"#;
+        let src=MemSource::default().with("q.xml",&change(xml));
+        ui.load_menu(&src,"q.xml").unwrap();
     }
 
     #[test]
@@ -893,7 +992,7 @@ mod tests {
     #[test]
     fn an_icon_shows_and_makes_room() {
         let mut ui = message();
-        let mut v = view(None, "Liked", &["OK"]);
+        let mut v = view(None, "Hello", &["OK"]);
         v.icon = Some(r"textures\interface\icons\message icons\glow_message_vaultboy_very_happy.dds".into());
         write_message(&mut ui, &v, Some(0), true, &size);
         assert_eq!(f(&ui, "MM_MessageIcon/visible"), 1.0);
@@ -1122,3 +1221,4 @@ mod tests {
         assert_eq!(quantity_tile(&ui, tile("QM_AmountChosen")), None);
     }
 }
+

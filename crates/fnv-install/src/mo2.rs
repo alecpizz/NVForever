@@ -54,8 +54,13 @@ pub const PROFILE_SETTINGS: &str = "settings.ini";
 /// The game INI files a profile keeps a copy of when its local settings are on, in the
 /// order the game reads them: `Fallout.ini`, then `FalloutPrefs.ini` (a key in both is the
 /// prefs file's) [documented: MO2 `IPluginGame::iniFiles` for the Gamebryo games; observed:
-/// both files in the owner's profiles].
-pub const PROFILE_INIS: [&str; 2] = ["Fallout.ini", "FalloutPrefs.ini"];
+/// both files in the owner's profiles]. Then `FalloutCustom.ini`, the user's overrides,
+/// read last [observed: Nuclear Sunset's profile keeps one, `[BackgroundLoad]
+/// bBackgroundLoadLipFiles=1` over Fallout.ini's 0, and TTW's start check
+/// `GetNumericIniSetting "bBackgroundLoadLipFiles:BackgroundLoad" == 0` shows
+/// TTWBadINIMessage without it, log nvforever-20261125-155959-14680.log; hypothesis: the
+/// game reads it after the other two].
+pub const PROFILE_INIS: [&str; 3] = ["Fallout.ini", "FalloutPrefs.ini", "FalloutCustom.ini"];
 
 /// The file MO2 writes the enabled mods' INI tweaks into, above the profile's own INIs
 /// [documented: MO2 `Profile::createTweakedIniFile`].
@@ -219,15 +224,29 @@ pub struct Layout {
     pub profile: PathBuf,
 }
 
+// Nearly the same struct as Layout but semantically different: a profile has not been chosen yet from the profiles directory
+struct BaseLayout {
+    mods: PathBuf,
+    overwrite: PathBuf,
+    profiles_dir: PathBuf,
+    selected_profile: Option<String>
+}
+
 impl Layout {
     /// The layout of the instance in `instance`, whose `ModOrganizer.ini` reads `ini`.
     pub fn from_ini(instance: &Path, ini: &str) -> Option<Layout> {
-        Self::from_ini_profile(instance, ini, None)
+        let base = Self::base_layout_from_ini_profile(instance, ini);
+        if let Some(profile) = base.selected_profile {
+            let path = base.profiles_dir.join(profile);
+            Some(Layout { mods: base.mods, overwrite: base.overwrite, profile: path })
+        } else {
+            None
+        }
     }
 
     /// [`Layout::from_ini`] with a profile named instead of the instance's
     /// `selected_profile` (`--profile`; issue #1526).
-    pub fn from_ini_profile(instance: &Path, ini: &str, profile: Option<&str>) -> Option<Layout> {
+    fn base_layout_from_ini_profile(instance: &Path, ini: &str) -> BaseLayout {
         // An instance given relative (a test aid's) is made absolute first, so that a
         // `%BASE_DIR%` holding it is not joined onto it a second time.
         let instance = &std::path::absolute(instance).unwrap_or_else(|_| instance.to_path_buf());
@@ -242,8 +261,37 @@ impl Layout {
         };
         let base = ini_value(ini, "Settings", "base_directory").map_or_else(|| instance.to_path_buf(), |b| at(b, instance));
         let dir = |key: &str, default: &str| at(ini_value(ini, "Settings", key).unwrap_or_else(|| format!("%BASE_DIR%/{default}")), &base);
-        let profile = profile.map(str::to_string).or_else(|| ini_value(ini, "General", "selected_profile"))?;
-        Some(Layout { mods: dir("mod_directory", "mods"), overwrite: dir("overwrite_directory", "overwrite"), profile: dir("profiles_directory", "profiles").join(profile) })
+        let selected_profile = ini_value(ini, "General", "selected_profile");
+        BaseLayout { mods: dir("mod_directory", "mods"), overwrite: dir("overwrite_directory", "overwrite"), profiles_dir: dir("profiles_directory", "profiles"), selected_profile }
+    }
+
+    // Create a BaseLayout directly from a base_directory instead of an instance
+    fn base_layout_from_base_directory(dir: &Path) -> BaseLayout {
+        let mods = dir.join("mods");
+        let overwrite = dir.join("overwrite");
+        let profiles_dir = dir.join("profiles");
+
+        BaseLayout { mods, overwrite, profiles_dir, selected_profile: None }
+    }
+
+    // Get a reasonable profile name from the profiles directory
+    pub fn get_default_profile(profiles_dir: &Path) -> Option<String> {
+        // If the profiles dir has only one dir inside of it, return that
+        if let Ok(dirs) = profiles_dir.read_dir() {
+            let mut dirs = dirs.flatten().filter(|e| e.file_type().is_ok_and(|e| e.is_dir()));
+            if let Some(dir) = dirs.next() {
+                if dirs.next().is_none() {
+                    return Some(dir.file_name().to_string_lossy().to_string());
+                }
+            }
+        }
+
+        // If the profiles dir has more than one dir inside of it, but it has a Default profile, return that
+        let default = profiles_dir.join("Default");
+        if default.exists() && default.is_dir() {
+            return Some("Default".to_string());
+        }
+        None
     }
 
     /// The layout of the instance that started this process (`None` when MO2 did not).
@@ -256,7 +304,7 @@ impl Layout {
 
     /// The layout of the instance in folder `instance`.
     pub fn of_instance(instance: &Path) -> Option<Layout> {
-        Self::from_ini(instance, &std::fs::read_to_string(instance.join("ModOrganizer.ini")).ok()?)
+        Self::open(instance, None).ok()
     }
 
     /// [`Layout::of_instance`] with a profile named instead of the instance's selected one
@@ -264,23 +312,41 @@ impl Layout {
     /// not an instance or the profile is not there.
     pub fn open(instance: &Path, profile: Option<&str>) -> Result<Layout, InstallError> {
         let ini_path = instance.join(INI_FILE);
-        let ini = match std::fs::read_to_string(&ini_path) {
-            Ok(i) => i,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Err(InstallError::Config(format!("{} is not a Mod Organizer 2 instance (no {INI_FILE})", instance.display())))
-            }
-            Err(e) => return Err(InstallError::Io(ini_path, e)),
-        };
-        let layout = Layout::from_ini_profile(instance, &ini, profile).ok_or_else(|| {
-            InstallError::Config(match profile {
-                Some(p) => format!("{}: no profile {p}", ini_path.display()),
-                None => format!("{}: no selected_profile; name one with --profile", ini_path.display()),
-            })
-        })?;
-        if !layout.profile.is_dir() {
-            return Err(InstallError::Config(format!("{}: no profile folder", layout.profile.display())));
+        let base = {
+            if let Ok(ini) = std::fs::read_to_string(&ini_path) {
+                Self::base_layout_from_ini_profile(instance, &ini)
+            } else {
+                Self::base_layout_from_base_directory(instance)
+        }};
+
+        if [base.mods.as_path(), base.overwrite.as_path(), base.profiles_dir.as_path()].iter().any(|p| !p.is_dir()) {
+            return Err(InstallError::Config(format!("{} is not a valid Mod Organizer 2 instance (no {INI_FILE}), or base directory with 'mods', 'profiles', and 'overwrite' folders", instance.display())));
         }
-        Ok(layout)
+
+        if let Some(profile) = profile {
+            let path = base.profiles_dir.join(profile);
+            if path.is_dir() {
+                return Ok(Layout{mods: base.mods, overwrite: base.overwrite, profile: path})
+            } else {
+                return Err(InstallError::Config(format!("{}: no profile {profile}", base.profiles_dir.display())))
+            }
+        }
+
+        if let Some(profile) = base.selected_profile {
+            let path = base.profiles_dir.join(profile);
+            if path.is_dir() {
+                return Ok(Layout{mods: base.mods, overwrite: base.overwrite, profile: path})
+            }
+        }
+
+        if let Some(profile) = Self::get_default_profile(&base.profiles_dir) {
+            let path = base.profiles_dir.join(profile);
+            if path.is_dir() {
+                return Ok(Layout{mods: base.mods, overwrite: base.overwrite, profile: path})
+            }
+        }
+
+        Err(InstallError::Config(format!("{}: no selected_profile; name one with --profile", base.profiles_dir.display())))
     }
 
     /// The profile's name (its folder's).
@@ -646,7 +712,7 @@ pub fn sync(game: &GameInstall) -> Result<Option<(PathBuf, PluginSync)>, Install
 fn load(names: &[String], present: &[String]) -> PluginSync {
     let list = PluginList { entries: names.iter().map(|n| PluginEntry { name: n.clone(), active: true }).collect() };
     let (load, missing, base_forced) = list.load_order(present);
-    PluginSync { load, from_mods: Vec::new(), added: Vec::new(), missing, base_forced, written: false }
+    PluginSync { load, from_mods: Vec::new(), added: Vec::new(), missing, base_forced, written: false, present: present.to_vec() }
 }
 
 /// A profile's plugins resolved to their files without MO2 running, for tools that read a
@@ -826,6 +892,38 @@ mod tests {
     }
 
     #[test]
+    fn base_directory_names_the_layout_and_profile() {
+        let t = std::env::temp_dir().join(format!("nvf-mo2-base-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        for d in [&t.join("mods"), &t.join("overwrite"), &t.join("profiles/Default"), &t.join("profiles/Other")] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+
+        let base = Layout::base_layout_from_base_directory(&t);
+        assert_eq!(base.mods, t.join("mods"));
+        assert_eq!(base.overwrite, t.join("overwrite"));
+        assert_eq!(base.profiles_dir, t.join("profiles"));
+        assert_eq!(base.selected_profile, None);
+
+        let default = Layout::open(&t, None).unwrap();
+        assert_eq!(default.mods, t.join("mods"));
+        assert_eq!(default.overwrite, t.join("overwrite"));
+        assert_eq!(default.profile, t.join("profiles/Default"));
+
+        let other = Layout::open(&t, Some("Other")).unwrap();
+        assert_eq!(other.profile, t.join("profiles/Other"));
+        assert!(matches!(Layout::open(&t, Some("Gone")), Err(InstallError::Config(_))));
+
+        let empty = t.join("empty");
+        for d in [empty.join("mods"), empty.join("overwrite"), empty.join("profiles")] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        assert!(Layout::open(&empty, None).unwrap_err().to_string().contains("no selected_profile; name one with --profile"));
+        assert!(Layout::open(&empty, Some("Gone")).unwrap_err().to_string().contains("no profile Gone"));
+        std::fs::remove_dir_all(&t).ok();
+    }
+
+    #[test]
     fn modlist_priority() {
         let t = format!("{HEADER}\r\n+Top\r\n-Off\r\n*DLC: Dead Money\r\n+Low_separator\r\n+Low\r\n");
         assert_eq!(enabled_mods(&t), names(&["Top", "Low_separator", "Low"]));
@@ -984,22 +1082,29 @@ mod tests {
         std::fs::write(inst.join(INI_FILE), ini.replace("{BASE}", &inst.display().to_string().replace('\\', "\\\\"))).unwrap();
         std::fs::create_dir_all(inst.join("profiles/Other")).unwrap();
         std::fs::create_dir_all(inst.join("custommods/One")).unwrap();
+        std::fs::create_dir_all(inst.join("ow")).unwrap();
         std::fs::write(inst.join("profiles/Other/modlist.txt"), format!("{HEADER}\r\n+One\r\n")).unwrap();
         let l = Layout::open(&inst, Some("Other")).unwrap();
         assert_eq!(l.profile_name(), "Other");
         assert_eq!(l.mods, inst.join("custommods"));
         assert_eq!(l.overwrite, inst.join("ow"));
-        assert_eq!(l.mod_roots(), vec![inst.join("custommods/One")]);
+        assert_eq!(l.mod_roots(), vec![inst.join("custommods/One"), inst.join("ow")]);
         // A folder that is not an instance, and a profile that is not there, say why.
         assert!(Layout::open(&inst.join("custommods"), None).unwrap_err().to_string().contains("ModOrganizer.ini"));
-        assert!(Layout::open(&inst, Some("Gone")).unwrap_err().to_string().contains("no profile folder"));
+        assert!(Layout::open(&inst, Some("Gone")).unwrap_err().to_string().contains("no profile Gone"));
+        let empty_profiles = inst.join("empty-profiles");
+        for d in [empty_profiles.join("mods"), empty_profiles.join("overwrite"), empty_profiles.join("profiles")] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(empty_profiles.join(INI_FILE), "[General]\n").unwrap();
+        assert!(Layout::open(&empty_profiles, None).unwrap_err().to_string().contains("no selected_profile; name one with --profile"));
         std::fs::remove_dir_all(&inst).ok();
     }
 
     #[test]
     fn mod_archives_are_named_once_highest_priority_first() {
         let (inst, profile) = fixture("bsa", "[General]\nselected_profile=Default\n");
-        for d in [profile.clone(), inst.join("mods/Late"), inst.join("mods/Base")] {
+        for d in [profile.clone(), inst.join("mods/Late"), inst.join("mods/Base"), inst.join("overwrite")] {
             std::fs::create_dir_all(d).unwrap();
         }
         std::fs::write(profile.join("modlist.txt"), format!("{HEADER}\r\n+Late\r\n+Base\r\n")).unwrap();
@@ -1066,6 +1171,12 @@ mod tests {
         assert_eq!(l.ini_setting("Display", "iSize H"), Some(("720".into(), l.profile.join("FalloutPrefs.ini"))));
         assert_eq!(l.ini_setting("General", "uGridsToLoad"), Some(("5".into(), l.profile.join("Fallout.ini"))));
         assert_eq!(l.ini_setting("Archive", "bInvalidateOlderFiles"), Some(("1".into(), l.profile.join("initweaks.ini"))));
+        // FalloutCustom.ini, the user's overrides, after the two INIs and under the tweaks (#4491).
+        std::fs::write(l.profile.join("FalloutCustom.ini"), "[BackgroundLoad]\r\nbBackgroundLoadLipFiles=1\r\n[Display]\r\niSize H=1080\r\n").unwrap();
+        assert_eq!(l.ini_setting("BackgroundLoad", "bBackgroundLoadLipFiles"), Some(("1".into(), l.profile.join("FalloutCustom.ini"))));
+        assert_eq!(l.ini_setting("Display", "iSize H"), Some(("1080".into(), l.profile.join("FalloutCustom.ini"))));
+        assert_eq!(l.ini_setting("Display", "iSize W"), Some(("1920".into(), l.profile.join("initweaks.ini"))));
+        std::fs::remove_file(l.profile.join("FalloutCustom.ini")).unwrap();
         // A profile with local settings off still reads the tweak file, which MO2 keeps in
         // the profile whatever the INIs' setting is.
         std::fs::write(l.profile.join("settings.ini"), "[General]\r\nLocalSettings=false\r\n").unwrap();

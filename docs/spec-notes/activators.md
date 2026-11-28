@@ -133,7 +133,18 @@ groups FalloutNV.esm's scripts play on which objects.
   from 0 to 2 (quadratic keys) and holds alpha 1, naming `NVSandstorm01:0` only
   [observed: `fnvtool nif decode`]. Before, only that sheet scrolled and the other 17
   stood still, the storm a frozen picture (#2450; the alpha was already shared, the
-  scroll was not). Smoke `hv-sandstorm-scroll`. The weather itself (HVDustStorm) has no
+  scroll was not). Then (#3919) all 18 stood still again in play: the quest enables the
+  references with a fade, and the fade's see-through copy went on before the model bound
+  its own material, so the model copied the fade's copy and the fade, at its end, gave
+  back the material from before; the scroll went on in a material nothing drew. With the
+  storm on, frames 0.5 s to 8 s apart at (-17863, -4814) at 22:00 did not differ above the
+  horizon (mean 0.01 of 255) though disabling the ten references darkened it from 29 to
+  8 [observed in NVForever, main d205d16fe, 2026-11-25]. Now the fade marks its copy
+  (`nvf_assets::material_anim::HeldCopy`): a rig binding meanwhile copies the mesh's own
+  and names its copy there, and the fade draws a see-through copy of the rig's own and
+  gives it back; the same frames then differ (mean 0.7 to 1.4 of 255) [observed in
+  NVForever, this change]. Smoke `hv-sandstorm-scroll` (its `fade: 0x000E18D7 in done; …
+  meshes given their own material anew` line). The weather itself (HVDustStorm) has no
   model; its cloud layers are `sky\alpha.dds` but layer 3 (`NVCloudlight.dds`, ONAM
   speeds 179, 0, 0, 0) [observed: `fnvtool esm decode`], so its visible clouds stand
   still by the data.

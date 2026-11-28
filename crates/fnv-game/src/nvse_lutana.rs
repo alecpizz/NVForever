@@ -306,7 +306,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
             zero
         }
         // `casino symbol stops`: the count as given; the page's "must equal 14" is the
-        // record's rule, not checked here [hypothesis].
+        // record's rule, not checked here (see docs/spec-notes/ext-lutana.md §2).
         "setcasinoreelstops" => {
             let (s, v) = (num(args, 1).map(|s| s as i64), num(args, 2).filter(|v| v.is_finite()).map(int_bits));
             if let (Some(s @ 1..=7), Some(v)) = (s, v) {
@@ -414,8 +414,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
         // subcategory) only when one is given [documented: GetFormRecipes]: the later
         // plugin's first, each plugin's in FormID order [observed: lutana1
         // rcpe.formrecipes.*]. GetFormRecipeOutputs their outputs, each once [documented:
-        // GetFormRecipeOutputs], in that order [hypothesis: lutana1 rcpe.recipeoutputs.*
-        // show another order, with no rule found].
+        // GetFormRecipeOutputs], in that order (see docs/spec-notes/ext-lutana.md §3).
         "getformrecipes" | "getformrecipeoutputs" => {
             let (Some(item), cat) = (form(args, 0), form(args, 1)) else { return Some(Ok(list(g, std::iter::empty()))) };
             let mut ids: Vec<FormId> = g.data.recipes.keys().copied().collect();
@@ -495,7 +494,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
         "istrait" => yes(form(args, 0).and_then(|p| g.perk_def(p)).is_some_and(|d| d.is_trait)),
         // `perk index`: an ability entry's spell, a quest stage entry's quest [documented:
         // "Ability for type 5, Quest for type 6"]; an entry point 0 (its leveled list is
-        // not kept decoded) [hypothesis], a negative index or past the entries 0.
+        // not kept decoded; see docs/spec-notes/ext-lutana.md §5), a negative index or past the entries 0.
         "getnthperkentryform" => {
             let e = form(args, 0).and_then(|p| num(args, 1).and_then(|i| crate::nvse_lu3::nth_entry_of(g, p, i)));
             reff(match e.map(|e| &e.effect) {
@@ -547,7 +546,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
             string_map(g, xy.map_or_else(Vec::new, |(x, y)| vec![("x", x), ("y", y)]))
         }
         // `water`: the water type's actor effect (WATR XNAM) [documented:
-        // GetWaterFormEffect]; with no water, the player's cell's [hypothesis].
+        // GetWaterFormEffect]; with no water, the player's cell's (see docs/spec-notes/ext-lutana.md §5).
         "getwaterformeffect" => {
             let w = form(args, 0).or_else(|| g.cell_of(FormId::PLAYER_REF).and_then(|c| cell_water(g, c)));
             // SetWaterFormEffect's change first (`crate::nvse_jip8`).
@@ -588,15 +587,19 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
         "getactivatorradiostation" => reff(form(args, 0).or(subject).map(|f| base(g, f)).and_then(|a| record_ref(g, a, "RNAM"))),
         // `form [activator]`: RNAM, VNAM, SNAM for the session, read by their getters
         // (GetActivatorSoundActivate/Looping, `nvse_plugins`).
-        "setactivatorradiostation" | "setactivatorsoundactivate" | "setactivatorsoundlooping" => {
-            let sub = match name {
-                "setactivatorradiostation" => "RNAM/",
-                "setactivatorsoundactivate" => "VNAM/",
-                _ => "SNAM/",
-            };
+        "setactivatorradiostation" | "setactivatorsoundlooping" => {
+            let sub = if name == "setactivatorradiostation" { "RNAM/" } else { "SNAM/" };
             let a = form(args, 1).or(subject).map(|f| base(g, f)).filter(|&a| g.data.sig(a) == Some(*b"ACTI"));
             if let Some(a) = a {
                 g.field_overrides.insert((a, sub.into()), XVal::Ref(form(args, 0).map_or(0, |f| f.0)));
+            }
+            zero
+        }
+        "setactivatorsoundactivate" => {
+            let a = form(args, 1).or(subject).map(|f| base(g, f)).filter(|&a| g.data.sig(g.unclone(a)) == Some(*b"ACTI"));
+            let s = form(args, 0).filter(|&f| g.data.sig(g.unclone(f)) == Some(*b"SOUN"));
+            if let (Some(a), Some(s)) = (a, s) {
+                g.field_overrides.insert((a, "VNAM/".into()), XVal::Ref(s.0));
             }
             zero
         }
@@ -705,11 +708,12 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
         // flag: `PlacedRef::parent_activate_only`].
         "isparentactivateonly" => yes(form(args, 0).or(subject).and_then(|r| g.world.placed.get(r)).is_some_and(|p| p.parent_activate_only)),
         // ---- form flags and playability ----
-        // `form flag`: 1 when every bit of `flag` is among the form's record flags
-        // [documented: GetFormFlag's table], as GetFlagsLow/High read them.
+        // `form flag`: 1 when any bit of `flag` is among the form's record flags
+        // [documented: GetFormFlag's table; observed: `w6d2_32_lutana_form_flag_service_and_casino`],
+        // as GetFlagsLow/High read them.
         "getformflag" => {
             let (Some(f), Some(bit)) = (form(args, 0), num(args, 1).map(|b| b as i64 as u32)) else { return Some(Ok(zero)) };
-            yes(bit != 0 && crate::nvse_other::record_flags_of(g, f) & bit == bit)
+            yes(bit != 0 && crate::nvse_other::record_flags_of(g, f) & bit != 0)
         }
         // `form flag on`: as SetFlagsLow/High store them, read by the same getters.
         "setformflag" => {

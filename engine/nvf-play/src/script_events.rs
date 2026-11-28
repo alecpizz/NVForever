@@ -80,11 +80,11 @@ impl From<&str> for Note {
 /// What the quest area at the left of the view shows (docs/spec-notes/quest-messages.md).
 #[derive(Debug, Clone, PartialEq)]
 pub enum QuestNotice {
-    /// "Quest added" over the quest's name: its first objective was shown.
+    /// "New quest" over the quest's name: its first objective was shown.
     Added(String),
     Completed(String),
     Failed(String),
-    /// "You have discovered" over a map marker's name: the player came within its radius
+    /// "Place found" over a map marker's name: the player came within its radius
     /// (`crate::compass`).
     Discovered(String),
     /// Objectives shown or completed, in the order it happened.
@@ -1124,7 +1124,7 @@ mod tests {
                 ScriptEffect::Notify(Note { text: "To jump, press Space.".into(), icon: Some("icons\\pain.dds".into()), seconds: Some(10.0) }),
                 ScriptEffect::MessageBox(BoxMessage { message: 0xBB, text: "Old World Blues has been loaded.".into(), buttons: vec![], hidden: vec![] }),
                 ScriptEffect::MessageBox(BoxMessage { message: 0xCC, text: "Hardcore?".into(), buttons: vec!["No".into(), "Yes".into()], hidden: vec![] }),
-                // The quest was listed already: no "Quest added".
+                // The quest was listed already: no "New quest".
                 ScriptEffect::Quest(QuestNotice::Objectives(vec![Objective { quest: QUEST.0, text: "Use the Vit-o-matic Vigor Tester".into(), completed: false }])),
                 ScriptEffect::Quest(QuestNotice::Objectives(vec![Objective { quest: QUEST.0, text: "Talk to Sunny Smiles.".into(), completed: true }])),
                 ScriptEffect::Quest(QuestNotice::Completed("Back in the Saddle".into())),
@@ -1146,7 +1146,7 @@ mod tests {
     #[test]
     fn the_first_objective_shown_adds_the_quest() {
         let objective = |text: &str, completed| ScriptEffect::Quest(QuestNotice::Objectives(vec![Objective { quest: QUEST.0, text: text.into(), completed }]));
-        // Objective 10 is the quest's first: "Quest added" comes before it, once, though
+        // Objective 10 is the quest's first: "New quest" comes before it, once, though
         // two are shown in the same frame. Objectives without text and quests without a
         // name show nothing.
         let e = run(vec![
@@ -1157,7 +1157,7 @@ mod tests {
             EventKind::QuestFailed { quest: FormId(0x77) },
         ]);
         assert_eq!(e, vec![ScriptEffect::Quest(QuestNotice::Added("Back in the Saddle".into())), objective("Talk to Sunny Smiles.", false), objective("Follow Sunny.", false)]);
-        // Shown again later, with 10 listed before: no "Quest added".
+        // Shown again later, with 10 listed before: no "New quest".
         let e = run(vec![EventKind::ObjectiveDisplayed { quest: QUEST, index: 35, on: true }, EventKind::QuestFailed { quest: QUEST }]);
         assert_eq!(e, vec![objective("Follow Sunny.", false), ScriptEffect::Quest(QuestNotice::Failed("Back in the Saddle".into()))]);
     }

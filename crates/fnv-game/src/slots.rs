@@ -157,6 +157,16 @@ pub fn first_help(g: &mut Game) -> Option<(String, String)> {
     Some((m.title.clone().unwrap_or_default(), text))
 }
 
+/// A win's celebration in seconds for a line paying `multiple` times the bet: 0 on a
+/// loss, 0.8 s at 2 x growing with the prize to 3 s from about 90 x [design: length scales with the prize, up to 3 seconds, small wins get a short one;
+/// the curve].
+pub fn celebration(multiple: u32) -> f32 {
+    if multiple == 0 {
+        return 0.0;
+    }
+    (0.4 + 0.4 * (multiple as f32).log2()).clamp(0.8, 3.0)
+}
+
 /// A request from ShowSlotMachineMenuParams (slots.md §1); the engine opens the menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SlotsRequest {
@@ -165,12 +175,28 @@ pub struct SlotsRequest {
     pub max_bet: u32,
     /// 0: the casino's own.
     pub max_winnings: u32,
+    /// The reference whose script asked (the slot machine activated), if any: the engine
+    /// seats the player at it.
+    pub machine: Option<FormId>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use rand_core::SeedableRng;
+
+    #[test]
+    fn celebrations_grow_with_the_prize_to_three_seconds() {
+        assert_eq!(celebration(0), 0.0);
+        assert!((celebration(2) - 0.8).abs() < 1e-5);
+        assert_eq!(celebration(160), 3.0);
+        let mut last = 0.0;
+        for m in [2, 5, 10, 20, 40, 80] {
+            let s = celebration(m);
+            assert!(s > last && s <= 3.0, "{m}: {s}");
+            last = s;
+        }
+    }
 
     #[test]
     fn the_record_stops_make_the_reel() {

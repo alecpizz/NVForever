@@ -790,17 +790,30 @@ fn write_rows(ui: &mut Ui, rows: &[MadeRow], data: &[Row]) {
     }
 }
 
-/// The EFF list's rows: their two texts are written where they are [hypothesis: the template's
-/// rows read nothing of code's otherwise; run07 read their places and the lines shown].
+/// The EFF list's rows: write `user0` (effect name) and `user1` (effect text) on the row tile
+/// for modded templates that bind child text strings via `<copy src="parent" trait="user0"/>` /
+/// `user1` (e.g. Vanilla UI Plus `stats_menu.xml`), and write literal child `string` traits when
+/// no expression drives them (vanilla `stats_menu.xml`) [design].
 fn write_effect_rows(ui: &mut Ui, rows: &[MadeRow], data: &[Row]) {
+    let has_string_expr = |ui: &Ui, t: TileId| {
+        let tile = ui.tile(t);
+        tile.trait_index("string").is_some_and(|k| tile.traits[k].expr.is_some())
+    };
     for (i, (made, row)) in rows.iter().zip(data).enumerate() {
+        let value = row.value.clone().unwrap_or_default();
         ui.write_changed(made.tile, "listindex", Value::Num(i as f64));
+        ui.write_changed(made.tile, "user0", Value::Str(row.name.clone()));
+        ui.write_changed(made.tile, "user1", Value::Str(value.clone()));
         // A line under each row but the last: the file ties it to this [documented: the file;
         // observed: run07b, 3 rows, 2 lines].
         ui.write_changed(made.tile, "user2", flag(i + 1 < rows.len()));
-        ui.write_changed(made.text, "string", Value::Str(row.name.clone()));
+        if !has_string_expr(ui, made.text) {
+            ui.write_changed(made.text, "string", Value::Str(row.name.clone()));
+        }
         if let Some(text) = find_named(ui, made.tile, EFFECT_TEXT) {
-            ui.write_changed(text, "string", Value::Str(row.value.clone().unwrap_or_default()));
+            if !has_string_expr(ui, text) {
+                ui.write_changed(text, "string", Value::Str(value));
+            }
         }
     }
 }
@@ -1013,9 +1026,11 @@ pub struct Geometry {
     pub list: f64,
     pub highlight: (f64, f64),
     pub desc_bound: usize,
-    /// Rows shown at once, and the first of them.
+    /// Rows shown at once, and the first of them (or scroll step for variable-height lists).
     pub visible: usize,
     pub top: usize,
+    /// Rows wholly inside the list window at this scroll position.
+    pub shown: std::ops::Range<usize>,
     pub counts: Option<Counts>,
 }
 
@@ -1057,6 +1072,8 @@ pub fn geometry(ui: &Ui, p: &Paths, list: TileId, rows: &[MadeRow], selected: us
         y += h;
         tallest = tallest.max(h);
     }
+    let base_row = places.iter().map(|r| r.0).fold(f64::INFINITY, f64::min);
+    let base_row = if base_row.is_finite() { base_row } else { tallest };
     // The EFF list is as high as its rows, for the file to centre [documented: the file; hypothesis:
     // run07's bar heights], up to what its area holds; the rest is cut, as on the hand-built page.
     let (visible, height) = match p.tab {
@@ -1065,15 +1082,29 @@ pub fn geometry(ui: &Ui, p: &Paths, list: TileId, rows: &[MadeRow], selected: us
             let most = if tallest > 0.0 && area > 0.0 { ((area / tallest).floor() as usize).max(1) } else { rows.len().max(1) };
             (most, rows.len().min(most) as f64 * tallest)
         }
-        _ => list_window(ui, list, tallest),
+        _ => list_window(ui, list, base_row),
     };
-    let scrolls = rows.len() > visible && !matches!(p.tab, TabPaths::Status(_));
-    let counts = scrolls.then(|| list::counts(&places.iter().map(|r| r.0).collect::<Vec<f64>>(), height));
-    if counts.is_some() && places.iter().any(|r| tallest - r.0 > 0.5) {
-        return Err("a list that scrolls has rows of different heights".into());
-    }
-    let top = top.min(rows.len().saturating_sub(visible));
+    let scrolls = (rows.len() > visible || y > height + 0.5) && !matches!(p.tab, TabPaths::Status(_));
+    let counts = scrolls
+        .then(|| list::counts(&places.iter().map(|r| r.0).collect::<Vec<f64>>(), height))
+        .filter(|c| c.delta.is_some());
+    let uniform = places.iter().all(|r| tallest - r.0 <= 0.5);
+    let most = counts.map_or(0, |c| c.most().round() as usize);
+    let top = if counts.is_some() { top.min(most) } else { top.min(rows.len().saturating_sub(visible)) };
     let delta = counts.and_then(|c| c.delta).unwrap_or(0.0);
+    let scroll_px = top as f64 * delta;
+    let shown = if counts.is_none() {
+        0..rows.len().min(visible)
+    } else if uniform {
+        top..(top + visible).min(rows.len())
+    } else {
+        let first = places.iter().position(|&(h, ry)| ry >= scroll_px - 1.0 && ry + h <= scroll_px + height + 1.0);
+        let last = places.iter().rposition(|&(h, ry)| ry >= scroll_px - 1.0 && ry + h <= scroll_px + height + 1.0);
+        match (first, last) {
+            (Some(a), Some(b)) => a..b + 1,
+            _ => 0..0,
+        }
+    };
     let desc_bound = if p.page == GENERAL_TAB || p.page == STATUS_TAB {
         0
     } else {
@@ -1085,8 +1116,18 @@ pub fn geometry(ui: &Ui, p: &Paths, list: TileId, rows: &[MadeRow], selected: us
     };
     // The box where its row stands after the scroll; none on a row scrolled out of sight, as the
     // hand-built list has none (`crate::pipboy::stats::list`).
-    let box_at = places.get(selected).filter(|_| highlight && (top..top + visible).contains(&selected)).map_or((-1.0, 0.0), |&(h, y)| (y - top as f64 * delta, h));
-    Ok(Geometry { rows: places, list: height, highlight: box_at, desc_bound, visible, top, counts })
+    let box_at = places
+        .get(selected)
+        .filter(|&&(h, ry)| {
+            highlight
+                && if counts.is_none() || uniform {
+                    (top..top + visible).contains(&selected)
+                } else {
+                    ry + h > scroll_px + 0.5 && ry < scroll_px + height - 0.5
+                }
+        })
+        .map_or((-1.0, 0.0), |&(h, ry)| (ry - scroll_px, h));
+    Ok(Geometry { rows: places, list: height, highlight: box_at, desc_bound, visible, top, shown, counts })
 }
 
 fn write_geometry(ui: &mut Ui, p: &Paths, list: TileId, rows: &[MadeRow], g: &Geometry, counted: &mut Vec<(TileId, f64)>) {
@@ -1144,6 +1185,38 @@ pub(super) fn shows_whole(piece: &Piece) -> Option<(f64, f64)> {
     (wholly_on_canvas(&r) && in_clip).then_some((r.left + r.width / 2.0, r.top + r.height / 2.0))
 }
 
+/// Whether a list row's text fits inside its clip window: accepts [`shows_whole`], or when the
+/// row tile itself sits wholly inside the list clip window and the text stays on-canvas with its
+/// horizontal bounds, top, and upper half inside the clip (accommodating modded font-centering
+/// offsets such as VUI+ `_VUI+FontY_2` whose bottom leading margin slightly overhangs tightly
+/// packed rows like 13-row Skills) [design].
+fn row_fits(ui: &Ui, row_tile: TileId, piece: &Piece) -> Option<(f64, f64)> {
+    if let Some(mid) = shows_whole(piece) {
+        return Some(mid);
+    }
+    let r = piece.rect;
+    if !wholly_on_canvas(&r) {
+        return None;
+    }
+    let c = piece.clip?;
+    if r.left < c.left - 1.0 || r.left + r.width > c.left + c.width + 1.0 || r.top < c.top - 1.0 {
+        return None;
+    }
+    let row_box = layout::tile_box(ui, row_tile, &|_, _, _| (0.0, 0.0), true)?;
+    let rb = row_box.rect;
+    if rb.top < c.top - 1.0 || rb.top + rb.height > c.top + c.height + 1.0 {
+        return None;
+    }
+    let clip_bottom = c.top + c.height;
+    if clip_bottom - r.top < r.height * 0.5 {
+        return None;
+    }
+    // Probe inside the row tile's own clickable box (clamped inside `c`), since the text's
+    // vertical offset may push the text box's midpoint near or past `rb`'s bottom edge [design].
+    let mid_y = (rb.top + rb.height / 2.0).clamp(c.top + 1.0, clip_bottom - 1.0);
+    Some((r.left + r.width / 2.0, mid_y))
+}
+
 /// The window the description is read through: what clips it, else its parent's place and
 /// height at its own width (the scroll moves the text itself, not the window).
 fn description_window(ui: &Ui, p: &Paths, desc: &Piece) -> layout::Rect {
@@ -1162,7 +1235,7 @@ pub fn usable(ui: &Ui, p: &Paths, rows: &[MadeRow], shown: std::ops::Range<usize
     let mut wanted: Vec<(StatsTile, (f64, f64))> = Vec::with_capacity(rows.len() + p.tabs.len());
     for (i, row) in rows.iter().enumerate().filter(|(i, _)| shown.contains(i)) {
         let piece = pieces.iter().filter(is_text).find(|x| x.tile == row.text).ok_or_else(|| format!("row {i} is not shown"))?;
-        let middle = shows_whole(piece).ok_or_else(|| format!("row {i} does not fit"))?;
+        let middle = row_fits(ui, row.tile, piece).ok_or_else(|| format!("row {i} does not fit"))?;
         // The EFF list's rows are only read.
         if !matches!(p.tab, TabPaths::Status(_)) {
             wanted.push((StatsTile::Row(i), middle));
@@ -1242,6 +1315,8 @@ pub(crate) struct Written {
     drawn: Option<(f64, f64, usize)>,
     /// The list's scroll last logged.
     list_drawn: Option<f64>,
+    /// Last `(tab, selected)` seen by [`page`], to keep variable-height selections in view.
+    last_selected: Option<(usize, usize)>,
     fallbacks: HashSet<String>,
 }
 
@@ -1464,9 +1539,25 @@ pub(crate) fn page(ui: &mut Ui, snap: &Snapshot, view: &mut StatsView, tab: usiz
         }
         write_frame(ui, &p, device, &mut w.flat);
         ui.update();
-        let g = geometry(ui, &p, list, &w.rows, at.selected, view.highlight, view.top[tab])?;
+        let mut g = geometry(ui, &p, list, &w.rows, at.selected, view.highlight, view.top[tab])?;
         // The file's count of the rows, for the model's scroll; what it held is kept in range.
         view.set_rows_shown(tab, g.visible);
+        view.set_scroll_most(tab, g.counts.map(|c| c.most().round() as usize));
+        // When selection moved on a variable-height scrolling list, keep the selected row in view.
+        if let Some(c) = g.counts {
+            let delta = c.delta.unwrap_or(0.0);
+            let sel_changed = w.last_selected != Some((tab, at.selected));
+            if sel_changed {
+                if let Some(&(h, ry)) = g.rows.get(at.selected) {
+                    let want = list::keep_row_shown(view.top[tab] as f64, ry, h, g.list, delta, c.most()).round() as usize;
+                    if want != view.top[tab] {
+                        view.top[tab] = want;
+                        g = geometry(ui, &p, list, &w.rows, at.selected, view.highlight, view.top[tab])?;
+                    }
+                }
+            }
+        }
+        w.last_selected = Some((tab, at.selected));
         if view.desc_bound() != g.desc_bound {
             view.set_desc_bound(g.desc_bound);
         }
@@ -1510,7 +1601,7 @@ pub(crate) fn page(ui: &mut Ui, snap: &Snapshot, view: &mut StatsView, tab: usiz
         ui.update();
         // Every final pass, so readiness is about the tree that is about to be painted.
         let mut pieces = fonts.set_out(ui, p.menu);
-        let in_sight = w.geometry.as_ref().map_or(0..w.rows.len(), |g| g.top..g.top + g.visible);
+        let in_sight = w.geometry.as_ref().map_or(0..w.rows.len(), |g| g.shown.clone());
         tiles.desc_area = usable(ui, &p, &w.rows, in_sight, &pieces)?;
         if let (TabPaths::Status(st), Some(limb)) = (&p.tab, aimed) {
             append_limb_box(ui, &mut pieces, st.limbs[limb]);
@@ -1876,6 +1967,7 @@ pub(crate) struct Feed {
     /// The row the pointer last selected, while it stays on it.
     acted: Option<usize>,
     drag: Option<MarkerDrag>,
+    touch_drag: bool,
     /// Where the pointer was last frame, and the tile under it then.
     last_at: Option<(f64, f64)>,
     under: Option<TileId>,
@@ -1929,8 +2021,33 @@ pub(crate) struct FeedPip<'w> {
     screen: Option<Res<'w, PipBoyScreen>>,
     aid: Res<'w, PipBoyAid>,
     paused: Option<Res<'w, crate::pause::Paused>>,
+    touch:Option<Res<'w,crate::pipboy::touch_items::TouchItems>>,
+    admission: crate::pipboy::touch_items::Admission<'w>,
+
 }
 
+pub(crate) fn touch_target(tiles:&StatsTiles,ui:&Ui,menu:TileId,point:Vec2,view:&StatsView)->Option<crate::pipboy::touch_scroll::NativeTarget>{
+    use crate::pipboy::touch_scroll::{NativeRow,NativeTarget};
+    NativeTarget::at(ui,menu,point,|tile| {
+        let paths=tiles.written.paths?;
+        match stats_tile(ui,&paths,&tiles.written.rows,tile) {
+            Some(StatsTile::Row(index))=>tiles.written.rows.get(index).map(|r|NativeRow::Stats(r.key)),
+            Some(StatsTile::Hint(hint))=>Some(NativeRow::StatsHint{hint,status:view.status,limb:if hint==stats::model::STIMPAK {view.limb}else{None}}),
+            _=>None,
+        }
+    },|_|None,|_|true)
+        .map(|target| target.with_control(|tile| tiles.written.paths.is_some_and(|p|matches!(stats_tile(ui,&p,&tiles.written.rows,tile),Some(StatsTile::Marker|StatsTile::ListBar(BarPiece::Marker))))))
+}
+pub(crate) fn touch_navigation(tiles:&StatsTiles,ui:&Ui)->Vec<crate::pipboy::tab_swipe::Region> {
+    use crate::pipboy::tab_swipe::{native_region,Kind};
+    let Some(paths)=tiles.written.paths else {return Vec::new()};
+    tiles.pieces.iter().filter_map(|p| {
+        let kind=if p.tile==paths.title {Kind::Sections}
+            else if matches!(stats_tile(ui,&paths,&tiles.written.rows,p.tile),Some(StatsTile::Tab(_))) {Kind::Subtabs}
+            else {return None};
+        native_region(p,kind)
+    }).collect()
+}
 /// The page's tile input, on a frame it takes it ([`takes`]): see the module notes.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn feed(
@@ -1943,7 +2060,7 @@ pub(crate) fn feed(
     (mut tabs, mut hovered, mut asks): (MessageWriter<PipBoyInput>, MessageWriter<TabHovered>, MessageWriter<stats::UseHint>),
     mut state: Local<Feed>,
 ) {
-    let FeedPip { pip, screen, aid, paused } = from;
+    let FeedPip { pip, screen, aid, paused, touch, admission } = from;
     let Some(rt) = script.rt.as_mut() else { return };
     let game = &mut rt.game;
     let modal = eligible(*switch, &pip) && pip.open() && modal_over(game.menu);
@@ -1961,7 +2078,17 @@ pub(crate) fn feed(
         *state = Feed::default();
         return;
     };
-    let pointer = screen.as_ref().and_then(|s| s.pointer);
+    let mut mobile=crate::pipboy::touch_scroll::native_frame(touch.as_deref(),&devices.mouse);
+    if !admission.allows_contact(touch.as_ref().and_then(|t|t.contact_id())) { mobile=Default::default(); }
+    if mobile.tap {
+        let target=mobile.at.and_then(|at|touch_target(&tiles,&game.ui_tree,menu,at,&view));
+        mobile.tap=touch.as_ref().is_some_and(|t|t.native_release_valid(target));
+    }
+    if mobile.control && mobile.started {
+        let target=mobile.at.and_then(|at|touch_target(&tiles,&game.ui_tree,menu,at,&view));
+        mobile.started=target.is_some_and(|t|t.control()) && touch.as_ref().is_some_and(|t|t.native_release_valid(target));
+    }
+    let pointer = mobile.at.or_else(||screen.as_ref().and_then(|s| s.pointer));
     let taking = (pip.frame, tab, view.reputation);
     if state.taking != Some(taking) {
         *state = Feed { taking: Some(taking), drawn_at: pointer, ..Default::default() };
@@ -1972,11 +2099,11 @@ pub(crate) fn feed(
     let settled = state.drawn_at.is_none() || pointer.is_none();
     // The test aid's click (`crate::pipboy::drive_pointer`): 1 is its press's frame.
     let aid_press = aid.click == 1 && !aid.right;
-    let held = aid_press || devices.mouse.pressed(MouseButton::Left);
+    let held = mobile.held || aid_press || devices.mouse.pressed(MouseButton::Left);
     let at = pointer.map(|p| (f64::from(p.x), f64::from(p.y)));
     let mut input = fnv_ui::input::Input {
         at,
-        press: aid_press || devices.mouse.just_pressed(MouseButton::Left),
+        press: mobile.press() || aid_press || devices.mouse.just_pressed(MouseButton::Left),
         shift: devices.keys.pressed(KeyCode::ShiftLeft) || devices.keys.pressed(KeyCode::ShiftRight),
         ..Default::default()
     };
@@ -1996,7 +2123,7 @@ pub(crate) fn feed(
     log_report(ui, &report);
     let rows = &tiles.written.rows;
     let what = |t: TileId| stats_tile(ui, &p, rows, t);
-    if let Some((_, Some(to))) = report.over {
+    if let Some((_, Some(to))) = report.over.filter(|_| !mobile.control) {
         if let Some(StatsTile::Tab(i)) = what(to) {
             hovered.write(TabHovered(i));
         }
@@ -2022,7 +2149,7 @@ pub(crate) fn feed(
     let in_sight = tiles.written.geometry.as_ref().map_or(0..usize::MAX, |g| g.top..g.top + g.visible);
     let under_row = row_to_hover(under_row, &in_sight);
     // Only a real change touches the view, which the page's other readers watch.
-    match follow_hover(&mut state.acted, under_row, settled) {
+    match if mobile.control { None } else { follow_hover(&mut state.acted, under_row, settled) } {
         Some(HoverAct::Select(i)) => {
             view.select(tab, i);
             view.highlight = true;
@@ -2034,8 +2161,9 @@ pub(crate) fn feed(
         view.select(tab, i);
         view.highlight = true;
     }
-    if !held {
+    if !held || (state.touch_drag && !mobile.control) {
         state.drag = None;
+        state.touch_drag = false;
     }
     let mut pressed_marker = false;
     for c in report.clicks.iter().filter(|c| ui.is_live(c.tile)) {
@@ -2058,6 +2186,7 @@ pub(crate) fn feed(
             StatsTile::Marker => {
                 pressed_marker = true;
                 state.drag = at.filter(|_| held && matches!(c.by, fnv_ui::input::By::Pointer)).and_then(|(_, y)| marker_grab(ui, &p, BarOf::Description, y));
+                state.touch_drag = mobile.control && state.drag.is_some();
             }
             StatsTile::Switch => view.switch(),
             StatsTile::Sub(i) => view.status = i,
@@ -2082,6 +2211,7 @@ pub(crate) fn feed(
             StatsTile::ListBar(BarPiece::Marker) => {
                 pressed_marker = true;
                 state.drag = at.filter(|_| held && matches!(c.by, fnv_ui::input::By::Pointer)).and_then(|(_, y)| marker_grab(ui, &p, BarOf::List, y));
+                state.touch_drag = mobile.control && state.drag.is_some();
             }
         }
     }
@@ -2122,6 +2252,7 @@ pub(super) fn parse_cut(v: &str) -> (String, Option<f32>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("stats_menu/tab_swipe_tests.rs");
     use fnv_ui::input::{no_measure, By, Input, Pointer};
     use fnv_ui::MemSource;
 
@@ -2630,22 +2761,78 @@ mod tests {
         }
     }
 
-    /// A name that wraps makes one row taller: the model's whole rows cannot scroll that list,
-    /// while a list that fits does not mind.
+    /// A name that wraps makes one row taller: a scrolling list uses `list::counts` across the
+    /// variable row heights instead of falling back to the hand-built page (e.g. modded Perks),
+    /// and a list that fits also stays on tiles.
     #[test]
-    fn rows_of_different_heights_cannot_scroll() {
+    fn rows_of_different_heights_scroll_on_tiles() {
         let (mut ui, mut v, mut t) = (tree(), view(), StatsTiles::default());
         run_tab(&mut ui, &snap(), &mut v, 2, &mut t).unwrap();
         let tall = t.written.rows[3].text;
         ui.set_trait(tall, "string", Value::Str("two|lines".into()));
         ui.update();
-        assert!(run_tab(&mut ui, &snap(), &mut v, 2, &mut t).unwrap_err().contains("different heights"));
+        run_tab(&mut ui, &snap(), &mut v, 2, &mut t).expect("scrolling list with wrapped row stays on tiles");
+        let counts = t.written.geometry.as_ref().and_then(|g| g.counts).expect("variable-height list scrolls");
+        assert!(counts.most() >= 4.0);
+        // Scrolling to the end keeps the last row in view without falling back.
+        v.scroll(2, counts.most() as i32);
+        run_tab(&mut ui, &snap(), &mut v, 2, &mut t).expect("scrolling to end stays on tiles");
+        assert!(t.written.geometry.as_ref().unwrap().shown.contains(&12));
         let (mut ui, mut v, mut t) = (tree(), view(), StatsTiles::default());
         run(&mut ui, &snap(), &mut v, true, &mut t).unwrap();
         let tall = t.written.rows[3].text;
         ui.set_trait(tall, "string", Value::Str("two|lines".into()));
         ui.update();
         assert!(run(&mut ui, &snap(), &mut v, true, &mut t).is_ok());
+    }
+
+    /// Modded `stats_effects_template` (e.g. Vanilla UI Plus `stats_menu.xml`) binds
+    /// `stats_effect_name` and `stats_effect_string` to `parent/user0` and `parent/user1`.
+    #[test]
+    fn effects_template_bound_to_user0_and_user1_renders_on_tiles() {
+        let modded = |x: &str| {
+            x.replace(
+                r#"<text name="stats_effect_name"/><text name="stats_effect_string"><x>60</x></text>"#,
+                r#"<user0></user0><user1></user1><text name="stats_effect_name"><string><copy src="parent()" trait="user0"/></string></text><text name="stats_effect_string"><x>60</x><string><copy src="parent()" trait="user1"/></string></text>"#,
+            )
+        };
+        let (mut ui, mut v, mut t) = (tree_changed(modded), view(), status_tiles());
+        let mut s = status_snap();
+        s.effects = vec![crate::pipboy::stats::model::EffectLine { name: "Well Rested".into(), text: "+10% XP".into() }];
+        v.status = 2;
+        run_tab(&mut ui, &s, &mut v, STATUS_TAB, &mut t).expect("VUI+ EFF rows stay on tiles");
+        assert!(t.pieces.iter().any(|p| matches!(&p.look, Look::Text { string, .. } if string == "Well Rested")));
+        assert!(t.pieces.iter().any(|p| matches!(&p.look, Look::Text { string, .. } if string == "+10% XP")));
+    }
+
+    /// Modded 13-row Skills list (e.g. Vanilla UI Plus) sized to fit all 13 rows (`13 * row_h`)
+    /// with a vertical font-centering offset (`_VUI+FontY_2`) stays on tiles instead of failing
+    /// on row 12's bottom leading margin, while a genuinely clipped or off-canvas row still fails.
+    #[test]
+    fn tightly_packed_skills_list_with_font_y_offset_fits_last_row_on_tiles() {
+        // 13 skills × (text 30 + spacing 8.5 = 38.5) = 500.5 exact list height, with text y = 14
+        // (matching VUI+ `_VUI+FontY_2 + _VerticalSpacing/2 - 1`), so row 12's tile fits [462, 500.5]
+        // while ListItemText's box ends at 506.0 (5.5 units of bottom leading slack).
+        // Shift fixture tabs from y=500 to y=560 so the taller 500.5px list doesn't overlap them.
+        let tight = |x: &str| {
+            x.replace("<y>500</y>", "<y>560</y>")
+                .replace(
+                    r#"<hotrect name="stats_skills_container"><x>12</x><y>30</y><width>200</width><clipwindow>&true;</clipwindow><_number_of_visible_items>9</_number_of_visible_items>"#,
+                    r#"<hotrect name="stats_skills_container"><x>12</x><y>30</y><width>200</width><height>500.5</height><clipwindow>&true;</clipwindow><_VerticalSpacing>8.5</_VerticalSpacing>"#,
+                )
+                .replace(
+                    r#"<_VerticalSpacing>6</_VerticalSpacing>"#,
+                    r#"<clips>&true;</clips><_VerticalSpacing><copy src="parent()" trait="_VerticalSpacing"/></_VerticalSpacing>"#,
+                )
+                .replace(
+                    r#"<text name="ListItemText"><string>Row</string></text>"#,
+                    r#"<text name="ListItemText"><y>14</y><string>Row</string></text>"#,
+                )
+        };
+        let (mut ui, mut v, mut t) = (tree_changed(tight), view(), StatsTiles::default());
+        run_tab(&mut ui, &snap(), &mut v, 2, &mut t).expect("13-row VUI+ Skills list must stay on tiles");
+        assert_eq!(t.written.rows.len(), 13);
+        assert_eq!(t.written.geometry.as_ref().unwrap().shown, 0..13);
     }
 
     /// Each list has its own rows, unloaded when another is shown, as a new tree would.
@@ -3011,7 +3198,7 @@ mod tests {
     }
 
     /// In Hardcore code shows the three buttons and each need's page reads its figure, on RAD's
-    /// shape [hypothesis]; out of it a page of theirs goes back among those shown.
+    /// shape (see production Hardcore status panel above); out of it a page of theirs goes back among those shown.
     #[test]
     fn hardcore_shows_its_buttons_and_pages() {
         let (mut ui, mut v, mut t) = (tree(), view(), status_tiles());
@@ -3667,6 +3854,90 @@ mod tests {
         let mut word = s.clone();
         word.karma = Some((5.0, "Another", "a_picture"));
         assert!(!shown.same(&word, at, &key));
+    }
+
+    #[test]
+    fn projected_touch_release_uses_native_tab_route_once_and_swipe_or_overlay_cannot_click_it() {
+        use bevy::{prelude::*,input::{InputPlugin,touch::{TouchInput,TouchPhase}},picking::pointer::{PointerInput,PointerAction}};
+        use crate::pipboy::{self,touch_items::TouchItems};
+        #[derive(Resource,Default)] struct Seen {tabs:usize,bevy_presses:usize,bevy_releases:usize}
+        fn project(mut touch:ResMut<TouchItems>){touch.project(Some);}
+        fn read(mut tabs:MessageReader<PipBoyInput>,mut pointers:MessageReader<PointerInput>,mut seen:ResMut<Seen>){
+            seen.tabs+=tabs.read().count();
+            for p in pointers.read().filter(|p|p.pointer_id==pipboy::touch_items::POINTER){match p.action{PointerAction::Press(_)=>seen.bevy_presses+=1,PointerAction::Release(_)=>seen.bevy_releases+=1,_=>{}}}
+        }
+        for mode in 0..4 {
+            let (mut ui,mut view,mut tiles)=(tree(),view(),StatsTiles::default());
+            let menu=run(&mut ui,&snap(),&mut view,true,&mut tiles).unwrap();tiles.shown=Some(menu);
+            let mut script=ScriptState::over_no_plugins();{
+                let game=&mut script.rt.as_mut().unwrap().game;game.ui_files=Some(Box::new(MemSource::default()));game.ui_tree=ui;game.menu=Some(fnv_game::game::menus::STATS);
+            }
+            let mut pip=stats_page_up(PAGE);pip.phase=pipboy::Phase::Up;
+            let mut app=App::new();app.add_plugins((MinimalPlugins,InputPlugin))
+                .init_resource::<bevy::picking::pointer::PointerMap>().init_resource::<TouchItems>()
+                .init_resource::<pipboy::touch_scroll::WheelFrame>().init_resource::<pipboy::PipBoyAid>()
+                .init_resource::<pipboy::PointerMoved>().init_resource::<Seen>()
+                .add_message::<PointerInput>().add_message::<bevy::window::WindowEvent>()
+                .add_message::<PipBoyInput>().add_message::<TabHovered>().add_message::<stats::UseHint>()
+                .insert_resource(script).insert_resource(view).insert_resource(tiles).insert_resource(pip)
+                .insert_resource(TileMenus{stats:true,..Default::default()});
+            let camera=app.world_mut().spawn_empty().id();
+            app.insert_resource(PipBoyScreen{image:Handle::default(),camera,on_model:false,pointer:None,scale:1.0})
+                .add_systems(PreUpdate,pipboy::drive_pointer)
+                .add_systems(Update,(feed,pipboy::apply_input,read).chain()).add_systems(Last,project);
+            app.update();
+            let point=Vec2::new(200.0,505.0);let mut event=TouchInput{window:Entity::PLACEHOLDER,id:92,phase:TouchPhase::Started,position:point,force:None};
+            app.world_mut().resource_mut::<TouchItems>().event(&event,0);
+            if mode==1 {event.phase=TouchPhase::Moved;event.position.y-=40.;app.world_mut().resource_mut::<TouchItems>().event(&event,20);}
+            event.phase=TouchPhase::Ended;event.position=point;app.world_mut().resource_mut::<TouchItems>().event(&event,80);
+            if mode==2 {app.insert_resource(pipboy::touch_items::OverlayCapture(true));}
+            if mode==3 {app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);}
+            for _ in 0..5 {app.update();}
+            assert_eq!(app.world().resource::<PipBoy>().tab(),if mode==0 {3}else{PAGE});
+            let seen=app.world().resource::<Seen>();assert_eq!(seen.tabs,usize::from(mode==0));
+            assert_eq!((seen.bevy_presses,seen.bevy_releases),(0,0),"native target has exactly one action owner");
+            if mode==3 {assert!(app.world().resource::<ButtonInput<MouseButton>>().pressed(MouseButton::Left));}
+        }
+    }
+
+    #[test]
+    fn native_hint_release_cannot_retarget_a_limb_changed_during_a_real_repaint() {
+        use bevy::{prelude::*, input::{InputPlugin, touch::{TouchInput, TouchPhase}}};
+        use crate::pipboy::{self, touch_items::TouchItems};
+        #[derive(Resource, Default)] struct Seen(Vec<stats::UseHint>);
+        #[derive(Resource)] struct Repaint(bool);
+        fn project(mut touch: ResMut<TouchItems>) { touch.project(Some); }
+        fn change(mut change: ResMut<Repaint>, touch: Res<TouchItems>, mut view: ResMut<StatsView>, mut script: ResMut<ScriptState>, mut tiles: ResMut<StatsTiles>) {
+            if change.0 && touch.pointer_frame().tap {
+                change.0 = false; view.limb = Some(2);
+                let menu = run_tab(&mut script.rt.as_mut().unwrap().game.ui_tree, &status_snap(), &mut view, STATUS_TAB, &mut tiles).unwrap();
+                tiles.shown = Some(menu);
+            }
+        }
+        fn read(mut asks: MessageReader<stats::UseHint>, mut seen: ResMut<Seen>) { seen.0.extend(asks.read().copied()); }
+        let (mut ui, mut view, mut tiles) = (tree(), view(), status_tiles()); view.limb = Some(1);
+        let menu = run_tab(&mut ui, &status_snap(), &mut view, STATUS_TAB, &mut tiles).unwrap(); tiles.shown = Some(menu);
+        let point = Vec2::new(705., 205.);
+        assert!(matches!(stats_tile(&ui, &paths(&ui, STATUS_TAB, None).unwrap(), &[], fnv_ui::input::hit(&ui, &[menu], (705.,205.), &no_measure).unwrap().tile), Some(StatsTile::Hint(0))));
+        let mut script = ScriptState::over_no_plugins(); { let game = &mut script.rt.as_mut().unwrap().game; game.ui_files = Some(Box::new(MemSource::default())); game.ui_tree = ui; game.menu = Some(fnv_game::game::menus::STATS); }
+        let mut pip = stats_page_up(STATUS_TAB); pip.phase = pipboy::Phase::Up;
+        let mut app = App::new(); app.add_plugins((MinimalPlugins, InputPlugin))
+            .init_resource::<TouchItems>().init_resource::<pipboy::PipBoyAid>().init_resource::<pipboy::PointerMoved>()
+            .init_resource::<Seen>().insert_resource(Repaint(true))
+            .add_message::<PipBoyInput>().add_message::<TabHovered>().add_message::<stats::UseHint>()
+            .insert_resource(script).insert_resource(view).insert_resource(tiles).insert_resource(pip)
+            .insert_resource(TileMenus { stats: true, ..Default::default() });
+        let camera = app.world_mut().spawn_empty().id();
+        app.insert_resource(PipBoyScreen { image: Handle::default(), camera, on_model: false, pointer: None, scale: 1. })
+            .add_plugins(pipboy::touch_scroll::TouchPointerPlugin)
+            .add_systems(Update, (change, feed, read).chain()).add_systems(Last, project);
+        app.update();
+        let send = |app: &mut App, id, phase| { assert!(app.world_mut().resource_mut::<TouchItems>().event(&TouchInput { window: Entity::PLACEHOLDER, id, phase, position: point, force: None }, 100)); };
+        send(&mut app, 201, TouchPhase::Started); app.update(); app.update();
+        send(&mut app, 201, TouchPhase::Ended); for _ in 0..4 { app.update(); }
+        assert!(!app.world().resource::<Repaint>().0); assert!(app.world().resource::<Seen>().0.is_empty());
+        send(&mut app, 202, TouchPhase::Started); send(&mut app, 202, TouchPhase::Ended); for _ in 0..4 { app.update(); }
+        assert_eq!(app.world().resource::<Seen>().0, vec![stats::UseHint { hint: stats::model::STIMPAK, limb: Some(2) }]);
     }
 
     #[test]

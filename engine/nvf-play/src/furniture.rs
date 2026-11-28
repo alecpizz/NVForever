@@ -30,6 +30,13 @@ pub struct PlayerSeat {
     pub bed: bool,
     /// The furniture reference holding the player.
     pub on: Option<u32>,
+    /// On it: neither getting on nor getting off (a slot machine's menu opens then,
+    /// `crate::slots::seat`).
+    pub seated: bool,
+    /// Getting off it (its getting-off clip plays): co-op sends the player as off from
+    /// now, so the other screens' puppet starts its own getting-off clip with this one
+    /// (nvforever `coop.rs`). Set by nvforever's furniture; read only by co-op.
+    pub getting_off: bool,
 }
 
 /// Tell the script runtime which furniture `actor` uses, so GetSitting and the other

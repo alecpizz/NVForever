@@ -1,0 +1,240 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6c_jg_quest_perk_flst_xmarker",
+  "description": "Wave 6C strictly read-only console-only probe verifying FormList and XMarker wildcard filter support in SetJohnnyOnStartQuestEventHandler, SetJohnnyOnStopQuestEventHandler, SetJohnnyOnAddPerkEventHandler, and SetJohnnyOnRemovePerkEventHandler.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)",
+    "JohnnyGuitarNVSE": "528"
+  },
+  "batches": [
+    {
+      "id": "w6c_jg_quest_perk_flst_xmarker",
+      "title": "Wave 6C - JG Quest & Perk Event FormList + XMarker Filters",
+      "extender": "JohnnyGuitar 528 + JIP LN 57.30",
+      "required_plugins": [
+        "jip_nvse.dll",
+        "johnnyguitar.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6t2p3_09_11_flst_real",
+          "bucket": "B",
+          "extender": "JohnnyGuitar 528",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "johnnyguitar.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-jg8.md",
+          "spec_line": 41,
+          "functions_tested": [
+            "SetJohnnyOnDyingEventHandler",
+            "SetJohnnyOnStartQuestEventHandler",
+            "SetJohnnyOnStopQuestEventHandler",
+            "SetJohnnyOnAddPerkEventHandler",
+            "SetJohnnyOnRemovePerkEventHandler"
+          ],
+          "claim": "Verify JG OnDying, OnStartQuest, OnStopQuest, OnAddPerk, OnRemovePerk with a real FLST from GetLoadedTypeArray 85 and XMarker wildcard.",
+          "expected": "dyingFl=0|qStart(u=2,d=1,fl=1,xm=2)|qStopFl=1|pAdd(u=1,d=1,fl=1,xm=1)|pRemFl=1",
+          "script_lines": [
+            "array_var aFlsts = GetLoadedTypeArray 85",
+            "ref rFlst = TempCloneForm (aFlsts[0])",
+            "ListClear rFlst",
+            "ref rNpcB = GetFormFromMod \"FalloutNV.esm\" \"104C78\"",
+            "SetEssential rNpcB 0",
+            "array_var aQs = GetLoadedTypeArray 71",
+            "ref rQ = 0",
+            "int qi = 0",
+            "int qn = ar_Size aQs",
+            "while qi < qn",
+            "  ref rCand = aQs[qi]",
+            "  if (GetQuestRunning rCand) == 0",
+            "    let rQ := rCand",
+            "    break",
+            "  endif",
+            "  let qi += 1",
+            "loop",
+            "ref rPk = GetFormFromMod \"FalloutNV.esm\" \"31DE5\"",
+            "ref rXm = GetFormFromMod \"FalloutNV.esm\" \"3B\"",
+            "ListAddForm rFlst rNpcB",
+            "ListAddForm rFlst rQ",
+            "ListAddForm rFlst rPk",
+            "Player.AuxVarSetRef \"*p3_fl\" rFlst",
+            "Player.AuxVarSetRef \"*p3_q\" rQ",
+            "Player.AuxVarSetFlt \"*p3_d_fl\" 0",
+            "Player.AuxVarSetFlt \"*p3_q_u\" 0",
+            "Player.AuxVarSetFlt \"*p3_q_d\" 0",
+            "Player.AuxVarSetFlt \"*p3_q_fl\" 0",
+            "Player.AuxVarSetFlt \"*p3_q_xm\" 0",
+            "Player.AuxVarSetFlt \"*p3_qs_fl\" 0",
+            "Player.AuxVarSetFlt \"*p3_p_u\" 0",
+            "Player.AuxVarSetFlt \"*p3_p_d\" 0",
+            "Player.AuxVarSetFlt \"*p3_p_fl\" 0",
+            "Player.AuxVarSetFlt \"*p3_p_xm\" 0",
+            "Player.AuxVarSetFlt \"*p3_pr_fl\" 0",
+            "ref cbD = CompileScript \"nvseprobe_s_p3_dfl.gek\"",
+            "ref cbQU = CompileScript \"nvseprobe_s_p3_qu.gek\"",
+            "ref cbQD = CompileScript \"nvseprobe_s_p3_qd.gek\"",
+            "ref cbQF = CompileScript \"nvseprobe_s_p3_qfl.gek\"",
+            "ref cbQX = CompileScript \"nvseprobe_s_p3_qxm.gek\"",
+            "ref cbQSF = CompileScript \"nvseprobe_s_p3_qsfl.gek\"",
+            "ref cbPU = CompileScript \"nvseprobe_s_p3_pu.gek\"",
+            "ref cbPD = CompileScript \"nvseprobe_s_p3_pd.gek\"",
+            "ref cbPF = CompileScript \"nvseprobe_s_p3_pfl.gek\"",
+            "ref cbPX = CompileScript \"nvseprobe_s_p3_pxm.gek\"",
+            "ref cbPRF = CompileScript \"nvseprobe_s_p3_prfl.gek\"",
+            "Player.AuxVarSetRef \"*p3_cbd\" cbD",
+            "Player.AuxVarSetRef \"*p3_cbqu\" cbQU",
+            "Player.AuxVarSetRef \"*p3_cbqd\" cbQD",
+            "Player.AuxVarSetRef \"*p3_cbqf\" cbQF",
+            "Player.AuxVarSetRef \"*p3_cbqx\" cbQX",
+            "Player.AuxVarSetRef \"*p3_cbqsf\" cbQSF",
+            "Player.AuxVarSetRef \"*p3_cbpu\" cbPU",
+            "Player.AuxVarSetRef \"*p3_cbpd\" cbPD",
+            "Player.AuxVarSetRef \"*p3_cbpf\" cbPF",
+            "Player.AuxVarSetRef \"*p3_cbpx\" cbPX",
+            "Player.AuxVarSetRef \"*p3_cbprf\" cbPRF",
+            "SetJohnnyOnDyingEventHandler 1 cbD 0 rFlst",
+            "SetJohnnyOnStartQuestEventHandler 1 cbQU 0",
+            "SetJohnnyOnStartQuestEventHandler 1 cbQD 0 rQ",
+            "SetJohnnyOnStartQuestEventHandler 1 cbQF 0 rFlst",
+            "SetJohnnyOnStartQuestEventHandler 1 cbQX 0 rXm",
+            "SetJohnnyOnStopQuestEventHandler 1 cbQSF 0 rFlst",
+            "SetJohnnyOnAddPerkEventHandler 1 cbPU 0",
+            "SetJohnnyOnAddPerkEventHandler 1 cbPD 0 rPk",
+            "SetJohnnyOnAddPerkEventHandler 1 cbPF 0 rFlst",
+            "SetJohnnyOnAddPerkEventHandler 1 cbPX 0 rXm",
+            "SetJohnnyOnRemovePerkEventHandler 1 cbPRF 0 rFlst",
+            "ref rNpc = Player.PlaceAtMe rNpcB 1 120 0",
+            "Player.AuxVarSetRef \"*p3_npc\" rNpc"
+          ],
+          "wait_ticks_after": 2,
+          "helper_scripts": {
+            "nvseprobe_s_p3_dfl.gek": [
+              "begin Function { ref rA }",
+              "Player.AuxVarSetFlt \"*p3_d_fl\" ((Player.AuxVarGetFlt \"*p3_d_fl\") + 1)"
+            ],
+            "nvseprobe_s_p3_qu.gek": [
+              "begin Function { ref rA }",
+              "Player.AuxVarSetFlt \"*p3_q_u\" ((Player.AuxVarGetFlt \"*p3_q_u\") + 1)"
+            ],
+            "nvseprobe_s_p3_qd.gek": [
+              "begin Function { ref rA }",
+              "Player.AuxVarSetFlt \"*p3_q_d\" ((Player.AuxVarGetFlt \"*p3_q_d\") + 1)"
+            ],
+            "nvseprobe_s_p3_qfl.gek": [
+              "begin Function { ref rA }",
+              "Player.AuxVarSetFlt \"*p3_q_fl\" ((Player.AuxVarGetFlt \"*p3_q_fl\") + 1)"
+            ],
+            "nvseprobe_s_p3_qxm.gek": [
+              "begin Function { ref rA }",
+              "Player.AuxVarSetFlt \"*p3_q_xm\" ((Player.AuxVarGetFlt \"*p3_q_xm\") + 1)"
+            ],
+            "nvseprobe_s_p3_qsfl.gek": [
+              "begin Function { ref rA }",
+              "Player.AuxVarSetFlt \"*p3_qs_fl\" ((Player.AuxVarGetFlt \"*p3_qs_fl\") + 1)"
+            ],
+            "nvseprobe_s_p3_pu.gek": [
+              "begin Function { ref rA, int iO, int iN }",
+              "Player.AuxVarSetFlt \"*p3_p_u\" ((Player.AuxVarGetFlt \"*p3_p_u\") + 1)"
+            ],
+            "nvseprobe_s_p3_pd.gek": [
+              "begin Function { ref rA, int iO, int iN }",
+              "Player.AuxVarSetFlt \"*p3_p_d\" ((Player.AuxVarGetFlt \"*p3_p_d\") + 1)"
+            ],
+            "nvseprobe_s_p3_pfl.gek": [
+              "begin Function { ref rA, int iO, int iN }",
+              "Player.AuxVarSetFlt \"*p3_p_fl\" ((Player.AuxVarGetFlt \"*p3_p_fl\") + 1)"
+            ],
+            "nvseprobe_s_p3_pxm.gek": [
+              "begin Function { ref rA, int iO, int iN }",
+              "Player.AuxVarSetFlt \"*p3_p_xm\" ((Player.AuxVarGetFlt \"*p3_p_xm\") + 1)"
+            ],
+            "nvseprobe_s_p3_prfl.gek": [
+              "begin Function { ref rA }",
+              "Player.AuxVarSetFlt \"*p3_pr_fl\" ((Player.AuxVarGetFlt \"*p3_pr_fl\") + 1)"
+            ]
+          },
+          "extra_steps": [
+            {
+              "suffix": "trigger1",
+              "wait_ticks": 2,
+              "script_lines": [
+                "ref rNpc = Player.AuxVarGetRef \"*p3_npc\"",
+                "ref rQ = Player.AuxVarGetRef \"*p3_q\"",
+                "ref rPk = GetFormFromMod \"FalloutNV.esm\" \"31DE5\"",
+                "rNpc.KillActor Player",
+                "StartQuest rQ",
+                "Player.AddPerk rPk"
+              ]
+            },
+            {
+              "suffix": "trigger2",
+              "wait_ticks": 2,
+              "script_lines": [
+                "ref rQ = Player.AuxVarGetRef \"*p3_q\"",
+                "ref rPk = GetFormFromMod \"FalloutNV.esm\" \"31DE5\"",
+                "StopQuest rQ",
+                "Player.RemovePerk rPk"
+              ]
+            },
+            {
+              "suffix": "read",
+              "wait_ticks": 0,
+              "script_lines": [
+                "ref rFlst = Player.AuxVarGetRef \"*p3_fl\"",
+                "ref rQ = Player.AuxVarGetRef \"*p3_q\"",
+                "ref rPk = GetFormFromMod \"FalloutNV.esm\" \"31DE5\"",
+                "ref rXm = GetFormFromMod \"FalloutNV.esm\" \"3B\"",
+                "ref rNpc = Player.AuxVarGetRef \"*p3_npc\"",
+                "int dfl = Player.AuxVarGetFlt \"*p3_d_fl\"",
+                "int qu = Player.AuxVarGetFlt \"*p3_q_u\"",
+                "int qd = Player.AuxVarGetFlt \"*p3_q_d\"",
+                "int qfl = Player.AuxVarGetFlt \"*p3_q_fl\"",
+                "int qxm = Player.AuxVarGetFlt \"*p3_q_xm\"",
+                "int qsfl = Player.AuxVarGetFlt \"*p3_qs_fl\"",
+                "int pu = Player.AuxVarGetFlt \"*p3_p_u\"",
+                "int pd = Player.AuxVarGetFlt \"*p3_p_d\"",
+                "int pfl = Player.AuxVarGetFlt \"*p3_p_fl\"",
+                "int pxm = Player.AuxVarGetFlt \"*p3_p_xm\"",
+                "int prfl = Player.AuxVarGetFlt \"*p3_pr_fl\"",
+                "SetJohnnyOnDyingEventHandler 0 (Player.AuxVarGetRef \"*p3_cbd\") 0 rFlst",
+                "SetJohnnyOnStartQuestEventHandler 0 (Player.AuxVarGetRef \"*p3_cbqu\") 0",
+                "SetJohnnyOnStartQuestEventHandler 0 (Player.AuxVarGetRef \"*p3_cbqd\") 0 rQ",
+                "SetJohnnyOnStartQuestEventHandler 0 (Player.AuxVarGetRef \"*p3_cbqf\") 0 rFlst",
+                "SetJohnnyOnStartQuestEventHandler 0 (Player.AuxVarGetRef \"*p3_cbqx\") 0 rXm",
+                "SetJohnnyOnStopQuestEventHandler 0 (Player.AuxVarGetRef \"*p3_cbqsf\") 0 rFlst",
+                "SetJohnnyOnAddPerkEventHandler 0 (Player.AuxVarGetRef \"*p3_cbpu\") 0",
+                "SetJohnnyOnAddPerkEventHandler 0 (Player.AuxVarGetRef \"*p3_cbpd\") 0 rPk",
+                "SetJohnnyOnAddPerkEventHandler 0 (Player.AuxVarGetRef \"*p3_cbpf\") 0 rFlst",
+                "SetJohnnyOnAddPerkEventHandler 0 (Player.AuxVarGetRef \"*p3_cbpx\") 0 rXm",
+                "SetJohnnyOnRemovePerkEventHandler 0 (Player.AuxVarGetRef \"*p3_cbprf\") 0 rFlst",
+                "rNpc.Disable",
+                "rNpc.MarkForDelete",
+                "PrintToConsole \"PROBE|w6t2p3_09_11_flst_real|dyingFl=%g|qStart(u=%g,d=%g,fl=%g,xm=%g)|qStopFl=%g|pAdd(u=%g,d=%g,fl=%g,xm=%g)|pRemFl=%g\" dfl qu qd qfl qxm qsfl pu pd pfl pxm prfl"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

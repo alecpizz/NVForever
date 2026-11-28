@@ -298,15 +298,18 @@ fn weapon_and_armor_alt_textures() {
     assert_eq!(n(&mut g, "SetWeaponAltTexture TestWeapon 7 TestTextures1"), 1.0);
     assert_eq!(forms(&mut g, "GetWeaponAltTextures TestWeapon"), vec![TXST2, TXST2, TXST1]);
     assert_eq!(map_at(&mut g, "GetAltTexturesEx TestWeapon", 7), TXST1);
-    // Not a texture set: nothing [hypothesis].
+    // Not a texture set: nothing (see docs/spec-notes/ext-jg5.md).
     assert_eq!(n(&mut g, "SetWeaponAltTexture TestWeapon 1 TestThing"), 0.0);
     assert_eq!(forms(&mut g, "GetWeaponAltTextures TestWeapon"), vec![TXST2, TXST2, TXST1]);
-    // [documented: ClearWeaponAltTexture, -1 for all].
+    // [documented: ClearWeaponAltTexture, -1 for all; observed: w4c_b6_06_clear_weap_alt_tex].
     assert_eq!(n(&mut g, "ClearWeaponAltTexture TestWeapon 3"), 1.0);
     assert_eq!(n(&mut g, "ClearWeaponAltTexture TestWeapon 3"), 0.0);
     assert_eq!(forms(&mut g, "GetWeaponAltTextures TestWeapon"), vec![TXST2, TXST1]);
     assert_eq!(n(&mut g, "ClearWeaponAltTexture TestWeapon -1"), 1.0);
     assert_eq!(forms(&mut g, "GetWeaponAltTextures TestWeapon"), Vec::<u32>::new());
+    // -1 still returns 1 even when no alt textures are present, while a specific empty index returns 0.
+    assert_eq!(n(&mut g, "ClearWeaponAltTexture TestWeaponPlain 5"), 0.0);
+    assert_eq!(n(&mut g, "ClearWeaponAltTexture TestWeaponPlain -1"), 1.0);
     // [documented: SetArmorAltTexture]: the female world model gains one.
     assert_eq!(n(&mut g, "SetArmorAltTexture TestArmor 4 5 TestTextures1"), 1.0);
     assert_eq!(forms(&mut g, "GetArmorAltTextures TestArmor 4"), vec![TXST1]);
@@ -474,9 +477,9 @@ fn sounds_equip_types_and_lookups() {
     // [documented: GetFormRecipesAlt, the recipes that output the item].
     assert_eq!(forms(&mut g, "GetFormRecipesAlt TestOutput"), vec![RCPE1, RCPE2]);
     assert_eq!(forms(&mut g, "GetFormRecipesAlt TestInput"), vec![RCPE1]);
-    // [documented: GetWeaponsForMod].
+    // [documented: GetWeaponsForMod; observed: w4c_b3_02_region_loc_weapmod, non-IMOD returns ar_Null].
     assert_eq!(forms(&mut g, "GetWeaponsForMod TestWeaponMod"), vec![WEAP, WEAP2]);
-    assert_eq!(forms(&mut g, "GetWeaponsForMod TestThing"), Vec::<u32>::new());
+    assert_eq!(n(&mut g, "ar_Size (GetWeaponsForMod TestThing)"), -1.0, "non-IMOD returns ar_Null");
     // [documented: GetActorEffectType: 5 poison, -1 for anything else].
     assert_eq!(n(&mut g, "GetActorEffectType TestPoison"), 5.0);
     assert_eq!(n(&mut g, "GetActorEffectType TestThing"), -1.0);

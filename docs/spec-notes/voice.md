@@ -242,6 +242,16 @@ talk` set it by default (`--no-voice-lengths` or `FNVTOOL_VOICE_LENGTHS=0` keep 
 fitted length) and `nvforever --play` sets it once the index is built
 (`NVF_PLAY_VOICE_LENGTHS=0` keeps the fitted length).
 
+**Placeholder files** [design, #4825]: a file under 0.25 s that is also under a quarter
+of the response's fitted length (`fnv_game::voice::is_placeholder`) is a stand-in, not a
+reading, and the response keeps its fitted length. The "{no VO}" description lines ship
+with such files: Rex's examine branch (INFO 0015BA61, 89 characters, a 0.12 s file
+[observed: a player report's log, R-T37VBHCR]) was gone in 0.12 s before the text could
+be read, and now stays its fitted 6.7 s; a click still skips it. The file still plays.
+`fnvtool voice coverage --lengths` counts these files (`placeholder_sounds`, with up to
+20 examples). Whether the original keeps such lines up for their text's length is
+[hypothesis], for an observer check.
+
 **Doc Mitchell's intro lines** (the 23 he says by SayTo in the headless walk-through,
 `crates/fnv-game/walkthrough/intro.actions.json`; all are single responses in
 `maleuniquedocmitchell`) [observed: file headers]:

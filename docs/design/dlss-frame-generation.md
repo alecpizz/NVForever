@@ -26,7 +26,7 @@ when it cannot run, checked in this order:
 | Needs a newer NVIDIA driver | It answered `eErrorDriverOutOfDate`. |
 | Not on this GPU | Any other refusal (slInit or the device check with DLSS-G, a function not handed out), or not Windows. |
 | Needs an upscaler | No upscaler draws: DLSS-G takes the upscaler's depth and motion (FSR 3.1 or DLSS, any mode). |
-| Needs vsync off | Display sync is Vertical sync or Variable refresh: DLSS-G requires vsync off on Vulkan [observed: its requirements' "vsync off required yes"; documented: "VSync with Frame Generation is only supported on D3D12", `ProgrammingGuideDLSS_G.md` §22.5]. |
+| Needs vsync off | Display sync is Vertical sync: DLSS-G requires vsync off on Vulkan [observed: its requirements' "vsync off required yes"; documented: "VSync with Frame Generation is only supported on D3D12", `ProgrammingGuideDLSS_G.md` §22.5]. Variable refresh is no bar: while DLSS-G is asked for the window presents with vsync off (`frame_pace::FramePace::presents_vsync`) and variable refresh's cap goes to Reflex as the page's does (below). The cap alone still lets a frame tear now and then near the bottom of a G-SYNC screen; Streamline presents with sync interval 0 whatever the game asks for, and NVIDIA Control Panel's Vertical sync On for the game stops it with DLSS-G still generating [observed 2026-11-23; docs/spec-notes/display-sync.md]. |
 
 Frames are generated only while the game's window is in front [observed: with other windows in
 front the ratio fell to 1.00 with the mode on and status `eOk`; the smoke runner's
@@ -144,47 +144,59 @@ and calls after: at most three moves can happen meanwhile).
   exit with DLSS-G set up crashed in `nvngx_dlssg.dll` [observed: the player's logs and dumps,
   2026-11-15]; that the detach is what crashed is a [hypothesis] the change tests.
 
+### Queue parallelism (2026-11-23)
+
+By default DLSS-G blocks "client's presenting queue ... until DLSSG workload execution completes"
+[documented: Streamline v2.14.16 `include/sl_dlss_g.h:55-66` `DLSSGQueueParallelismMode`; the
+facts are gathered in [streamline.md](../spec-notes/streamline.md) "Queue parallelism"]. wgpu has
+one queue, which presents, so the next frame's GPU work waited for all of DLSS-G's generation. The
+options now ask for `eBlockNoClientQueues` ("only supported on Vulkan presently ... maximum
+performance benefit from queue-level paralleism"): the next frame's work can run while DLSS-G
+generates on its own queues (`ProgrammingGuideDLSS_G.md`, Version 2.14.16, §17.0: gains are "most
+apparent in GPU-limited applications").
+
+Measured [observed, 2026-11-23, RTX 5090, driver 621.24, 3840x2160, DLSS Quality, every graphics
+setting at the top, Goodsprings at noon, 4x, no frame limit, Display sync Off, 45 s runs one at a
+time]: 96.5 real / 385 presented fps against 91.0 / 364 with `NVF_DLSSG_QUEUE=block` (+6%); Reflex's simulation to
+present latency 10.7 against 10.1 ms (run to run noise); steady slowest frames 14-18 ms in both; no
+present errors. With the frame limit reached (2x, Variable refresh, 152 / 76 fps) the two modes
+measure the same.
+
+The game must then keep its hands off DLSS-G's inputs (depth, motion, the HUD-less copy, the UI
+buffer) until DLSS-G has read them: "client must must wait on
+DLSSGState::inputsProcessingCompletionFence and associated value, before it can modify or destroy
+the tagged resources" [documented: same, `:59-63`; `:170-177`]. After each present with the mode
+on, `state` keeps that fence and `lastPresentInputsProcessingCompletionFenceValue`;
+`wait_for_inputs`, first in the next frame's `Render` on the render thread, stages a GPU wait on it
+(all commands) for the queue's next submit (wgpu-hal `Queue::add_wait_semaphore`), and wgpu-hal's relay semaphores keep every later
+submit behind that one. The Vulkan type is not in the headers or the guide; NVIDIA's sample waits
+on it as a timeline `VkSemaphore` with that value on its graphics queue, at the start of the frame,
+"before any of the inputs are modified in the subsequent command list submission", when DLSS-G
+was on last frame [documented: NVIDIA-RTX/Streamline_Sample tag v2.14.16, commit 94da85b65,
+`src/SLWrapper.cpp:250-279` `QueueGPUWaitOnSyncObjectSet`, `src/StreamlineSample.cpp:828-836` in
+`RenderScene`]. A wait no submit took is taken back before the next is staged, and when DLSS-G is
+loaded or unloaded. The log says it once:
+`DLSS-G: queue parallelism eBlockNoClientQueues: each frame's first submit waits on DLSS-G's
+inputs fence (first value N)`. `NVF_DLSSG_QUEUE=block` keeps the default mode, for comparisons.
+
 ### Frame pacing
 
-While DLSS-G runs, the frame cap (the page's, or variable refresh's) divided by the frames DLSS-G
-presents per real frame goes to Reflex's `frameLimitUs` and frame pacing does not wait itself, so
-the driver and DLSS-G's pacer see one limiter (`frame_pace::wait_for_cap`).
+While DLSS-G runs, the frame cap (the page's, or variable refresh's) goes whole to Reflex's
+`frameLimitUs` and frame pacing does not wait itself, so the driver and DLSS-G's pacer see one
+limiter (`frame_pace::wait_for_cap`).
 
-- **The divisor follows what DLSS-G presents** (#2731; `dlss/fg_cap.rs`), from each present's
-  `numFramesActuallyPresented` and whether the mode was on for it. Before, it was the frames
-  asked for whatever DLSS-G did, so menus (mode off) and a pause in generation that Streamline
-  makes by itself while its status stays `eOk` ("DLSS-G disabled: window not focused") held the
-  real frames, all that was shown, at a fraction of the limit: 480 real and 480 presented in 10 s
-  at a limit of 48 [observed: a player's logs, #2731]. The rules [design]:
-  - *Waiting* (the full limit): at the start, after DLSS-G is loaded or unloaded, and after the
-    mode was off for 8 real frames in a row ("menus"). The first present with the mode on divides
-    by the frames asked for at once (the bootstrap: the cap does not decide whether DLSS-G
-    generates); a new Generated frames choice, up or down, does the same. Both start the history
-    again.
-  - *Following the rate*: the history is the last 192 presents with the mode on, every count in
-    it (those presented once too). From 16 of them on, after every present, the divisor moves to
-    their mean, rounded half up, between 1 and the frames asked for, when the mean is 0.75 or more
-    away. 1 is the full limit (paused); the same rule divides again once the mean is back to 1.75
-    ("generation resumed"), then climbs in steps (2, 3, 4), one line each.
-  - *A quick pause*: while divided, a run of presents shown once longer than 15 and longer than
-    every run shown once that ended in the last 1024 presents goes to the full limit at once (the
-    window not in front, or generation never started), and the history keeps only that run.
-  - *What this guarantees* (the tests check each): a steady rate settles (within 16 presents).
-    A pattern repeating with a period of at most 64 presents settles and then never moves again:
-    over 192 presents its mean spreads by at most 0.42 (period 55), under the 0.5 a move and its
-    way back need with a hysteresis of 0.75, and its runs shown once are no longer than those
-    remembered, so no quick pause follows the first period. The time to settle is not bounded by
-    one history; the tests check their patterns have settled after 1000 presents and stay for
-    5000. Where it settles can depend on where it came from: 4, 1, 4, 1 at 4x (2.5) settles at 3
-    from the start and at 2 after a pause. Losing the front reaches the full limit after 16
-    presents shown once when no such run came in the last 1024 presents, and otherwise after one
-    more than the longest (the mean alone within 176 after steady fours). Generation back after a
-    long pause divides again within 48 presents when DLSS-G presents 4 a real frame (72 for 3,
-    144 for 2).
-  - A present that showed nothing (minimised, outdated) counts for none of these; a window change
-    holds the mode off for 1-3 frames, under the 8. Each change is one line, `DLSS-G: frame cap:
-    real frames at the full limit, was divided by 4 (menus: DLSS-G's mode off for 8 frames)`, and
-    the new limit one `Reflex options:` line.
+- **Reflex's limit holds the frames shown**, generated ones included, not the real frames: a limit
+  of 13158 us (76) at 2x held 76 shown and 38 real [observed: a run on an RTX 5090 at 160 Hz, 2026-11-23, 355
+  real frames in 10 s, the overlay at 76 (38 rendered)]. So the real frames follow what DLSS-G
+  presents by themselves: the cap divided by it while it generates (144 at 2x: 72), the whole cap
+  in menus (DLSS-G's mode off) and while Streamline pauses generation itself with its status
+  still `eOk` ("DLSS-G disabled: window not focused"), where real and presented frames are one.
+- **History**: from #2317 to 2026-11-23 the cap was divided by the frames presented per real frame
+  before it went to Reflex, first by the frames asked for, from #2731 by a divisor following
+  `numFramesActuallyPresented` (`dlss/fg_cap.rs`, removed). With Reflex dividing as well, 2x held
+  half the real frames meant (Variable refresh at 160 Hz: 76 shown, 38 real); #2731's menus and
+  window-not-in-front cases (480 real and 480 presented in 10 s at a divided limit of 48
+  [observed: a player's logs]) fit the same rule, as nothing was generated there.
 - **Reflex's options are set again after every swapchain** (#2732). On Vulkan Streamline's Reflex
   hands the mode and the limit to the driver (`vkSetLatencySleepModeNV`) on the swapchain it
   tracks at the call, does nothing (and answers `eOk`) while it tracks none, and a swapchain it
@@ -199,7 +211,7 @@ the driver and DLSS-G's pacer see one limiter (`frame_pace::wait_for_cap`).
   refused call, made again each frame, is said once while it repeats unchanged). This covers the
   start, the live switch and a resize's reconfigure alike.
 - **The Generated frames row** says, in place of its note, when the limit divided by the choice
-  leaves fewer than 60 real frames a second ("4x at a limit of 144: 36 real frames a second, …"),
+  (the real frames Reflex's limit on frames shown leaves) is under 60 a second ("4x at a limit of 144: 36 real frames a second, …"),
   which a player found choppy where 2x (72) was fine [observed: #2731].
 
 ## Checks
@@ -207,8 +219,7 @@ the driver and DLSS-G's pacer see one limiter (`frame_pace::wait_for_cap`).
 - Unit tests: the FFI layouts (`dlss/ffi.rs`), the merged requirements (`preflight.rs`), the
   frame numbers and PCL markers (`frame_token.rs`), the generate rule, options, window steps,
   state and ratio lines (`dlss/frame_gen.rs`), the Streamline latency calls (`nv_low_latency.rs`),
-  the Reflex frame limit (`frame_pace.rs`), the cap's divisor from series of presented counts
-  (`dlss/fg_cap.rs`), Reflex's options set again after a new swapchain (`dlss/frame_token.rs`),
+  the Reflex frame limit, whole on frames shown (`frame_pace.rs`), Reflex's options set again after a new swapchain (`dlss/frame_token.rs`),
   the row's choices and its few-real-frames note (`settings.rs`).
 - Smoke (`tools/smoke/scenarios.toml`, `requires = ["NVF_DLSS_DIR"]`, `front = true`):
   `dlssg-on`, `dlssg-4x`, `dlssg-resize`, `dlssg-switch`, `dlssg-exit`, `dlssg-handoff-exit`,
@@ -227,7 +238,8 @@ play, the live switch and exit as designed.
 
 ## Limits
 
-- Windows, Vulkan, NVIDIA RTX 40 series or newer; vsync off on Vulkan.
+- Windows, Vulkan, NVIDIA RTX 40 series or newer; vsync off on Vulkan (Display sync Off, or
+  Variable refresh, which presents with vsync off while DLSS-G is asked for).
 - Only while the game's window is in front.
 - With `NVF_FG_UI_LAYER=0`, the UI alpha treats translucent HUD pixels as opaque.
 - The picture has been judged by eye only in passing (the HUD smear without the UI buffer before

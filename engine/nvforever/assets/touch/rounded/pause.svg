@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Original NVForever geometry; Rounded family. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="currentColor" color="#ffffff" fill-rule="evenodd" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+  <title>Pause</title>
+  <path d="M 10.5 6 L 10.5 6 Q 13 6 13 8.5 L 13 23.5 Q 13 26 10.5 26 L 10.5 26 Q 8 26 8 23.5 L 8 8.5 Q 8 6 10.5 6 Z M 21.5 6 L 21.5 6 Q 24 6 24 8.5 L 24 23.5 Q 24 26 21.5 26 L 21.5 26 Q 19 26 19 23.5 L 19 8.5 Q 19 6 21.5 6 Z" fill="currentColor" stroke="none"/>
+</svg>

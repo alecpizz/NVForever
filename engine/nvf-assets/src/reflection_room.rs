@@ -13,9 +13,10 @@
 //!   display-value sum lights a diffuse surface (nvforever lights/display_shader.rs:22-33,
 //!   :105-111): light = ambient + directional x N.L + the sum over the lamps of colour x
 //!   brightness x attenuation x N.L (x the spot cone, display_shader.rs:35-47), and the
-//!   surface writes min(albedo x light^2.2, 1) ([`lit_texel`], the rule nvforever
-//!   reflection_sky.rs `ground_texel` already uses). The attenuation is the game's that the
-//!   shader uses in place of Bevy's: saturate(1 - d^2 / radius^2) (nvforever lights.rs:25-27,
+//!   surface writes the linear colour of min(albedo's display value x light, 1)
+//!   ([`lit_texel`], the rule nvforever reflection_sky.rs `ground_texel` uses). The
+//!   attenuation is the game's that the shader uses in place of Bevy's:
+//!   saturate(1 - d^2 / radius^2) (nvforever lights.rs:25-27,
 //!   `GAME_ATTENUATION`, itself a [hypothesis] there) ([`attenuation`]). No shadows: the
 //!   engine's point and spot lights cast none (`shadow_maps_enabled: false`, lights.rs:354,
 //!   :363, :642, :658), so a lamp behind a wall lights it here as it does on screen. The
@@ -85,11 +86,20 @@ pub fn attenuation(distance_squared: f32, radius: f32) -> f32 {
 }
 
 /// What the display-value sum writes for a diffuse surface of linear colour `albedo` under
-/// the display-value light `light`: min(albedo x light^2.2, 1) per channel (nvforever
-/// lights/display_shader.rs:108-111; reflection_sky.rs `ground_texel`, a test there checks
-/// the two agree).
+/// the display-value light `light`: the linear colour of the albedo's display value x
+/// light, held to 1 per channel, both ways by the sRGB curve (nvforever
+/// lights/display_shader.rs, the last of `DISPLAY_EDITS`; reflection_sky.rs `ground_texel`
+/// is this function).
 pub fn lit_texel(albedo: Vec3, light: Vec3) -> Vec3 {
-    (albedo * light.max(Vec3::ZERO).powf(2.2)).min(Vec3::ONE)
+    let shown = (albedo.map(display_value) * light.max(Vec3::ZERO)).min(Vec3::ONE);
+    albedo_linear(shown.to_array())
+}
+
+/// The display value (sRGB curve) of a linear colour channel, the inverse of
+/// [`albedo_linear`]; negative input is held at 0.
+pub fn display_value(linear: f32) -> f32 {
+    let v = linear.max(0.0);
+    if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 }
 }
 
 /// The units identity of the cube (nvf_assets `ReflectionCube`, "Units"; nvforever

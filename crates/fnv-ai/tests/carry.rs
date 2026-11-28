@@ -1675,7 +1675,7 @@ fn arrival_heading_needs_an_existing_link() {
     assert_eq!(s.ai.agents[&FormId(R_TO_HEADING)].face_to, None);
 }
 
-// [hypothesis, #2526, observer check 213] Travel and standing Guard restore the
+// (#2526, observer check 213; see crates/fnv-ai/src/carry.rs) Travel and standing Guard restore the
 // editor heading on returning to a small editor location, using the standing turn.
 #[test]
 fn arrival_heading_at_small_editor_locations_restores_editor_rotation() {
@@ -2496,6 +2496,35 @@ fn a_sandbox_that_only_wanders_walks_about_inside_its_radius() {
 }
 
 #[test]
+fn a_sandbox_with_always_run_runs_between_its_spots() {
+    // Freeside's chased rat: a Sandbox package with Always Run (#4487). Without the flag
+    // the wanderer walks at its walk speed (100); with it, at its run (400).
+    let f = fixture();
+    let fastest = |s: &mut Sim| {
+        let mut top = 0.0f32;
+        for _ in 0..60 {
+            s.run(1.0);
+            let a = &s.ai.agents[&FormId(R_SB_WANDER)];
+            if a.activity == Activity::Travelling {
+                top = top.max(a.walker.speed);
+            }
+        }
+        top
+    };
+    let mut walking = sim(&f, &[R_SB_WANDER]);
+    let walk = fastest(&mut walking);
+    assert!(walk > 0.0 && walk <= 100.0 + 1e-3, "walks at its walk: {walk}");
+    let mut running = sim(&f, &[R_SB_WANDER]);
+    running.game.run_query("Begin Function { }
+SetPackageFlag SandboxWander 13 1
+End
+", Default::default()).unwrap();
+    let run = fastest(&mut running);
+    assert!((run - 400.0).abs() < 1.0, "runs at its run: {run}");
+    assert!(doings(&running, R_SB_WANDER).iter().all(|d| *d == Doing::Wandering));
+}
+
+#[test]
 fn a_sandbox_without_wandering_takes_turns_at_the_chair_and_the_idle_marker() {
     let f = fixture();
     let mut s = sim(&f, &[R_SB_OBJECTS]);
@@ -3138,7 +3167,7 @@ fn an_actor_going_into_combat_stands_a_moment_then_turns_at_the_combat_rate() {
 #[test]
 fn a_creature_going_into_combat_turns_at_once() {
     // People only stand 1.1 s on going into combat (#1352); a creature turns to its
-    // target at once, as before [hypothesis: a creature's reaction is unmeasured].
+    // target at once, as before (see crates/fnv-ai/src/carry.rs).
     let f = fixture();
     let mut s = sim(&f, &[R_HOUND]);
     s.run(1.0);
@@ -4196,7 +4225,7 @@ fn weapon_worlds(f: &mut Fixture, sibling: bool) -> Space {
     Space::World(a.0)
 }
 
-/// [hypothesis, #2652] Only non-actor targets with a shared immediate parent project;
+/// (#2652; see crates/fnv-ai/src/goal.rs) Only non-actor targets with a shared immediate parent project;
 /// [design] ordinary place_of_ref and actor/interior space checks stay unchanged.
 #[test]
 fn weapon_target_place_projects_only_sibling_objects() {
@@ -5111,8 +5140,8 @@ fn a_cornered_fighter_with_only_an_explosive_weapon_fights_with_its_fists_until_
 }
 
 /// Stay-at locations given by an object, and a Guard that remains near what it guards
-/// (#961, `goal::stay_at`, packages.md §7.7) [hypothesis: no source says how either
-/// chooses its place]: Near Object ID walks to the nearest reference of the base (the
+/// (#961, `goal::stay_at`, see docs/spec-notes/packages.md §7.7): Near Object ID walks
+/// to the nearest reference of the base (the
 /// idle marker, 500 units off); Remain Near Reference to Guard walks to the guarded
 /// reference, within the target's distance (120), though the location is "near current".
 #[test]

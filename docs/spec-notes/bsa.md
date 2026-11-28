@@ -210,6 +210,18 @@ All three favour A. Rule used by `crates/fnv-vfs` (lowest precedence first):
    original game; no source states its rule. A name that only begins with the stem
    (`MergeExtra.bsa`) is not claimed, and the longest-stem rule above still applies
    (`Merge3.bsa` is `Merge3.esp`'s when that plugin is loaded);
+   A plugin also owns space-suffixed archives `<plugin stem> *.bsa` and `<plugin stem>N *.bsa`
+   (of which `<plugin stem> - *.bsa` is a special case), in case-insensitive name order
+   (#3756). [observed: player-supplied report on #3756, chapter 7] the Nuclear Sunset modlist
+   ships space-suffixed archives such as `NS A Content T 00.bsa` beside plugin `NS.esp`, and
+   mounting them restored missing meshes and textures. [hypothesis] that the original game or
+   MO2 profile mounts these via space-delimited prefix ownership (which original-game profile
+   or load-order file supplies their owner and exact order remains open on #3756); files
+   sharing the short prefix without a space boundary (`NSExtra.bsa`, `NS_Other.bsa`,
+   `NS-Other.bsa`) stay unclaimed, the longest-stem rule still assigns `NS A Content T 00.bsa`
+   to `NS A Content.esp` when both are loaded, and an archive already listed explicitly in
+   `SArchiveList` or MO2's `archives.txt` keeps its explicit position without being mounted a
+   second time in either flat or layered discovery;
 4. loose files [hypothesis: no loose mesh or texture exists in the owner's `Data`
    (only music, radio songs, shader packages and the intro video), and the project never
    writes into the game folder, so this stays untested; `bInvalidateOlderFiles=1` is

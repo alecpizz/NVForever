@@ -6,12 +6,22 @@ use fnv_script::vm::Value;
 use fnv_sim::FormId;
 
 pub fn reward_xp(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
+    // Muted while co-op replays claimed stages: given live already, or a scene for a
+    // player who wasn't there (`crate::coop_joint`) [design].
+    if g.coop_replaying {
+        return none();
+    }
     let n = a.num(0)?.trunc();
     // The revision's XP given back: the experience was never taken (`crate::revision`).
     if crate::revision::keeps(ctx, FormId::PLAYER_REF, || format!("the experience ({n} XP not given again)")) {
         return none();
     }
     crate::experience::award(g, crate::experience::Source::Script, n);
+    // For co-op guests: part of a completed quest's reward, or script XP of its own
+    // (`crate::coop_rewards`). A challenge's reward is the host's own.
+    if !matches!(ctx.inst, Some(crate::game::InstKey::Challenge { .. })) {
+        g.coop_rewards.gain(g.frame, n, 0);
+    }
     none()
 }
 
@@ -48,13 +58,24 @@ pub fn add_perk(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
         tracing::info!("perks: {} gains {} (rank {rank})", g.data.name(r), g.data.name(perk));
         return none();
     }
-    if a.num_or(1, 0.0) != 0.0 {
+    // A companion perk (a personal quest's) is the host's alone [design]: a co-op guest's game never
+    // gives it, nor its own world replaying what it claimed as a guest (`crate::coop_uniques`).
+    let teammates = a.num_or(1, 0.0) != 0.0;
+    if !teammates && (g.coop_guest || g.coop_replaying) && g.coop_uniques().is_companion_perk(perk) {
+        tracing::info!("co-op: {} is a companion perk, the host's alone: not given to this guest", g.data.name(perk));
+        return none();
+    }
+    if teammates {
         g.player.teammate_perks.insert(perk);
     } else {
         let before = g.player.perks.get(&perk).copied().unwrap_or(0);
         crate::perks::gain_rank(g, perk);
         let after = g.player.perks.get(&perk).copied().unwrap_or(0);
         if after != before {
+            if g.story_counts(ctx) {
+                g.coop_story.record_perk(perk, before);
+                tracing::info!("co-op story: {} gave the player perk {}", ctx.unit, g.data.name(perk));
+            }
             g.perk_event(perk, true, before, after);
         }
     }
@@ -78,7 +99,11 @@ pub fn remove_perk(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
     }
     if a.num_or(1, 0.0) != 0.0 {
         g.player.teammate_perks.remove(&perk);
-    } else if g.player.perks.remove(&perk).is_some() {
+    } else if let Some(before) = g.player.perks.remove(&perk) {
+        if g.story_counts(ctx) {
+            g.coop_story.record_perk(perk, before);
+            tracing::info!("co-op story: {} took perk {} from the player", ctx.unit, g.data.name(perk));
+        }
         g.perk_event(perk, false, 0, 0);
     }
     none()
@@ -131,6 +156,11 @@ pub fn set_player_tag_skill(g: &mut Game, _ctx: &Ctx, a: &Args) -> Result<Value,
 }
 
 pub fn add_achievement(g: &mut Game, _ctx: &Ctx, a: &Args) -> Result<Value, String> {
+    // Muted while co-op replays claimed stages: given live already, or a scene for a
+    // player who wasn't there (`crate::coop_joint`) [design].
+    if g.coop_replaying {
+        return none();
+    }
     g.player.achievements.insert(a.int(0)?);
     none()
 }
@@ -154,8 +184,18 @@ pub fn disable_player_controls(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Valu
     // A left-out parameter is 0: the group is left as it is [hypothesis; §5.2 has a
     // capture that does not fit any simple rule].
     let which = controls(a, [true, true, true, true, false, false, false], false);
-    for (d, w) in g.player.controls_disabled.iter_mut().zip(which) {
+    // A co-op guest runs no world scripts but what it sets off itself (a door's
+    // OnActivate): their locks would never be taken off here, where the script that does
+    // so runs only in the host's world. A guest is held only by the host's scenes
+    // (`Game::coop_host_locks`) [design].
+    if g.coop_guest {
+        tracing::info!("co-op: {} would disable this guest's controls {which:?}: not here (only the host's scenes hold a guest)", ctx.unit);
+        return none();
+    }
+    let story = g.is_story_caller(ctx);
+    for ((d, s), w) in g.player.controls_disabled.iter_mut().zip(g.story_locked.iter_mut()).zip(which) {
         *d |= w;
+        *s |= w && story;
     }
     // Who holds the controls, for the players' reports (#3044).
     if which.iter().any(|w| *w) {
@@ -172,9 +212,10 @@ pub fn enable_player_controls(g: &mut Game, _ctx: &Ctx, a: &Args) -> Result<Valu
     // the opening turned it off; read with a left-out 0 the player could never sneak
     // again. controls.md §5.2].
     let which = controls(a, [true; 7], true);
-    for (d, w) in g.player.controls_disabled.iter_mut().zip(which) {
+    for ((d, s), w) in g.player.controls_disabled.iter_mut().zip(g.story_locked.iter_mut()).zip(which) {
         if w {
             *d = false;
+            *s = false;
         }
     }
     if !g.player.controls_disabled.iter().any(|d| *d) {

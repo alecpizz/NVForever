@@ -142,7 +142,7 @@ mod tests {
         let f = fixture(); let mut g = game(&f);
         g.speech.push(crate::game::Speech { speaker: FormId(0x301), target: Some(FormId(0x303)), topic: FormId(0), info: FormId(0), remaining: 1.0,
             say_to: false, greeting: false, farewell: false, conversation: Some(1), earlier_topics: vec![], hello: false,
-            look: crate::game::LineLook::Both, response: 0, force_subtitles: false, two_d: false, end_ran: false, leads_on: false, through: None });
+            look: crate::game::LineLook::Both, response: 0, force_subtitles: false, two_d: false, end_ran: false, remote: false, leads_on: false, through: None });
         assert_eq!(query(&mut g, "GetPackageTarget", Some(0x301)), XVal::Ref(0x303));
         assert_eq!(query(&mut g, "GetPackageTarget", Some(0x303)), XVal::Ref(0x301));
     }

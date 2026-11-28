@@ -1,0 +1,97 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6d1_set_event_handler_dedup",
+  "description": "Wave 6D-1 strictly read-only console-only clean-room probe catalog verifying xNVSE SetEventHandler and SetEventHandlerAlt duplicate registration deduplication and priority bounds.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)",
+    "lStewieAl's Tweaks": "1005"
+  },
+  "batches": [
+    {
+      "id": "w6d1_set_event_handler_dedup",
+      "title": "Wave 6D-1 - SetEventHandler / SetEventHandlerAlt Deduplication",
+      "extender": "xNVSE 6.4.9 + JIP LN 57.30",
+      "required_plugins": [
+        "jip_nvse.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6d1_03_set_event_handler_dups_and_bounds",
+          "bucket": "A",
+          "extender": "xNVSE 6.4.9",
+          "required_plugins": [
+            "jip_nvse.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-events.md",
+          "spec_line": 102,
+          "functions_tested": [
+            "SetEventHandler",
+            "SetEventHandlerAlt",
+            "DispatchEvent",
+            "DispatchEventAlt"
+          ],
+          "claim": "Verify duplicate registration for SetEventHandler vs SetEventHandlerAlt, priority bounds (0, 9999, -9999, 10000, -10000), and SetEventHandler ignoring array filter.",
+          "expected": "SetEventHandler deduplicates or runs twice; Alt runs duplicates twice; priority 0/10000/-10000 refused; SetEventHandler array filter ignored.",
+          "script_lines": [
+            "ref cb1 = CompileScript \"nvseprobe_s_w6d1_03_cb1.gek\"",
+            "ref cb2 = CompileScript \"nvseprobe_s_w6d1_03_cb2.gek\"",
+            "Player.AuxVarSetFlt \"*w6d1_03_n1\" 0",
+            "Player.AuxVarSetFlt \"*w6d1_03_n2\" 0",
+            "int s1 = SetEventHandler \"W6D1_DupStd\" cb1",
+            "int s2 = SetEventHandler \"W6D1_DupStd\" cb1",
+            "DispatchEvent \"W6D1_DupStd\"",
+            "int nStd = Player.AuxVarGetFlt \"*w6d1_03_n1\"",
+            "RemoveEventHandler \"W6D1_DupStd\" cb1",
+            "int a1 = SetEventHandlerAlt \"W6D1_DupAlt\" cb2",
+            "int a2 = SetEventHandlerAlt \"W6D1_DupAlt\" cb2",
+            "DispatchEventAlt \"W6D1_DupAlt\"",
+            "int nAlt = Player.AuxVarGetFlt \"*w6d1_03_n2\"",
+            "RemoveEventHandler \"W6D1_DupAlt\" cb2",
+            "int p0 = SetEventHandlerAlt \"W6D1_Bnd\" cb2 \"priority\"::0",
+            "int pHi = SetEventHandlerAlt \"W6D1_Bnd\" cb2 \"priority\"::9999",
+            "int pLo = SetEventHandlerAlt \"W6D1_Bnd\" cb2 \"priority\"::-9999",
+            "int pOver = SetEventHandlerAlt \"W6D1_Bnd\" cb2 \"priority\"::10000",
+            "int pUnder = SetEventHandlerAlt \"W6D1_Bnd\" cb2 \"priority\"::-10000",
+            "RemoveEventHandler \"W6D1_Bnd\" cb2",
+            "array_var aFilt = ar_List Player",
+            "int arrOk = SetEventHandler \"W6D1_ArrStd\" cb1 \"first\"::aFilt",
+            "Player.AuxVarSetFlt \"*w6d1_03_n1\" 0",
+            "DispatchEvent \"W6D1_ArrStd\"",
+            "int nArr = Player.AuxVarGetFlt \"*w6d1_03_n1\"",
+            "RemoveEventHandler \"W6D1_ArrStd\" cb1",
+            "PrintToConsole \"PROBE|w6d1_03_set_event_handler_dups_and_bounds|std=%g,%g,n=%g|alt=%g,%g,n=%g|prio=%g,%g,%g,%g,%g|arr=%g,n=%g\" s1 s2 nStd a1 a2 nAlt p0 pHi pLo pOver pUnder arrOk nArr"
+          ],
+          "helper_scripts": {
+            "nvseprobe_s_w6d1_03_cb1.gek": [
+              "begin Function { array_var aInfo }",
+              "Player.AuxVarSetFlt \"*w6d1_03_n1\" ((Player.AuxVarGetFlt \"*w6d1_03_n1\") + 1)"
+            ],
+            "nvseprobe_s_w6d1_03_cb2.gek": [
+              "begin Function {}",
+              "Player.AuxVarSetFlt \"*w6d1_03_n2\" ((Player.AuxVarGetFlt \"*w6d1_03_n2\") + 1)"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

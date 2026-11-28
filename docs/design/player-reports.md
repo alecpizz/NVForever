@@ -210,6 +210,22 @@ tells them apart is the process's exit code, which only another process can read
   outside, 101 a panic in the main thread. Windows only; `NVF_EXIT_WATCH=0` turns it off.
 - The line is part of the run log, so it is in the log sent with the crash, and the next
   start repeats it (`run log: the previous run's process ended with exit code …`).
+- Something outside that ends the game writes `run log: ended from outside: <key> (<words>)`
+  as it happens (`run_end.rs`; keys `console-closed`, `sign-out`, `shutdown`, `close-app`):
+  a console control handler, added after Bevy's own so that it is called first, and a hidden
+  window that Windows tells when it ends the session (`WM_ENDSESSION`). Ctrl+C and
+  Ctrl+Break are not noted: Bevy closes the game normally on them (exit code 130).
+  Checked in the game [observed, 2026-11-27]: the game's console window closed (WM_CLOSE
+  to it) writes `console-closed` and the process ends with `0xC000013A`, as in the
+  player's log; `WM_ENDSESSION` sent to the hidden window writes `shutdown`. `nvforever.exe` is a console program,
+  so a player started from Explorer or the launcher has a console window beside the game,
+  and closing it ends the game. Found from reports of 0.8.0-0.8.1 [observed, 2026-11-27]:
+  the RTX 4060 install of this issue stopped so six times on builds with the watcher; one
+  log ends with `0xC000013A` (console closed or Ctrl+C), the other five record no exit code
+  at all (the watcher ended too, or the code was 0 [hypothesis: Windows shutting down or
+  signing out, which ends both]), and each next start came 7 to 23 hours later. The next
+  start repeats the reason (`run log: the previous run was ended from outside: …`). The
+  run is still reported as not ended normally. `NVF_RUN_END=0` turns it off.
 - An allocation that fails writes `out of memory: an allocation of N bytes failed` into
   the run log before Rust aborts (the game's global allocator, crash.rs).
 - A lost graphics device (the driver stopped answering) ends the run as one (#2934): the
@@ -325,7 +341,7 @@ per unchanged lock. The detectors are registered only while reports are enabled.
 | controls locked (`controls_locked`) | [design, #2403] unchanged dialogue, menu or scripted control groups for 60 real seconds, with at least 5 key/mouse/controller button press edges in the trailing 60 seconds |
 | path failure | pathfinding fails 3 times in a row for one actor |
 | script loop | one script runs > 5 ms in a frame, or the same script errors 100 times |
-| hitch | a frame > 250 ms outside a load |
+| hitch | a frame > 250 ms outside a load; frames with the game away (window unfocused, covered or minimised, app suspended, the second after each, or a frame of 30 s or more: the machine slept) count neither as hitches nor in the places' frame times [design, #3043] |
 | slow load | a load > 20 s; it says where the time went: each wait's end, the longest frame, the files read and the time in the reads (docs/design/loading-screen.md §1 step 7, #2407) |
 | memory | RAM or VRAM within 10 % of the budget, once a game is loaded (not at the start, when the RAM in use is other programs') |
 | missing asset | the first failure of each path. For a model or an actor file that a plugin's record names, the event says the `plugin` (the winning record's; a mod's over the game's own when both name it). A file the base game's or an add-on's own record names and no archive has is not reported: it is the data's own dangling name (`meshes\creatures\ghoul\mmm_ghoulvariant_v1.nif`, in FalloutNV.esm creatures' model lists, 11 of 49 installs of build 0.8.0) [observed, #3045; `reports/asset_sources.rs`]. A file of the game's that is there and does not read is still reported. Textures and particles have no record of their own and are reported as before |

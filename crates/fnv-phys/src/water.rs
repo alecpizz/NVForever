@@ -163,15 +163,23 @@ impl PhysWorld {
     /// The surface of the water a point is in or over: as [`PhysWorld::water_surface_at`],
     /// except that a placed volume counts only down to its bottom.
     pub fn water_surface_for(&self, p: [f32; 3]) -> Option<f32> {
-        if let Some(&s) = self.water.cells.get(&WaterArea::Interior) {
-            return Some(s);
+        self.water_surface_with_receiver(p).map(|(surface, _)| surface)
+    }
+
+    /// Like `water_surface_for`, with the reference ID of the selected placed water.
+    /// Zero identifies continuous cell water.
+    pub fn water_surface_with_receiver(&self, p: [f32; 3]) -> Option<(f32, u32)> {
+        if let Some(&surface) = self.water.cells.get(&WaterArea::Interior) {
+            return Some((surface, 0));
         }
-        let placed = self.water.placed.values().flatten().filter(|w| w.holds_below(p)).map(|w| w.surface).reduce(f32::max);
-        if placed.is_some() {
-            return placed;
+        let placed = self.water.placed.values().flatten()
+            .filter(|water| water.holds_below(p))
+            .reduce(|a, b| if b.surface > a.surface { b } else { a });
+        if let Some(water) = placed {
+            return Some((water.surface, water.form_id));
         }
         let (gx, gy) = cell_of(p[0], p[1]);
-        self.water.cells.get(&WaterArea::Exterior(gx, gy)).copied()
+        self.water.cells.get(&WaterArea::Exterior(gx, gy)).map(|&surface| (surface, 0))
     }
 
     /// The water areas with their surface heights, in order.
@@ -189,6 +197,30 @@ impl PhysWorld {
 mod tests {
     use super::*;
     use crate::PhysParams;
+
+    #[test]
+    fn the_surface_and_receiver_share_physics_precedence() {
+        let mut world = PhysWorld::new(PhysParams::default());
+        world.set_water(WaterArea::Exterior(0, 0), Some(10.0));
+        let pool = PlacedWater {
+            form_id: 42,
+            centre: [10.0, 10.0, 8.0],
+            rotation: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+            half: [5.0, 5.0, 2.0],
+            surface: 10.0,
+        };
+        world.water.placed.insert(42, vec![pool]);
+        assert_eq!(world.water_surface_with_receiver([10.0, 10.0, 10.0]), Some((10.0, 42)));
+        assert_eq!(world.water_surface_with_receiver([10.0, 10.0, 5.0]), Some((10.0, 0)));
+
+        let upper = PlacedWater { form_id: 43, centre: [10.0, 10.0, 18.0], surface: 20.0, ..pool };
+        world.water.placed.insert(43, vec![upper]);
+        assert_eq!(world.water_surface_with_receiver([10.0, 10.0, 19.0]), Some((20.0, 43)));
+        assert_eq!(world.water_surface_with_receiver([10.0, 10.0, 10.0]), Some((10.0, 42)));
+
+        world.set_water(WaterArea::Interior, Some(10.0));
+        assert_eq!(world.water_surface_with_receiver([10.0, 10.0, 10.0]), Some((10.0, 0)));
+    }
 
     #[test]
     fn surfaces_follow_their_squares() {

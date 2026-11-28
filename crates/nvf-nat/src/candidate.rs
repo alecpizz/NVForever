@@ -16,6 +16,9 @@ pub enum Kind {
     /// An address the other side's packets turned out to come from, learnt during the checks
     /// ("peer reflexive"). A symmetric NAT shows up this way.
     PeerReflexive,
+    /// A relay a player hosts (`nvf-relay`, [`crate::hosted`]): packets to this address go
+    /// wrapped, and the relay forwards them to the other side. Last resort.
+    Relayed,
 }
 
 /// One address the other side may try.
@@ -62,9 +65,13 @@ pub fn is_global_v6(ip: Ipv6Addr) -> bool {
     (ip.segments()[0] & 0xe000) == 0x2000
 }
 
+/// The class of a pair through a hosted relay: the worst.
+pub const RELAYED_CLASS: u8 = 4;
+
 /// The rank of a pair, lower first (#3795 section 7.2): IPv6 direct, then LAN, then a mapped
 /// port, then a STUN or peer-learnt address. A public host address (a machine with no NAT)
-/// ranks with the mapped ports: like them, it needs nothing punched on its side.
+/// ranks with the mapped ports: like them, it needs nothing punched on its side. A hosted
+/// relay comes last of all.
 pub fn pair_class(remote: Candidate) -> u8 {
     let ip = remote.addr.ip();
     match remote.kind {
@@ -75,6 +82,7 @@ pub fn pair_class(remote: Candidate) -> u8 {
         },
         Kind::Mapped => 2,
         Kind::ServerReflexive | Kind::PeerReflexive => 3,
+        Kind::Relayed => RELAYED_CLASS,
     }
 }
 
@@ -109,7 +117,8 @@ mod tests {
         let lan = pair_class(Candidate::new(Kind::Host, sa("192.168.0.2:1")));
         let mapped = pair_class(Candidate::new(Kind::Mapped, sa("203.0.113.1:1")));
         let srflx = pair_class(Candidate::new(Kind::ServerReflexive, sa("203.0.113.1:2")));
-        assert!(v6 < lan && lan < mapped && mapped < srflx);
+        let relayed = pair_class(Candidate::new(Kind::Relayed, sa("198.51.100.9:47961")));
+        assert!(v6 < lan && lan < mapped && mapped < srflx && srflx < relayed);
         assert_eq!(pair_class(Candidate::new(Kind::Host, sa("[fd00::1]:1"))), lan);
     }
 }

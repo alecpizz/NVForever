@@ -1,0 +1,80 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6d2_get_ingestible_flag_bitmask",
+  "description": "Wave 6D-2 read-only console probe for Lutana/JIP LN GetIngestibleFlag ENIT bitmask evaluation (including flag 4 Medicine) and SetIngestibleFlag round-trip.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)"
+  },
+  "batches": [
+    {
+      "id": "w6d2_get_ingestible_flag_bitmask",
+      "title": "Wave 6D-2 - GetIngestibleFlag Bitmask & SetIngestibleFlag",
+      "extender": "xNVSE 6.4.9 + JIP LN 57.30",
+      "required_plugins": [
+        "jip_nvse.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6d2p2_25_ingestible_flag_and_skill_magazine",
+          "bucket": "A",
+          "extender": "JIP LN 57.30",
+          "required_plugins": [
+            "jip_nvse.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-lutana.md",
+          "spec_line": 184,
+          "functions_tested": [
+            "GetIngestibleFlag",
+            "SetIngestibleFlag",
+            "IsSkillMagazine",
+            "GetEffectFlag"
+          ],
+          "claim": "Verify CONFIRMED STATIC P0 BUG SD-01: GetIngestibleFlag for flag 4 (Medicine, actively called in MouseDefaultMenu.gek) and bitmask semantics across flags 1..6 on Stimpak/Cram/SilverSting, SetIngestibleFlag 4 round-trip, and IsSkillMagazine.",
+          "expected": "NVForever rejects k >= 4 so GetIngestibleFlag Stimpak 4 returns 0; original FNV + JIP LN 57.30 expected to return 1 for Medicine flag 4 and reflect SetIngestibleFlag 4.",
+          "script_lines": [
+            "ref rStim = GetFormFromMod \"FalloutNV.esm\" \"15169\"",
+            "ref rCram = GetFormFromMod \"FalloutNV.esm\" \"8C552\"",
+            "ref rSilv = GetFormFromMod \"FalloutNV.esm\" \"167475\"",
+            "ref rMag = GetFormFromMod \"FalloutNV.esm\" \"EC4A4\"",
+            "int s1 = GetIngestibleFlag rStim 1",
+            "int s2 = GetIngestibleFlag rStim 2",
+            "int s3 = GetIngestibleFlag rStim 3",
+            "int s4 = GetIngestibleFlag rStim 4",
+            "int s5 = GetIngestibleFlag rStim 5",
+            "int s6 = GetIngestibleFlag rStim 6",
+            "int c2 = GetIngestibleFlag rCram 2",
+            "int cr4 = GetIngestibleFlag rCram 4",
+            "int z0 = GetIngestibleFlag rSilv 4",
+            "SetIngestibleFlag rSilv 4 1",
+            "int z1 = GetIngestibleFlag rSilv 4",
+            "int ze = GetEffectFlag rSilv 2",
+            "SetIngestibleFlag rSilv 4 0",
+            "int z2 = GetIngestibleFlag rSilv 4",
+            "int mMag = IsSkillMagazine rMag",
+            "int mStim = IsSkillMagazine rStim",
+            "PrintToConsole \"PROBE|w6d2p2_25_ingestible_flag_and_skill_magazine|stim=%g,%g,%g,%g,%g,%g|cram=%g,%g|set4=%g->%g(ef2=%g)->%g|mag=%g,%g\" s1 s2 s3 s4 s5 s6 c2 cr4 z0 z1 ze z2 mMag mStim"
+          ]
+        }
+      ]
+    }
+  ]
+}

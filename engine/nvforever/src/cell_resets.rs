@@ -17,7 +17,7 @@ pub struct CellResetsPlugin;
 
 impl Plugin for CellResetsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, show_resets.after(nvf_play::PlaySet::Activation));
+        app.add_systems(Update, show_resets.after(nvf_play::PlaySet::Activation).before(crate::residents::drive));
     }
 }
 
@@ -31,6 +31,7 @@ fn show_resets(
     script: Option<ResMut<ScriptState>>,
     mut ragdolls: ResMut<Ragdolls>,
     mut phys: Option<ResMut<PhysState>>,
+    mut residents: Option<ResMut<crate::residents::Residents>>,
     corpses: Query<Shown, ShownDead>,
 ) {
     let Some(mut script) = script else { return };
@@ -59,14 +60,18 @@ fn show_resets(
         }
         back.extend(r.respawned.iter().map(|a| a.0));
     }
+    let mut redrawn = HashSet::new();
     for id in &back {
         ragdolls.rest.remove(id);
         if let Some(p) = phys.as_deref_mut() {
             p.world.remove_ragdoll(*id);
         }
+        if residents.as_deref_mut().is_some_and(|r| r.redraw(&mut commands, *id)) {
+            redrawn.insert(*id);
+        }
     }
     for (e, v) in &corpses {
-        if back.contains(&v.0) {
+        if back.contains(&v.0) && !redrawn.contains(&v.0) {
             commands.entity(e).remove::<(Dying, Corpse)>();
         }
     }

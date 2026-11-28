@@ -318,6 +318,8 @@ impl Game<'_> {
     /// reaction, the player's teammates being allies of the player [hypothesis], and
     /// actors sharing a faction or a base form allies [engineering choice].
     pub fn reaction_to(&self, actor: FormId, other: FormId) -> i64 {
+        // Another co-op player's actor stands where the player does (`Game::as_player`).
+        let (actor, other) = (self.as_player(actor), self.as_player(other));
         if other == FormId::PLAYER_REF && self.extra.get(&actor).is_some_and(|e| e.teammate) {
             return ALLY;
         }

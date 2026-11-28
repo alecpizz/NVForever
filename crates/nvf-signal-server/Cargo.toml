@@ -1,0 +1,17 @@
+[package]
+name = "nvf-signal-server"
+description = "Co-op matchmaking as a server anyone can run: nvf-signal's stand-in service behind plain HTTP and WebSocket on one TCP port, for self-hosters without Cloudflare and for offline tests (#3795 sections 6 and 12)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+nvf-signal = { path = "../nvf-signal" }
+# Codes and lobby secrets from the operating system's random source. MIT/Apache-2.0.
+getrandom = "0.3"
+# The lobby WebSocket, server side, blocking, no TLS (put a TLS proxy in front for the
+# internet; on a LAN or loopback plain ws:// is what the game expects). MIT/Apache-2.0.
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+
+[dev-dependencies]
+serde_json.workspace = true

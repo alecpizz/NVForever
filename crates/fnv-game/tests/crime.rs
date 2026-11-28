@@ -129,6 +129,9 @@ fn placed(sig: &[u8; 4], fid: u32, base: u32, extra: Vec<fnv_esm::raw::Subrecord
 
 /// A quest whose Detection-type topics a witness can say: the NoCrime topics (#974).
 const QUEST: u32 = 0x910;
+/// A script naming Town and Market to SetPCEnemyOfFaction: their flags may be a quest's
+/// (`Game::script_flaggable_factions`); Gang's and the others' only a crime's (#3335).
+const HOSTILITY_SCRIPT: u32 = 0x911;
 const NO_CRIME_TOPICS: [(u32, &str); 2] = [(0xA00, "StealNoCrime"), (0xA01, "AssaultNoCrime")];
 
 /// A topic of type Combat (the GECK's Combat tab) with one line, no conditions.
@@ -239,9 +242,15 @@ fn plugin_bytes() -> Vec<u8> {
         glob(0x945, "TimeScale", 30.0),
     ]
     .concat();
+    // `SetPCEnemyOfFaction Town 1` and `SetPCEnemyOfFaction Market 1` in a GameMode block.
+    let flag = |r: u16| st(0x10C6, &[le16(2), vec![b'r'], le16(r), vec![b'n'], 1i32.to_le_bytes().to_vec()].concat());
+    let mut hostility = unit(0, &script(&[(0, None, [flag(1), flag(2)].concat())]), &[], &[TOWN, MARKET]);
+    hostility.push(sub(b"EDID", z("CrimeHostility")));
+    let hostility = record(b"SCPT", 0, HOSTILITY_SCRIPT, &hostility);
     [
         tes4(),
         top(b"GLOB", &globals),
+        top(b"SCPT", &hostility),
         top(b"REPU", &reputations),
         top(b"FACT", &factions),
         top(b"QUST", &quest),
@@ -846,6 +855,57 @@ fn an_older_save_dates_its_crime_enemies_at_the_load_and_keeps_every_faction_fla
     let world = World::restore(&f.forms, &f.refs, &snap.sim).unwrap();
     let k = Game::restore(&f.data, world, h.cfg, &snap).unwrap();
     assert_eq!(k.player, h.player);
+}
+
+#[test]
+fn only_town_and_market_can_be_flagged_by_a_script() {
+    let f = fixture();
+    let g = game(&f);
+    assert_eq!(g.script_flaggable_factions(), Some([FormId(TOWN), FormId(MARKET)].into_iter().collect()));
+}
+
+/// A save from before #2467 holding a flag on a faction no script can set: the flag was
+/// a crime's, dated at the load, and ends FACTION_FLAG_DAYS later (#3335).
+#[test]
+fn an_older_saves_flag_no_script_can_set_is_dated_as_a_crimes() {
+    let f = fixture();
+    let mut g = game(&f);
+    set_faction_flag(&mut g, MARKET, 1.0);
+    g.player.enemy_of.insert(FormId(GANG));
+    let mut old = serde_json::to_value(g.snapshot()).unwrap();
+    let player = old["player"].as_object_mut().unwrap();
+    for k in ["enemy_of_crimes", "enemy_of_script", "crime_enemy_since"] {
+        player.remove(k);
+    }
+    let old: fnv_game::game::GameSnapshot = serde_json::from_value(old).unwrap();
+    let world = World::restore(&f.forms, &f.refs, &old.sim).unwrap();
+    let mut h = Game::restore(&f.data, world, g.cfg, &old).unwrap();
+    let load_day = days(&h);
+    assert_eq!(h.player.enemy_of_crimes.get(&FormId(GANG)).copied(), Some(load_day));
+    assert!(h.player.enemy_of_script.contains(&FormId(MARKET)) && !h.player.enemy_of_script.contains(&FormId(GANG)));
+    assert_eq!(faction_flag(&mut h, GANG), 1.0);
+    pass_hours(&mut h, 0.2);
+    assert_eq!(faction_flag(&mut h, GANG), 0.0, "Gang's flag ended as a crime's");
+    assert_eq!(faction_flag(&mut h, MARKET), 1.0, "Market's stays: a script can set it");
+}
+
+/// A save made by a build that kept every undated flag as a script's (#2467 to #3335)
+/// holds a crime's flag among the script's: on a faction no script can set, it ends at
+/// the load; on one a script can set, it stays (#3335, player report R-833D3F5X).
+#[test]
+fn a_crimes_flag_kept_as_a_scripts_ends_at_the_load_when_no_script_sets_it() {
+    let f = fixture();
+    let mut g = game(&f);
+    set_faction_flag(&mut g, MARKET, 1.0);
+    g.player.enemy_of.insert(FormId(GANG));
+    g.player.enemy_of_script.insert(FormId(GANG));
+    let snap = g.snapshot();
+    let world = World::restore(&f.forms, &f.refs, &snap.sim).unwrap();
+    let mut h = Game::restore(&f.data, world, g.cfg, &snap).unwrap();
+    assert!(!h.player.enemy_of.contains(&FormId(GANG)) && !h.player.enemy_of_script.contains(&FormId(GANG)));
+    assert_eq!(ended(&mut h).0, vec![FormId(GANG)]);
+    assert_eq!(faction_flag(&mut h, GANG), 0.0);
+    assert_eq!(faction_flag(&mut h, MARKET), 1.0);
 }
 
 /// A second murder seen only by witnesses already hostile is still a crime against the

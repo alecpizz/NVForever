@@ -618,6 +618,24 @@ v\FuseSparks.dds`), below the node
     drops, were chosen as the combination that looks most like the video. Four were
     tried; with system units for the drag or the reference's scale on the radius, the
     mist floated above the jet or off to its side.
+- **Update (#3673, placed smoke at small reference scales):**
+  - On Point Lookout's steamboat (`DLC04Steamboat01`, PointLookout.esm), three
+    references of `tSmokePillerMesh01` (MSTT `0x00096C7C`,
+    `effects\tests\testsmokepillermesh01.nif`) sit at reference scales `0.11`
+    (`0x01010F85`) and `0.03` (`0x01010F86`, `0x01010F87`), while the system
+    `pSmokePuffs` has node scale `1` and emitter radius `2,447.5` [observed: `fnvtool
+    nif decode` and player report on #3673]. The player reported that the puffs
+    hid the steamboat. Applying the reference scale to the decoded radius would give
+    about `269` and `73` units [hypothesis: original-game comparison pending]. In
+    WastelandNV (FalloutNV.esm), 183 of 369 placed
+    particle-emitting references are scaled (53 below 0.5), including 9 of 10
+    `dlc03fxdarksmoke.nif` at `0.23`–`0.37` vs `0x00137F86` at scale `1` [observed:
+    #3673 `fnvtool world refs` survey].
+  - The placed-reference radius still follows the fountain rule above. Observer
+    check 87 tracks the original-game smoke comparison.
+  - Grass-fire flames are runtime-spawned effects. Their holders contribute to
+    the radius scale and `ModelEmitter::size` divides out that contribution during
+    growth and shrink, so the radius keeps the linear growth factor [design, #3673].
 
 
 ### 7.8 External idle KF tracks on animated objects (#2685)

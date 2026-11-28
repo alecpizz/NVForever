@@ -1,0 +1,88 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6d2_set_message_flags_bounds",
+  "description": "Wave 6D-2 read-only probe confirming SetMessageFlags rejects out-of-range values > 3.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "jip_ln_nvse": "57.30 (5730)"
+  },
+  "batches": [
+    {
+      "id": "w6d2_message_flags",
+      "title": "Wave 6D-2: SetMessageFlags 0..=3 bounds",
+      "extender": "JIP LN NVSE 57.30",
+      "required_plugins": [
+        "jip_nvse.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6d2p3_47_jip6_messages_creatures_and_bptd",
+          "bucket": "A",
+          "extender": "JIP LN 57.30",
+          "required_plugins": [
+            "jip_nvse.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/jip-records-6.md",
+          "spec_line": 83,
+          "functions_tested": [
+            "GetMessageFlags",
+            "SetMessageFlags",
+            "SetMessageDisplayTime",
+            "GetMessageDisabled",
+            "SetMessageDisabled",
+            "CreatureHasModel",
+            "ToggleCreatureModel",
+            "GetCreatureModels",
+            "GetBodyPartName",
+            "SetBodyPartName"
+          ],
+          "claim": "Verify SetMessageFlags OOB bits (7 -> masked to 3?), SetMessageDisplayTime negative (-5; jip-records-6.md:84), SetMessageDisabled on MESG, ToggleCreatureModel/GetCreatureModels on CrRobobrainSteel (0x1CF6D), and SetBodyPartName/GetBodyPartName.",
+          "expected": "Confirm SetMessageFlags bit masking, SetMessageDisabled toggle, ToggleCreatureModel 0/1 toggle + return values, and SetBodyPartName round-trip.",
+          "script_lines": [
+            "ref rMsg = GetFormFromMod \"FalloutNV.esm\" \"16D\"",
+            "ref rCr = GetFormFromMod \"FalloutNV.esm\" \"1CF6D\"",
+            "ref rBp = GetFormFromMod \"FalloutNV.esm\" \"10CD74\"",
+            "int mf0 = GetMessageFlags rMsg",
+            "SetMessageFlags rMsg 7",
+            "int mf7 = GetMessageFlags rMsg",
+            "SetMessageFlags rMsg mf0",
+            "SetMessageDisplayTime rMsg -5",
+            "SetMessageDisplayTime rMsg 3",
+            "int md0 = GetMessageDisabled rMsg",
+            "SetMessageDisabled rMsg 1",
+            "int md1 = GetMessageDisabled rMsg",
+            "SetMessageDisabled rMsg md0",
+            "int has0 = CreatureHasModel \"Brain.NIF\" rCr",
+            "int togOff = ToggleCreatureModel \"Brain.NIF\" 0 rCr",
+            "int has1 = CreatureHasModel \"Brain.NIF\" rCr",
+            "int togOn = ToggleCreatureModel \"Brain.NIF\" 1 rCr",
+            "array_var aCm = GetCreatureModels rCr",
+            "string_var bp0 = GetBodyPartName rBp 1",
+            "SetBodyPartName rBp 1 \"W6D2Head\"",
+            "string_var bp1 = GetBodyPartName rBp 1",
+            "SetBodyPartName rBp 1 bp0",
+            "PrintToConsole \"PROBE|w6d2p3_47_jip6_messages_creatures_and_bptd|mf=%g->%g|md=%g->%g|cr(h=%g->%g,t=%g/%g,n=%g)|bp=[%z]\" mf0 mf7 md0 md1 has0 has1 togOff togOn (ar_Size aCm) bp1"
+          ]
+        }
+      ]
+    }
+  ]
+}

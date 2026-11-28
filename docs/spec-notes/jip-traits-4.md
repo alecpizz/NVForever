@@ -102,6 +102,16 @@ not decode yet.
 - 5 (moons) and 6 (phase length) share TNAM's last byte: the moons are its top two
   bits, the phase length its low six [observed: jip4, WastelandClimate reads moons 2
   and phase length 3; SetClimateTraitNumeric 6 7 reads back 7 and leaves the moons 2].
+- Bounds and validation: sun times (`0..=3`) convert via unsigned 10-minute slots capped
+  at `143` (`25 -> 20`, `1500 -> 1430`, `-10 -> 1430`), moons (`5`) clamp to `0..=3`
+  (`4 -> 3`), phase length (`6`) clamps to `0..=63` (`64 -> 63`), and non-`CLMT` forms
+  are ignored (`bad=0`) [observed: Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 + JIP LN
+  57.30, 2026-11-25, `GSDocMitchellHouse` (`0x00103DF9`), 10 official base masters,
+  isolated clean-room staging copy (read-only probe; zero writes to game install or
+  Saves), `w6d2_16_climate_traits_and_weather_add_remove`
+  (`tools/capture/nvse/catalogs/wave6d2_set_climate_trait_bounds.json`):
+  `PROBE|w6d2_16_climate_traits_and_weather_add_remove|sun(300->25:20,1500:1430,neg:1430)|m5(2->4:3)|p6(3->64:63)|bad=0|wlst(n=1->1,r=1,1,1,1)`;
+  zero DLL, PDB, or third-party source consulted].
 
 ## 8. Quests
 
@@ -111,12 +121,22 @@ not decode yet.
 - 2 and 3 are the record's DATA flag bits 2 and 3 (repeated topics, repeated stages).
 - 4 (set running on reset) is DATA bit 0, Start Game Enabled [documented: the page's note,
   Start Game Enabled "equals flags 0 and 4"].
-- 5 (shown in the Pip-Boy) reads 1 for a named quest that runs or ran, or after a script
-  sets it [observed: jip4, 1 on VCG01 and VCG02, which the save has run, 0 on VMS01 and
-  VMS20, which it has not, and 0 on VDeadSea, which runs from the start with no name;
-  SetQuestFlag 5 1 reads back 1; Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 + JIP LN 57.30
-  with the 10 official base masters, clean-room script probe jip_27_quest_flag_5_shown
-  (GetQuestFlag): 0,0; no DLL or source consulted; hypothesis: the rule].
+- 5 (shown in the Pip-Boy) reads an explicit `SetQuestFlag q 5 0/1` override first,
+  otherwise record bit `0x20` or 1 for a named quest that has completed or has a
+  displayed/completed objective [observed: jip4, 1 on VCG01 and VCG02, which the save has
+  run, 0 on VMS01 and VMS20, which it has not, and 0 on VDeadSea, which runs from the
+  start with no name; SetQuestFlag 5 1 reads back 1; Fallout: New Vegas 1.4.0.525 + xNVSE
+  6.4.9 + JIP LN 57.30 with the 10 official base masters, clean-room script probe
+  jip_27_quest_flag_5_shown (GetQuestFlag): 0,0; Fallout: New Vegas 1.4.0.525 + xNVSE
+  6.4.9 + JIP LN 57.30, 2026-11-25, `GSDocMitchellHouse` (`0x00103DF9`), 10 official base
+  masters, isolated clean-room staging copy (read-only probe; zero writes to game install
+  or Saves), `w6d2_26_quest_flag_5_clear_and_all_bits`
+  (`tools/capture/nvse/catalogs/wave6d2_set_quest_flag_5_clear.json`):
+  `PROBE|w6d2_26_quest_flag_5_clear_and_all_bits|vcg(0=1,4=1,5=0->on:1->off:0)|vms5=0->1|ds=1,0|f7=0->1,f8=0`
+  (running named `VCG01` starts with flag 5 = `0`, `SetQuestFlag 5 1` sets `1`,
+  `SetQuestFlag 5 0` clears back to `0`, `VMS01` `0->1`, unnamed running `VDeadSea` `1,0`,
+  flag 7 `0->1`, OOB flag 8 `0`); no DLL or source consulted; hypothesis: the
+  completed/displayed-objective fallback when flag 5 was not explicitly overridden].
 - 7 is unknown and reads as a script set it.
 
 ## 9. Factions, cells, waters, sounds
@@ -138,9 +158,9 @@ not decode yet.
   in older records), bits the schema names the same way. EMTMedicalBeep01: loop (4) 1,
   2D (6) 0. `SetSoundFlag` stores per-`SOUN` session bitmask overrides
   (`Game::sound_flags`, `Game::sound_flag`, `Game::set_sound_flag`,
-  `Game::sound_flags_override`) with `TempCloneForm` snapshotting and post-clone isolation
-  (`Game::snapshot_sound_flags`) [design; hypothesis: session-only lifetime and rejection
-  of fractional/out-of-range flag IDs and non-`SOUN` forms].
+  `Game::sound_flags_override`, `Game::snapshot_sound_flags`) [design] with
+  `TempCloneForm` snapshotting and post-clone isolation [hypothesis: also session-only
+  lifetime and rejection of fractional/out-of-range flag IDs and non-`SOUN` forms].
 
 ### 9.1 `TempCloneForm` SOUN aliases and engine sound overrides
 
@@ -149,14 +169,16 @@ not decode yet.
   original sound's `FNAM` path and `SNDD` traits. Session overrides via
   `SetSoundSourceFile` and `SetSoundTraitNumeric` apply to the target FormID without
   mutating the original.
+- [hypothesis] Pre-clone `SetSoundSourceFile` and `SetSoundTraitNumeric` (`0..=11`) edits
+  on an original or parent clone carry onto newly created `TempCloneForm` `SOUN` clones,
+  while post-clone edits on the original or parent clone stay isolated from
+  already-created clones (e.g., silencing an original `SOUN` with trait `3 = -99` after
+  cloning a playable copy).
 - [design] `TempCloneForm` snapshots the source form's active `SetSoundSourceFile` and
-  `SetSoundTraitNumeric` (`0..=12`) overrides onto the new clone at creation time
+  `SetSoundTraitNumeric` (`0..=11`) overrides onto the new clone at creation time
   (`Game::snapshot_sound_traits`), and `Game::sound_source_override` /
   `Game::sound_trait_override` read only the queried FormID's own entry before falling
-  back to the authored ESM `FNAM` / `SNDD` record. Pre-clone edits on an original or
-  parent clone carry onto newly created clones, while post-clone edits on the original
-  or parent clone stay isolated from already-created clones (e.g., silencing an original
-  `SOUN` with trait `3 = -99` after cloning a playable copy).
+  back to the authored ESM `FNAM` / `SNDD` record.
   `engine/nvf-play/src/world_sounds.rs` (`sync_script_sounds`) runs in `PlaySet::Sync`
   (before `SfxSet` resolves `PlaySound` requests): it materializes cloned `SOUN` entries
   in `sfx.forms.sounds` from their original's authored `Sound` with `edid = None`
@@ -168,10 +190,15 @@ not decode yet.
   authored and cloned `SOUN` entries, and restores mutated authored `SOUN`s while
   pruning all stale clones across sessions (including when a new session reuses a
   deterministic clone FormID such as `0x00FE_0000` for a non-`SOUN` form).
-- [hypothesis] Trait `12` (`priority`) is stored by `SetSoundTraitNumeric` / read by
-  `GetSoundTraitNumeric` in `fnv-game` but is not yet carried on `fnv_combat::fx::Sound`.
-  Clone-of-clone override snapshotting and original-game audio parity remain unqualified
-  against original-game captures.
+- [observed: Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 + JIP LN 57.30, 2026-11-24,
+  `GSDocMitchellHouse` (`0x00103DF9`), 10 official base masters,
+  `w4c_b1_21_sound_and_diff_bounds` (`tools/capture/nvse/catalogs/wave4c_extenders.json`,
+  #3679): `SetSoundTraitNumeric 0x403C2 12 77` left `GetSoundTraitNumeric 0x403C2 12` at
+  `0` (`prio(0->0)|badSnd(0,0)|diff(3,9=3,-1=3)`); no DLL or source consulted] Trait `12`
+  is ignored/unwritable by `SetSoundTraitNumeric` in JIP LN 57.30, so NVForever only
+  stores `SetSoundTraitNumeric` overrides for traits `0..=11` (matching the traits carried
+  on `fnv_combat::fx::Sound`). Clone-of-clone override snapshotting and original-game audio
+  parity remain unqualified against original-game captures [hypothesis].
 
 ## 10. Game-state getters
 
@@ -200,16 +227,34 @@ not decode yet.
   below 0 for a moment before the script runs, so there is no floor [observed: a scratch
   capture read VDeadSea 1.397, 1.381, 1.365 … s, 15.6 ms less each frame; one jip4 run
   read VCG01 below 0 and the next above]. It stays within the delay (5 s here).
+- `SetDelayElapsed quest seconds` [documented: sets the remaining time until the quest's
+  script next runs]: sets `since_run = (delay - seconds.max(0)).max(0)` and returns `0.0`
+  (not `seconds`) [observed: 2026-11-24, `GSDocMitchellHouse` (`0x00103DF9`), Fallout:
+  New Vegas 1.4.0.525 + xNVSE 6.4.9 + JIP LN 57.30 with the 10 official base masters,
+  isolated clean-room staging copy (read-only `PrintToConsole` probe; zero writes to game
+  install or Saves), committed probe `w6t2_31_xnvse_items_ammo_rounds_and_ingrid`
+  (`tools/capture/nvse/catalogs/wave6_t2_set_delay_elapsed.json`):
+  `PROBE|w6t2_31_xnvse_items_ammo_rounds_and_ingrid|ammo(u=0,0=0,5=0)|grid(def=1,0=1)|del=0.00|tf(ref=0,arg=0)`;
+  zero DLL, PDB, or third-party source consulted].
 - `GetGlobalRef global`, `SetGlobalRef global [form]` [documented: their pages; on a
   reference with no form, the reference]. The form ID is written into the global's own
   value as the bits of its float, and GetGlobalRef reads the bits back, 0 when they name
   no form [observed: jip4, GameYear 2281 reads GetGlobalRef 0; after SetGlobalRef of
   00104C0F it reads GetGlobalValue 1.49665e-39, which is those bits].
 - `GetEditorPosition` [documented: returns the cell and writes the six output variables;
-  0 for a reference not placed in the editor]. The angles are in degrees [hypothesis: as
-  GetStartingAngle reads them]. Not probed: none of six forms of the call (let or set,
-  to a ref or a float, three outputs or six, or no result) compiled through the capture
-  plugin's run-time compiler [observed, 2026-10-30].
+  0 for a reference not placed in the editor]: angles are written in degrees matching
+  `GetStartingAngle`, and when called on a reference with no editor placement (such as
+  `Player`), it returns `00000000` and preserves all six output variables unchanged
+  [observed: 2026-11-24, Fallout: New Vegas 1.4.0.525 (`040020D0`) + xNVSE 6.4.9 + JIP LN
+  NVSE 57.30 (`5730`) + lStewieAl's Tweaks 1005 (`bUseConsoleOutputFile=1`), 10 official
+  base masters, isolated clean-room staging copy (read-only `PrintToConsole` probe; zero
+  writes to game install or Saves), `GSDocMitchellHouse` (`0x00103DF9`), `DocMitchellRef`
+  (`0x00104C0F`) and `Player`, committed probe `w6_t1_03_pos_ex_and_editor_pos`
+  (`tools/capture/nvse/catalogs/wave6_t1_editor_pos.json`):
+  `PROBE|w6_t1_03_pos_ex_and_editor_pos|posExPc=0(0.00,0.00,0.00)|posExDoc=0(0.00,0.00,0.00)|edDoc=00103DF9(dpos=0.00,0.00,0.00|rot=0.000,0.000,22.918|start=0.000,0.000,22.918)|edPc=00000000(111.0,222.0,333.0,444.0,555.0,666.0)`;
+  no DLL, PDB, or third-party source consulted]. (Earlier 2026-10-30 probes passed bare
+  variable names, which the runtime compiler refuses; parenthesized `(ox) ... (rz)`
+  compiles cleanly.)
 - `GetStartingPos axis`, `GetStartingAngle axis` (vanilla, built with this batch in
   `functions/refs.rs`): the reference's placement in the plugins, the angle in degrees;
   the player reads 0 on every axis [observed: jip4, DocMitchellRef 2288, 2244, 7360 and
@@ -223,9 +268,20 @@ not decode yet.
   `PROBE|b3_jip4_02_session_time_and_start_angle|sess=5.31,docZ=22.92,dynZ=270.00`; zero
   DLL, PDB, or third-party source consulted; hypothesis: X/Y axes and persistence of
   `made_rot` across saves].
-- `GetIsPoisoned` [documented: "under the influence of a poison-type effect"]: an effect
-  on the actor whose source is an ingestible that GetIsPoison counts, all its effects
-  hostile and detrimental [hypothesis: the rule].
+- `GetIsPoisoned` [documented: "under the influence of a poison-type effect"]: returns `1`
+  for active `SPEL` type-5 poisons (`RadScorpion1Poison`, `BarkScorpionPoison`,
+  `CazadorPoison`; cleared to `0` by Antivenom dispel), `ALCH` poisons (`BleakVenom`),
+  and hostile+detrimental `SPEL` type-0 effects (`SpellFlamerEffect`), and `0` for clean
+  actors or beneficial ingestibles (`RadX`) [observed: 2026-11-25, `GSDocMitchellHouse`
+  (`0x00103DF9`), Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 + JIP LN NVSE 57.30 (5730),
+  10 official base masters, read-only `PrintToConsole` probe
+  `w6d12_38_getispoisoned_all_sources_and_antivenom_clear`
+  (`tools/capture/nvse/catalogs/wave6d12_magic_effects_explosions_proj.json`):
+  `clean=0|sp5(rad=1,bark=1,afterAnti=0,caz=1)|alchPois=1|sp0Flm=1|alchBen=0`; no DLL or
+  source consulted]. Ignoring inactive (`!e.inactive`) and permanent (`!e.permanent`, e.g.,
+  addictions) effects and scoping the non-`is_poison` Hostile+Detrimental check to `SPEL`
+  sources (leaving mixed `ALCH` items governed by `Game::is_poison`) are NVForever choices
+  [design].
 
 ## 11. Still open
 

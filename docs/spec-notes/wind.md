@@ -54,6 +54,25 @@ How fast it goes with the wind's speed is not shown (the storm found them asleep
 direction may be a fixed world wind or the weather's (WTHR DATA stores no direction
 [observed: the record's other DATA bytes are 45, 45 or 0, 0 in every weather]).
 
+### 2.1 Speed against the wind speed, and waking again [observed: campaign o32_tumble, 2026-11-25, observer check 94]
+
+The same ten references and the far one, about every 0.18 s for one game hour (120 s at
+TimeScale 30), with `ForceWeather HVDustStorm 1` (DATA wind speed 127) before
+`coc Goodsprings`, so the cells loaded under the storm.
+
+- **No faster in the storm.** 0x00178A67 rolled 654 units net in its first 6 s at a median
+  126 units a second (90th percentile 182) towards about 319°, as under 50 in o27
+  (643 units at 140–190 towards 308–332°). 0x00178A64 went out to 398 units by 20 s and
+  back to 63 by 30 s on its slope; 0x00178A7F rocked in place (1,467 units of path for 13
+  net); the other six moved under 15 units; the far one not at all.
+- **They wake again, rarely.** All had settled by about 60 s. At about 106 s three at rest
+  moved at the same moment (0x00178A64 about 117 units at up to 126 a second, 0x00178A7F
+  12, 0x00178A7E, which had never moved, 5), with no actor within 3,000 units and the
+  player 5,000–9,000 units off, standing still. One such wake in the hour, three at once,
+  points to something global (a gust, a weather or cell update) rather than a nudge
+  [hypothesis]. Not modelled: one event is too few to say how often or why.
+- Not checked: that the forced weather was still HVDustStorm when the cells loaded.
+
 ## 3. What NVForever does
 
 - A body whose collision object has the wind flag and is dynamic is put in the world
@@ -69,19 +88,22 @@ direction may be a fixed world wind or the weather's (WTHR DATA stores no direct
   on for ever on rapier's terrain, which has no rolling resistance and none of the
   original's stones and scrub to lodge in.
 - The wind: the trees' and grass's direction, now 120° from +x towards +y (330°
-  clockwise from north, §2; it was 30° [chosen]), at 4 units a second per unit of the
-  weather's DATA wind speed, so 200 for the usual 50 (`tumble::SPEED_PER_WIND`)
-  [hypothesis: the fastest tumbleweeds under 50; linear in the speed is a guess], faded
-  across a weather change (`tree::wind_vector`); none indoors and with a still weather.
+  clockwise from north, §2; it was 30° [chosen]), at 200 units a second in any weather
+  with wind, whatever its DATA wind speed (`tumble::ROLL_SPEED`; §2.1: a dust storm's 127
+  rolls them no faster than the usual 50) [hypothesis: 200 from the fastest under 50, and
+  the same in every windy weather], eased in over the first unit of wind speed as a
+  weather fades in from a still one (`tree::wind_vector`); none indoors and with a still
+  weather. Until #1401's second part it was 4 units a second per unit of wind speed,
+  508 under 127.
 - The bodies are those in the loaded physics cells (3 × 3 around the player), so the cost
   stays bounded; the exit line `wind summary` gives how many responded, the most blown in
   a frame, the farthest one went and the most time a frame's blowing took.
 
 ## 4. Open
 
-- Speed against the weather's wind speed (rerun with the storm forced before the load).
-- Whether a tumbleweed ever starts again without a load (a longer watch, an hour of game
-  time), and whether the wind or the impulse of a nearby actor wakes it.
+- What wakes tumbleweeds at rest without a load (§2.1: once in a game hour, three at
+  once), and how often: a longer watch over several hours and weathers.
+- Whether a still weather (DATA wind speed 0) rolls them at all.
 - Caesar's throne carries the flag; its bodies are not dynamic, so nothing blows it.
 - The tumbleweed pile effect (`effects\tumbleweedpile.nif`) is not placed in the masters.
 

@@ -1,0 +1,107 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6d2_test_equipped_slots_same_armor",
+  "description": "Wave 6D-2 read-only probe confirming TestEquippedSlots returns 1 for the currently worn armor itself.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "jip_ln_nvse": "57.30 (5730)"
+  },
+  "batches": [
+    {
+      "id": "w6d2_test_equipped_slots",
+      "title": "Wave 6D-2: TestEquippedSlots same-armor overlap",
+      "extender": "JIP LN NVSE 57.30",
+      "required_plugins": [
+        "jip_nvse.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6d2p3_52_empty_recipes_and_eff_dt_curve",
+          "bucket": "A",
+          "extender": "JIP LN 57.30",
+          "required_plugins": [
+            "jip_nvse.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/jip-actors-11.md",
+          "spec_line": 65,
+          "functions_tested": [
+            "GetFormRecipes",
+            "GetFormRecipeOutputs",
+            "GetArmorEffectiveDT",
+            "IsEquippedWeaponSilenced",
+            "TestEquippedSlots",
+            "GetWeaponDetectionSoundLevel",
+            "SetWeaponDetectionSoundLevel"
+          ],
+          "claim": "Verify empty GetFormRecipes/GetFormRecipeOutputs array size (0 vs -1) on non-recipe form (0x104C0C), GetArmorEffectiveDT across 100%/50%/25%/10% condition, and TestEquippedSlots + IsEquippedWeaponSilenced after 1-tick EquipItem.",
+          "expected": "Determines exact empty array convention for GetFormRecipes/GetFormRecipeOutputs, effective DT condition curve, and post-tick equipped slot/silenced checks.",
+          "script_lines": [
+            "ref rDocB = GetFormFromMod \"FalloutNV.esm\" \"104C0C\"",
+            "ref rCmb = GetFormFromMod \"FalloutNV.esm\" \"20420\"",
+            "ref rLth = GetFormFromMod \"FalloutNV.esm\" \"20423\"",
+            "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+            "array_var aFrE = GetFormRecipes rDocB",
+            "array_var aFoE = GetFormRecipeOutputs rDocB",
+            "Player.AddItemHealthPercent rCmb 1 0.10 1",
+            "array_var aInv = Player.GetInvRefsForItem rCmb",
+            "int nInv = ar_Size aInv",
+            "ref rA = 0",
+            "if nInv > 0",
+            "  let rA := aInv[0]",
+            "endif",
+            "float dt10 = rA.GetArmorEffectiveDT",
+            "Player.EquipItem rCmb 0 1",
+            "Player.AddItem r10 1 1",
+            "Player.EquipItem r10 0 1",
+            "Player.AuxVarSetFlt \"*w6d2_52_fr\" (ar_Size aFrE)",
+            "Player.AuxVarSetFlt \"*w6d2_52_fo\" (ar_Size aFoE)",
+            "Player.AuxVarSetFlt \"*w6d2_52_dt10\" dt10"
+          ],
+          "wait_ticks_after": 2,
+          "extra_steps": [
+            {
+              "suffix": "check",
+              "wait_ticks": 0,
+              "script_lines": [
+                "ref rCmb = GetFormFromMod \"FalloutNV.esm\" \"20420\"",
+                "ref rLth = GetFormFromMod \"FalloutNV.esm\" \"20423\"",
+                "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+                "int ovSame = Player.TestEquippedSlots rCmb",
+                "int ovLth = Player.TestEquippedSlots rLth",
+                "int sl0 = GetWeaponDetectionSoundLevel r10",
+                "int sil0 = Player.IsEquippedWeaponSilenced",
+                "SetWeaponDetectionSoundLevel r10 2",
+                "int sil2 = Player.IsEquippedWeaponSilenced",
+                "SetWeaponDetectionSoundLevel r10 sl0",
+                "Player.RemoveItem rCmb 1 1",
+                "Player.RemoveItem r10 1 1",
+                "int fr = Player.AuxVarGetFlt \"*w6d2_52_fr\"",
+                "int fo = Player.AuxVarGetFlt \"*w6d2_52_fo\"",
+                "float dt10 = Player.AuxVarGetFlt \"*w6d2_52_dt10\"",
+                "PrintToConsole \"PROBE|w6d2p3_52_empty_recipes_and_eff_dt_curve|recE=%g,%g|dt10=%.2f|ov=%g,%g|sil=%g->%g\" fr fo dt10 ovSame ovLth sil0 sil2"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

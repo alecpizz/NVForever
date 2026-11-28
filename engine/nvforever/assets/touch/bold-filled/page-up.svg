@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Original NVForever geometry; Bold filled family. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="currentColor" stroke="none" color="#ffffff" fill-rule="evenodd" stroke-width="0" stroke-linecap="round" stroke-linejoin="round">
+  <title>Page up</title>
+  <path d="M 4 3 L 28 3 L 28 7 L 4 7 Z M 5 19 L 16 8 L 27 19 L 22 19 L 22 29 L 10 29 L 10 19 Z"/>
+</svg>

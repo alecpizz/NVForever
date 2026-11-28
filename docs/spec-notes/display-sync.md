@@ -21,6 +21,27 @@ choice. Code: `engine/nvforever/src/frame_pace.rs`, the settings row in
   138 at 144 Hz); no vendor document found here states a figure [hypothesis: the margin
   is enough for our sleep-then-spin limiter, whose error is under 1 ms]. A page frame-rate
   limit below it wins.
+- **Variable refresh with DLSS Frame Generation**: DLSS-G needs vsync off on Vulkan
+  [documented: "VSync with Frame Generation is only supported on D3D12",
+  `ProgrammingGuideDLSS_G.md` §22.5], so while it is asked for the window presents with
+  vsync off (`AutoNoVsync`) and the same cap, on frames shown, goes whole to Reflex's frame
+  limit (`frame_pace::wait_for_cap`) [design], which holds the frames shown, generated ones
+  included: 152 at 2x is 152 shown and 76 real [observed: 13158 us held 76 shown and 38 real,
+  a run on an RTX 5090 at 160 Hz, 2026-11-23].
+  Frames then reach the screen under its refresh rate, where a VRR screen refreshes on each
+  one; vsync is only what would hold a frame that came in faster than the screen's top rate.
+  The cap's margin is not enough: a frame now and then comes in under the refresh interval
+  and the screen tears near the bottom [observed 2026-11-23, 160 Hz G-SYNC, 2x, 152 shown /
+  76 real]. The game cannot hold it back: Streamline presents DLSS-G's frames through a
+  swapchain of its own with sync interval 0 whatever present mode the game asks for (Mailbox
+  was tried and made no difference) [observed: its log, "interpolation state changed from
+  disabled to enabled (... SyncInterval=0)", "platform: Vulkan (VSync with FG: not
+  supported)"]. The driver can: NVIDIA Control Panel's Vertical sync On for the game took
+  the tearing away with DLSS-G still generating [observed 2026-11-23, a run on an RTX 5090 at 160 Hz: state
+  eOk, 2 frames presented a frame]; NVIDIA's guide says the Control Panel's setting takes
+  precedence over the application's [documented: `ProgrammingGuideDLSS_G.md` §22.3]. That is
+  the setup the player pages give for a G-SYNC screen.
+  Vertical sync still dims DLSS-G ("Needs vsync off").
 - The refresh rate is the window's monitor's, from winit, which documents it as "the
   monitor refresh rate used by the system" and says to use the video mode's rate in
   exclusive full screen [documented: winit 0.30.13 `MonitorHandle::refresh_rate_millihertz`];

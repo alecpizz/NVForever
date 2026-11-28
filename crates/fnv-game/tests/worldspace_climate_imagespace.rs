@@ -201,6 +201,28 @@ fn num(g: &mut Game<'_>, expr: &str) -> f64 {
     }
 }
 
+/// `SetClimateTraitNumeric` validates `CLMT`, caps unsigned sun times at `1430` (10-min
+/// slots `0..=143`), clamps moons to `0..=3`, and clamps phase length to `0..=63`
+/// [observed: `w6d2_16_climate_traits_and_weather_add_remove`].
+#[test]
+fn set_climate_trait_numeric_bounds_and_clmt_validation() {
+    let f = fixture();
+    let mut g = game(&f);
+    q(&mut g, "SetClimateTraitNumeric ClimateAlpha 0 25");
+    assert_eq!(num(&mut g, "GetClimateTraitNumeric ClimateAlpha 0"), 20.0);
+    q(&mut g, "SetClimateTraitNumeric ClimateAlpha 0 1500");
+    assert_eq!(num(&mut g, "GetClimateTraitNumeric ClimateAlpha 0"), 1430.0);
+    q(&mut g, "SetClimateTraitNumeric ClimateAlpha 0 -10");
+    assert_eq!(num(&mut g, "GetClimateTraitNumeric ClimateAlpha 0"), 1430.0);
+    q(&mut g, "SetClimateTraitNumeric ClimateAlpha 5 4");
+    assert_eq!(num(&mut g, "GetClimateTraitNumeric ClimateAlpha 5"), 3.0);
+    q(&mut g, "SetClimateTraitNumeric ClimateAlpha 6 64");
+    assert_eq!(num(&mut g, "GetClimateTraitNumeric ClimateAlpha 6"), 63.0);
+    // Non-CLMT form is ignored.
+    q(&mut g, "SetClimateTraitNumeric TestStatic 0 300");
+    assert_eq!(num(&mut g, "GetClimateTraitNumeric TestStatic 0"), 0.0);
+}
+
 #[test]
 fn set_worldspace_climate_reaches_current_climate_weathers_night_moon_and_respects_precedence() {
     let f = fixture();
@@ -235,7 +257,7 @@ fn set_worldspace_climate_reaches_current_climate_weathers_night_moon_and_respec
     assert_eq!(num(&mut g, "GetMoonPhase"), 2.0);
 
     // Precedence: SetCurrentClimate overrides SetWorldspaceClimate in the same worldspace.
-    assert_eq!(num(&mut g, "SetCurrentClimate ClimateGamma"), f64::from(CLMT_C));
+    assert_eq!(num(&mut g, "SetCurrentClimate ClimateGamma"), 0.0);
     assert_eq!(g.script_climate(), Some(FormId(CLMT_C)));
     assert_eq!(num(&mut g, "GetCurrentClimate"), f64::from(CLMT_C));
     assert_eq!(num(&mut g, "GetWorldspaceClimate MainWorld"), f64::from(CLMT_B));
@@ -361,7 +383,7 @@ fn get_moon_phase_indoors_uses_active_or_default_climate() {
     // Start directly indoors without ever visiting an exterior worldspace:
     // `w4c_b3_03_jg6_actor_world_misc` observed `moon=1` indoors, while the
     // `GameDaysPassed = 5.0` / `DefaultClimate` (0x0000015F, phase length 3 ->
-    // floor(5.0 / 3.0) % 8 = 1) derivation is [hypothesis] / [design].
+    // floor(5.0 / 3.0) % 8 = 1) derivation (see docs/spec-notes/ext-jg6.md).
     g.world.set_global(FormId(GLOB_DAYS), 5.0).unwrap();
     enter(&mut g, ROOM);
     assert_eq!(g.current_climate(), None);

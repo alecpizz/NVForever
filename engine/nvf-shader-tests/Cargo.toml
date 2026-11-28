@@ -22,6 +22,10 @@ name = "ambient_occlusion_lighting"
 path = "tests/ambient_occlusion_lighting.rs"
 
 [[test]]
+name = "physical_pbr"
+path = "tests/physical_pbr.rs"
+
+[[test]]
 name = "reflection_gate"
 path = "tests/reflection_gate.rs"
 

@@ -293,7 +293,9 @@ Probed first in the original game (set nvse-sixth of tools/capture/jip_probes.py
 - **Settings and INI** (`nvse_settings.rs`): GetNumericINISetting (-1 when missing or
   without a ":category"), GetStringIniSetting (no value when missing), SetNumericINISetting
   (1 / 0), SetStringIniSetting, on `GameData::ini_texts` (the host passes the game's INI
-  text; `fnvtool script run --ini`), changed for the session only. Not built:
+  text; `fnvtool script run --ini`), changed for the session only. `iSize W:Display` and
+  `iSize H:Display` read the live window's size once the engine tells it, above the INI
+  text (the original sizes its window from them; NVForever does not) [design]. Not built:
   SetStringGameSettingEx (the original refuses it at compile: it is deprecated).
 - **Tokens** (`nvse_tokens.rs`): the five functions, with no item a token (a carried
   stimpak keeps 0 in the game; the Category:Tokens page is missing). GetPaired: not built.

@@ -50,6 +50,7 @@
 //! pointer's moves onto another character, or showing it, and how many of them sounded).
 
 pub mod screen;
+pub mod touch;
 
 use crate::interface::bc_supported;
 use crate::pause::{AidTime, Paused};
@@ -507,21 +508,26 @@ impl Plugin for TerminalPlugin {
             .init_resource::<PowerAid>()
             .init_resource::<MenuRows>()
             .init_resource::<TerminalOpening>()
+            .init_resource::<touch::Settings>()
+            .init_resource::<touch::TouchState>()
             .init_resource::<ReadEntries>()
             .insert_resource(TerminalAid { steps, science: None })
             .add_message::<OpenTerminal>()
             .add_message::<TerminalInput>()
-            .add_systems(Startup, (read_words, setup_image))
+            .add_systems(Startup, (read_words, setup_image, touch::load))
             .add_systems(
                 Update,
-                (run_aid, follow_open, open, backdrop, (keys, mouse, apply, timers).chain().run_if(in_state(PlayState::Menu)), draw)
+                (run_aid, follow_open, open, backdrop, touch::input, (keys, mouse, apply, timers).chain().run_if(in_state(PlayState::Menu)), draw)
                     .chain()
                     .after(crate::menu::open_menus)
                     .in_set(PlaySet::Ui),
             )
+            .add_systems(Update, touch::draw.after(draw).in_set(PlaySet::Ui))
             .add_systems(OnExit(PlayState::Menu), close)
             .add_systems(Update, fade_out.in_set(PlaySet::Ui))
             .add_systems(Last, report);
+        #[cfg(any(target_os = "android", test))]
+        touch::register(app);
     }
 }
 
@@ -566,6 +572,7 @@ fn backdrop(
     screen: Res<TerminalScreen>,
     image: Option<Res<TerminalImage>>,
     monitor: Option<Res<MonitorView>>,
+    touch: Res<touch::Settings>,
     roots: Query<(Entity, &screen::Backdrop)>,
     flat: Query<(&ComputedNode, &UiGlobalTransform), With<screen::FlatScreen>>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -581,7 +588,7 @@ fn backdrop(
     }
     // The flat picture until the monitor is drawn (the engine draws it a frame or more
     // after the terminal opens), then the monitor; `None` once closed.
-    let want = open.then_some(monitor.is_none());
+    let want = open.then_some(monitor.is_none() || touch.enabled);
     let have = roots.iter().next().map(|(_, b)| b.flat);
     if want != have {
         for (e, _) in &roots {
@@ -825,10 +832,14 @@ pub fn step_cursor(p: &Puzzle, cursor: usize, dx: i32, dy: i32) -> usize {
 /// How long the granted screen stays with the Faster Hacking tweak [design: docs/design/tweaks.md].
 const FAST_GRANTED_SECONDS: f32 = 0.5;
 
-fn keys(keys: crate::pad::ActionButtons<KeyCode>, screen: Res<TerminalScreen>, mut out: MessageWriter<TerminalInput>, tweaks: Option<Res<crate::tweaks::TweakSettings>>) {
+fn keys(keys: crate::pad::ActionButtons<KeyCode>, screen: Res<TerminalScreen>, mut out: MessageWriter<TerminalInput>, mut touch: Option<ResMut<touch::TouchState>>, tweaks: Option<Res<crate::tweaks::TweakSettings>>) {
     let keys = keys.snapshot();
     use KeyCode::*;
     let Some(s) = screen.0.as_ref() else { return };
+    if let Some(touch) = touch.as_deref_mut().filter(|t| t.configuring()) {
+        if keys.just_pressed(Escape) { touch.close_options(); }
+        return;
+    }
     let mut send = |i| {
         out.write(i);
     };
@@ -874,7 +885,7 @@ fn keys(keys: crate::pad::ActionButtons<KeyCode>, screen: Res<TerminalScreen>, m
 /// The pointer on the screen's canvas ([`TerminalPointer`]) puts the cursor on the dump
 /// character or the menu row under it, and a click enters that.
 fn mouse(
-    screen: Res<TerminalScreen>,
+    (screen, touch): (Res<TerminalScreen>, Res<touch::Settings>),
     buttons: crate::pad::ActionButtons<MouseButton>,
     pointer: Res<TerminalPointer>,
     rows: Res<MenuRows>,
@@ -884,6 +895,7 @@ fn mouse(
 ) {
     let buttons = buttons.snapshot();
     let Some(s) = screen.0.as_ref() else { return };
+    if touch.enabled { return; } // The accessible flat adapter owns its own hit targets.
     match &s.page {
         Page::Hacking(h) => {
             let under = pointer.canvas.and_then(screen::canvas_index);
@@ -947,6 +959,7 @@ fn apply(
     real: Res<Time<Real>>,
     mut stats: ResMut<TerminalStats>,
     mut rng: Local<Option<ChaCha8Rng>>,
+    touch: Option<Res<touch::TouchState>>,
     (mut sounds, mut opened, mut read, drawn): (MessageWriter<UiSound>, MessageWriter<crate::lockpick::LockOpened>, ResMut<ReadEntries>, Res<MenuRows>),
 ) {
     let now = time.elapsed_secs();
@@ -973,7 +986,11 @@ fn apply(
             }
         }
     }
+    let mut entered = false;
     for &cmd in input.read() {
+        let committing = matches!(cmd, TerminalInput::Select | TerminalInput::Aid(_));
+        if committing && (entered || touch.as_deref().is_some_and(touch::TouchState::configuring)) { continue; }
+        if committing { entered = true; }
         let Some(s) = screen.0.as_mut() else { return };
         let Some(rt) = script.as_mut().and_then(|s| s.rt.as_mut()) else { return };
         let (reference, base) = (s.reference, s.base);

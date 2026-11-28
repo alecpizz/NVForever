@@ -41,3 +41,12 @@ nvforever-*.png
 nvf-screenshot-*.png
 # Before/after progress pictures kept locally for pull requests and issues.
 /pr-pictures/
+
+# Android build products and local SDK configuration.
+/android/.gradle/
+/android/**/build/
+/android/local.properties
+/runtime-assets/
+/native-libs/
+*.apk
+*.aab

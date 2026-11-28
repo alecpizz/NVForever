@@ -818,7 +818,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
         // weapon's, else 1; the hit as combat deals it (OnHit and OnHitWith with the
         // attacker), or the bare damage with skipOnHit. FakeHitEx's limb damage on
         // locations 1-6 [documented: "Location 0 maps to torso (no limb damage)"], as
-        // condition points [hypothesis].
+        // condition points (see docs/spec-notes/ext-itr.md §8).
         "fakehit" | "fakehitex" => {
             let Some(target) = actor else { return Some(Ok(zero)) };
             let ex = name == "fakehitex";
@@ -885,7 +885,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
         }
         // `target`: [x, y, z] of where the actor last knew the target; 0 with no data
         // [documented: the four pages]. NVForever's awareness keeps one place per target,
-        // where it was last measured, so the four read it [hypothesis].
+        // where it was last measured, so the four read it (see docs/spec-notes/ext-itr.md §8).
         "gettargetdetectedlocation" | "gettargetinitiallocation" | "gettargetlastfullyvisiblelocation" | "gettargetlastseenlocation" => {
             let at = actor.zip(form(args, 0)).and_then(|(a, t)| g.awareness.actors.get(&a).and_then(|x| x.targets.get(&t)).map(|x| x.at));
             match at {
@@ -894,7 +894,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
             }
         }
         // The reload animation for the engine, on an actor with a weapon in hand
-        // [documented: ForceReload]; 0 without one [hypothesis].
+        // [documented: ForceReload]; 0 without one (see docs/spec-notes/ext-itr.md §8).
         "forcereload" => {
             let Some(a) = actor else { return Some(Ok(zero)) };
             if crate::functions::items::equipped_weapon(g, a).is_none() {
@@ -945,6 +945,8 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
             g.resurrect(a, false);
             if num(args, 0, 0.0) as i64 & 1 != 0 {
                 let _ = g.world.reset_inventory(a);
+                g.clear_npc_weapon_mods_roll(a);
+                g.maybe_apply_npc_weapon_mods(a);
             }
             one
         }
@@ -960,7 +962,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
         }
         // Ragdoll `[limb] [x y z] [spin] [duration] [flags]`, RagdollLimb `limb [x y z]`
         // (the catalogue's arguments; Ragdoll's page is the ragdoll form's): for the
-        // engine's physics; 1 on an actor [hypothesis].
+        // engine's physics; 1 on an actor (see docs/spec-notes/ext-itr.md §8).
         "ragdoll" | "ragdolllimb" => {
             let Some(a) = actor else { return Some(Ok(zero)) };
             let limb = num(args, 0, -1.0) as i64;
@@ -969,9 +971,9 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
             one
         }
         // [documented: IsRigidBodyAtRest]: an actor has no rigid body of its own (a
-        // character controller), 0 [observed: itr probes, the player reads 0;
-        // hypothesis for other actors]; the engine's bodies are not reported to the
-        // game, so another reference reads at rest [hypothesis; follow-up].
+        // character controller), 0 [observed: itr probes, the player reads 0]; the
+        // engine's bodies are not reported to the game, so another reference reads at
+        // rest (see docs/spec-notes/ext-itr.md §8; follow-up).
         "isrigidbodyatrest" => yes(subject.is_some() && actor.is_none()),
         // `x y z level` by the calling actor; `x y z level radius [flags] [topic]` by no
         // one: a detection event there, the level in place of the action sound
@@ -1037,7 +1039,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
         // point that a sight line from the threat cannot reach, nearest first, [x, y, z,
         // flags, distance] each; max 8 by default, 1-32; 0 for a bad radius [documented:
         // GetBestCoverFromThreat]. Blocked: a cast from the threat to the point's chest
-        // height meets something first [hypothesis].
+        // height meets something first (see docs/spec-notes/ext-itr.md §9).
         "getbestcoverfromthreat" => {
             let r = num(args, 6, 0.0);
             if r <= 0.0 || r > MAX_COVER_RADIUS {
@@ -1139,7 +1141,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
                 .filter(|&(d, _, _)| d <= max)
                 .filter(|&(_, _, p)| {
                     // The angle between where the player faces (Z rotation, clockwise from
-                    // north) and the reference, within `heading` degrees [hypothesis].
+                    // north) and the reference, within `heading` degrees (see docs/spec-notes/ext-itr.md §9).
                     heading <= 0.0 || {
                         let bearing = f64::from(p[0] - me[0]).atan2(f64::from(p[1] - me[1]));
                         let off = (bearing - facing).rem_euclid(std::f64::consts::TAU);
@@ -1168,7 +1170,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
             }
         }
         // `[delta] [flags]`: the eligibility maps of the perks that can be taken
-        // [documented: GetEligiblePerks], by least level then name [hypothesis].
+        // [documented: GetEligiblePerks], by least level then name (see docs/spec-notes/ext-itr.md §10).
         "geteligibleperks" => {
             let d = g.delta_of(args.first());
             let flags = num(args, 1, 0.0) as i64;
@@ -1252,9 +1254,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
                 } else if el.status == "takeable" {
                     "takeable"
                 // Only what the player raises holds it back, the level or actor values
-                // [hypothesis, fitted to the itr probes: Run 'n Gun, Hand Loader and The
-                // Professional read "future" with skill requirements; the traits Fast
-                // Shot and Trigger Discipline "blocked"; the page gives the names only].
+                // (see docs/spec-notes/ext-itr.md §10).
                 } else if !el.blockers.is_empty() && el.blockers.iter().all(|b| matches!(b.kind, "Level" | "ActorValue")) {
                     "future"
                 } else if el.status == "unknown" {
@@ -1328,15 +1328,14 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
         }
         // On a container: how many kinds of item it holds, read without changing it
         // [documented: GetVisibleContainerInventoryCount]; NVForever rolls a container's
-        // leveled lists when it fills it, so what it holds is what it shows [hypothesis].
+        // leveled lists when it fills it, so what it holds is what it shows (see docs/spec-notes/ext-itr.md §11).
         "getvisiblecontainerinventorycount" => {
             let Some(c) = subject else { return Some(Ok(zero)) };
             let kinds: BTreeSet<FormId> = g.world.inventory_mut(c).map(|inv| inv.iter().filter(|(_, n)| *n > 0).map(|(i, _)| i).collect()).unwrap_or_default();
             XVal::Num(kinds.len() as f64)
         }
         // `[count]` on a reference: that many copies of its base placed at it (PlaceAtMe),
-        // the last one returned [hypothesis: no page; the name and the catalogue's Ref
-        // result].
+        // the last one returned (see docs/spec-notes/ext-itr.md §11).
         "duplicate" => {
             let Some(r) = subject else { return Some(Ok(XVal::Ref(0))) };
             let b = base(g, r);
@@ -1379,10 +1378,10 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
             one
         }
         // `cell`: CenterOnCell [documented: CenterOnCellAlt; the main menu's new session
-        // is the engine's]; 0 when the cell is not found [hypothesis].
+        // is the engine's]; 0 when the cell is not found (see docs/spec-notes/ext-itr.md §11).
         "centeroncellalt" | "coca" => yes(crate::functions::console::call_words(g, None, "CenterOnCell", &[text(args, 0)], "CenterOnCellAlt").is_ok()),
         // [documented: ToggleAllPrimitives]: the switch, for the engine's markers
-        // (follow-up); returns 0 as the console toggles do [hypothesis].
+        // (follow-up); returns 0 as the console toggles do (see docs/spec-notes/ext-itr.md §11).
         "toggleallprimitives" | "tap" => {
             g.other.itr2.primitives_shown = !g.other.itr2.primitives_shown;
             zero

@@ -8,6 +8,105 @@ use crate::game::{Game, RunCtx};
 use fnv_script::vm::XVal;
 use fnv_sim::FormId;
 
+/// Wrapper around the session `field_overrides` map that also indexes weapon-model keys
+/// (`MODL/`, `WNAM/`, `MWD1/`–`MWD7/`, `WNM1/`–`WNM7/`) and caches [`Game::weapon_model_stamp`]
+/// so per-frame renderer polls stay O(1) instead of scanning or hashing overrides every
+/// frame [design].
+pub(crate) struct FieldOverrides {
+    map: std::collections::HashMap<(FormId, String), XVal>,
+    weapon_model_keys: std::collections::HashSet<(FormId, String)>,
+    weapon_model_stamp_dirty: std::sync::atomic::AtomicBool,
+    weapon_model_stamp_cache: std::sync::atomic::AtomicU64,
+}
+
+impl Default for FieldOverrides {
+    fn default() -> Self {
+        Self {
+            map: std::collections::HashMap::new(),
+            weapon_model_keys: std::collections::HashSet::new(),
+            weapon_model_stamp_dirty: std::sync::atomic::AtomicBool::new(false),
+            weapon_model_stamp_cache: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+}
+
+impl FieldOverrides {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    #[inline]
+    fn is_weapon_model_key(key: &str) -> bool {
+        matches!(
+            key.as_bytes(),
+            b"MODL/"
+                | b"WNAM/"
+                | [b'M', b'W', b'D', b'1'..=b'7', b'/']
+                | [b'W', b'N', b'M', b'1'..=b'7', b'/']
+        )
+    }
+
+    pub(crate) fn insert(&mut self, k: (FormId, String), v: XVal) -> Option<XVal> {
+        let is_wm = Self::is_weapon_model_key(&k.1);
+        if is_wm {
+            self.weapon_model_keys.insert(k.clone());
+        }
+        let prev = self.map.insert(k, v);
+        if is_wm {
+            self.weapon_model_stamp_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        prev
+    }
+
+    pub(crate) fn remove(&mut self, k: &(FormId, String)) -> Option<XVal> {
+        let prev = self.map.remove(k);
+        if prev.is_some() && Self::is_weapon_model_key(&k.1) {
+            self.weapon_model_keys.remove(k);
+            self.weapon_model_stamp_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        prev
+    }
+
+    pub(crate) fn weapon_model_keys(&self) -> impl Iterator<Item = (&(FormId, String), &XVal)> {
+        self.weapon_model_keys.iter().filter_map(|k| self.map.get_key_value(k))
+    }
+
+    #[inline]
+    pub(crate) fn cached_weapon_model_stamp(&self) -> Option<u64> {
+        if self.weapon_model_stamp_dirty.load(std::sync::atomic::Ordering::Relaxed) {
+            None
+        } else {
+            Some(self.weapon_model_stamp_cache.load(std::sync::atomic::Ordering::Relaxed))
+        }
+    }
+
+    #[inline]
+    pub(crate) fn store_weapon_model_stamp(&self, stamp: u64) {
+        self.weapon_model_stamp_cache.store(stamp, std::sync::atomic::Ordering::Relaxed);
+        self.weapon_model_stamp_dirty.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+impl std::ops::Deref for FieldOverrides {
+    type Target = std::collections::HashMap<(FormId, String), XVal>;
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.map
+    }
+}
+
+impl std::ops::Index<&(FormId, String)> for FieldOverrides {
+    type Output = XVal;
+    #[inline]
+    fn index(&self, key: &(FormId, String)) -> &Self::Output {
+        &self.map[key]
+    }
+}
+
+#[cfg(test)]
+#[path = "weapon_model_stamp_tests.rs"]
+mod weapon_model_stamp_tests;
+
 /// A record field of `form`: a number, a form or a string (`GameData::record_field`),
 /// or what a setter put there this session.
 fn field(g: &Game, form: FormId, sub: &str, path: &str) -> Option<XVal> {
@@ -17,10 +116,13 @@ fn field(g: &Game, form: FormId, sub: &str, path: &str) -> Option<XVal> {
     }
     // A clone reads its original's fields (TempCloneForm).
     // Cloned PROJ records snapshot all active overrides at clone creation time
-    // [observed: w4g_02_tempcloneform_world_proj_csty], so untouched fields fall back
-    // directly to the authored record rather than inheriting post-clone source edits.
+    // [observed: w4g_02_tempcloneform_world_proj_csty], and `MODL/` is snapshotted at
+    // clone creation (`Game::snapshot_model_path`) [observed:
+    // w4g_02_tempcloneform_world_proj_csty, w4g_13_isidleplaying_and_idle_replace], so
+    // untouched fields fall back directly to the authored record rather than inheriting
+    // post-clone source edits.
     let orig = g.unclone(form);
-    if orig != form && g.data.sig(orig) != Some(*b"PROJ") {
+    if orig != form && g.data.sig(orig) != Some(*b"PROJ") && sub != "MODL" {
         if let Some(v) = g.field_overrides.get(&(orig, format!("{sub}/{path}"))) {
             return Some(v.clone());
         }
@@ -286,6 +388,9 @@ impl Game<'_> {
     /// A number that changes whenever [`Game::weapon_model_changes`] would give something
     /// else, read without building it: the renderer asks every frame.
     pub fn weapon_model_stamp(&self) -> u64 {
+        if let Some(cached) = self.field_overrides.cached_weapon_model_stamp() {
+            return cached;
+        }
         use std::hash::{Hash, Hasher};
         let mut n = 0u64;
         let mut sum = 0u64;
@@ -301,13 +406,15 @@ impl Game<'_> {
             sum = sum.wrapping_add(h.finish());
             n += 1;
         }
-        sum ^ n.rotate_left(32)
+        let stamp = sum ^ n.rotate_left(32);
+        self.field_overrides.store_weapon_model_stamp(stamp);
+        stamp
     }
 
     /// The model fields of WEAP records scripts set: (weapon, first person, slot 0–7, value);
     /// slot 0 is MODL or WNAM, 1–7 are MWD1–MWD7 or WNM1–WNM7.
     fn weapon_model_entries(&self) -> impl Iterator<Item = (FormId, bool, usize, &XVal)> {
-        self.field_overrides.iter().filter_map(|((w, key), v)| {
+        self.field_overrides.weapon_model_keys().filter_map(|((w, key), v)| {
             let (first, slot) = match key.as_bytes() {
                 b"MODL/" => (false, 0),
                 b"WNAM/" => (true, 0),
@@ -329,23 +436,55 @@ impl Game<'_> {
     }
 }
 
+/// Whether a call of the numbered extender `opcode` reaches a handler, as the game runs
+/// one: by the names the opcode table gives it (`command_opcodes.json`, the function
+/// table's own name), as `Game::extender_condition` and source-compiled units' calls do.
+/// Each name is called once with no arguments on the player in `g`, first through the
+/// named handlers, then as a one-line query for the script VM's own functions (a query
+/// the VM skips as not built, or that does not compile without arguments, counts as no
+/// handler); the extender's flow statements (`let`, `while` …) are the compiler's. Which
+/// names have a handler does not depend on the data, so an empty game serves
+/// (`fnvtool script coverage`, `script stubs`; #1408). A handler that panics is there.
+pub fn reaches_handler(g: &mut Game, table: &fnv_script::FunctionTable, opcode: u16) -> bool {
+    let mut names = crate::nvse_debug::opcode_names(u32::from(opcode));
+    names.extend(table.get(opcode).map(|f| f.name.clone()));
+    names.iter().any(|n| {
+        let lower = n.to_ascii_lowercase();
+        // The extender's flow statements are the script compiler's own lines
+        // (fnv_script::compile::parse `extender`), not calls a query can make.
+        if matches!(lower.as_str(), "let" | "eval" | "while" | "foreach" | "loop" | "break" | "continue" | "label" | "goto") {
+            return true;
+        }
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if call(g, &RunCtx::default(), &lower, Some(FormId::PLAYER_REF), &[]).is_some() {
+                return true;
+            }
+            // The script VM's own functions (GetBaseObject, PrintC, let …): a one-line
+            // query runs them, and one it cannot run is skipped as not built.
+            let from = g.events.len();
+            let r = g.run_query(&format!("Begin Function {{}}\nSetFunctionValue ({n})\nEnd"), RunCtx { self_ref: Some(FormId::PLAYER_REF), ..RunCtx::default() });
+            let not_built = g.events[from..].iter().any(|e| matches!(&e.kind, crate::trace::EventKind::Skipped { what, .. } if what.starts_with("not built yet")));
+            g.events.truncate(from);
+            r.is_ok() && !not_built
+        }))
+        .unwrap_or(true)
+    })
+}
+
 /// An xNVSE function by catalogue name (lower case); `None` when it is not built here.
 /// `on` is the reference it was called on, else the calling reference.
-pub fn call(g: &mut Game, ctx: &RunCtx, name: &str, on: Option<FormId>, args: &[XVal]) -> Option<Result<XVal, String>> {
-    if let Some(result) = crate::texture_filter::call(g, name, args) {
-        return Some(result);
-    }
-    if let Some(result) = crate::nvse_faction_modifiers::call(g, name, args) {
-        return Some(result);
-    }
-    if let Some(result) = crate::nvse_actor_queries::call(g, name, on.or(ctx.self_ref), args) {
-        return Some(result);
-    }
-    if name == "setcasinowinningslevel" { return Some(crate::casino::set_winnings_level(g, args)); }
-    if let Some(r) = crate::delayed::call(g, ctx, name, on, args) {
-        return Some(r);
-    }
-    if let Some(v) = crate::script_input::call(&mut g.input, name, args) {
+type NvseDispatchFn = fn(&mut Game, &RunCtx, &str, Option<FormId>, Option<FormId>, &[XVal]) -> Option<Result<XVal, String>>;
+
+/// Ordered module dispatchers for [`call`], preserving exact precedence while allowing
+/// [`NVSE_DISPATCH_CACHE`] to jump directly to the owning slot in O(1) [design].
+const NVSE_DISPATCHERS: &[NvseDispatchFn] = &[
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::texture_filter::call(g, name, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_faction_modifiers::call(g, name, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_actor_queries::call(g, name, on.or(ctx.self_ref), args) },
+    |g, _, name, _, _, args| (name == "setcasinowinningslevel").then(|| crate::casino::set_winnings_level(g, args)),
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::delayed::call(g, ctx, name, on, args) },
+    |g, _, name, _, _, args| {
+        let v = crate::script_input::call(&mut g.input, name, args)?;
         // EnableKey frees the key whatever holds it, so DisableKeyEx's mask groups on it
         // go too; else a later EnableKeyEx would find a stale group and keep the key
         // disabled [hypothesis: ITR's groups sit on top of DisableKey's one switch].
@@ -354,270 +493,131 @@ pub fn call(g: &mut Game, ctx: &RunCtx, name: &str, on: Option<FormId>, args: &[
                 g.other.itr.key_masks.remove(&k);
             }
         }
-        return Some(Ok(v));
-    }
-    let subject = on.or(ctx.self_ref);
-    // ext-last-core.md: irreversible achievement eligibility, independent of the
-    // Hardcore needs switch. The existing saved field feeds IsAlwaysHardcore.
-    if name == "disablehardcoretracking" {
-        g.player.hardcore_was_off = true;
-        return Some(Ok(XVal::Num(0.0)));
-    }
-    if let Some(result) = crate::ui_projection::call(g, name, subject, args) {
-        return Some(result);
-    }
-    if let Some(r) = crate::nvse_lutana::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_ttw::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_unlisted::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_unlisted2::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_json::call(g, name, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_refs::call(g, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_misc::call(g, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_data::call(g, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_notes::call(g, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_nx::call(g, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_actor::call(g, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_items::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_amata::call(g, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_jip::call(g, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_other::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_jg1::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_jg2::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_jg3::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_jg4::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_jg5::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_jg6::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_jg7::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_jg8::call(g, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_jg9::call(g, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_jg10::call(g, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_sup1::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_dialogue::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_sup3::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_sup6::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_sup5::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_sup7::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_jg_nif::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_sup4::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_jip5::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_jip6::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_jip7::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_jip8::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_jip9::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_jip10::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_jip14::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_jip11::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_jip13::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_jip12::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_pp::call(g, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_lu2::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_lu3::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_showoff5::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_showoff2::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_showoff3::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_showoff4::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_anh::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_itr1::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_itr2::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_knvse::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_jippp::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_vheyes::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_small::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_one111::call(g, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_rest::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_console::call(g, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_lists::call(g, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_leveled::call(g, name, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::mod_files::call(g, name, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_proj::call(g, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_sound::call(g, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_traits::call(g, name, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_anim::call(g, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nif_blocks::call(g, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_jip2::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::anims::call_ext(g, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_showoff::call(g, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_hud::call(g, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_jip3::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_jip4::call(g, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_gaps::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_plugins::call(g, ctx, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::script_runner::call(g, name, args) {
-        return Some(r);
-    }
+        Some(Ok(v))
+    },
+    |g, _, name, _, _, _| {
+        // ext-last-core.md: irreversible achievement eligibility, independent of the
+        // Hardcore needs switch. The existing saved field feeds IsAlwaysHardcore.
+        if name == "disablehardcoretracking" {
+            g.player.hardcore_was_off = true;
+            Some(Ok(XVal::Num(0.0)))
+        } else {
+            None
+        }
+    },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::ui_projection::call(g, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_lutana::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_ttw::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_unlisted::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_unlisted2::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_json::call(g, name, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_refs::call(g, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_misc::call(g, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_data::call(g, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_notes::call(g, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_nx::call(g, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_actor::call(g, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_items::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_amata::call(g, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_jip::call(g, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_other::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_jg1::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_jg2::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_jg3::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_jg4::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_jg5::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_jg6::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_jg7::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_jg8::call(g, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_jg9::call(g, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_jg10::call(g, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_sup1::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_dialogue::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_sup3::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_sup6::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_sup5::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_sup7::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_jg_nif::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_sup4::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_jip5::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_jip6::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_jip7::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_jip8::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_jip9::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_jip10::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_jip14::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_jip11::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_jip13::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_jip12::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_pp::call(g, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_lu2::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_lu3::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_showoff5::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_showoff2::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_showoff3::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_showoff4::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_anh::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_itr1::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_itr2::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_knvse::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_jippp::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_vheyes::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_small::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_one111::call(g, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_rest::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_console::call(g, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_lists::call(g, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_leveled::call(g, name, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::mod_files::call(g, name, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_proj::call(g, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_sound::call(g, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_traits::call(g, name, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_anim::call(g, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nif_blocks::call(g, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_jip2::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::anims::call_ext(g, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_showoff::call(g, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_hud::call(g, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_jip3::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_jip4::call(g, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_gaps::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_plugins::call(g, ctx, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::script_runner::call(g, name, args) },
     // The UI functions, over the menus' tile tree (docs/design/ui-tile-tree.md §5.1);
     // before the `set…` setters below, which would read SetUIFloat as a record field's
     // setter.
-    if let Some(r) = crate::ui_functions::call(g, name, args) {
-        return Some(r);
-    }
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::ui_functions::call(g, name, args) },
     // The rest of the tile functions (task T9; docs/spec-notes/menu-xml.md §9).
-    if let Some(r) = crate::ui_more::call(g, name, subject, args) {
-        return Some(r);
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::ui_more::call(g, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_settings::call(g, name, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_tokens::call(g, name, subject, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_handler_lists::call(g, name, args) },
+    |g, ctx, name, on, subject, args| { let _ = (ctx, on, subject); crate::nvse_debug::call(g, name, args) },
+];
+
+thread_local! {
+    static NVSE_DISPATCH_CACHE: std::cell::RefCell<std::collections::HashMap<String, usize>> =
+        std::cell::RefCell::new(std::collections::HashMap::with_capacity(256));
+}
+
+pub fn call(g: &mut Game, ctx: &RunCtx, name: &str, on: Option<FormId>, args: &[XVal]) -> Option<Result<XVal, String>> {
+    let subject = on.or(ctx.self_ref);
+    let cached = NVSE_DISPATCH_CACHE.with(|c| c.borrow().get(name).copied());
+    if let Some(idx) = cached {
+        if let Some(r) = NVSE_DISPATCHERS[idx](g, ctx, name, on, subject, args) {
+            return Some(r);
+        }
     }
-    if let Some(r) = crate::nvse_settings::call(g, name, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_tokens::call(g, name, subject, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_handler_lists::call(g, name, args) {
-        return Some(r);
-    }
-    if let Some(r) = crate::nvse_debug::call(g, name, args) {
-        return Some(r);
+    for (idx, dispatch) in NVSE_DISPATCHERS.iter().enumerate() {
+        if let Some(r) = dispatch(g, ctx, name, on, subject, args) {
+            NVSE_DISPATCH_CACHE.with(|c| {
+                let mut m = c.borrow_mut();
+                if m.len() < 4096 {
+                    m.insert(name.to_string(), idx);
+                }
+            });
+            return Some(r);
+        }
     }
     // The item a getter reads: its argument, else the calling reference's base form.
     let item = |g: &Game, k: usize| -> Option<FormId> {
@@ -1138,3 +1138,7 @@ pub(crate) fn shown_name(g: &Game, f: FormId) -> String {
     let b = crate::functions::base_of(g, f).filter(|&b| b != f).unwrap_or(f);
     named(b).or_else(|| (g.data.sig(b) == Some(*b"STAT")).then(|| "<no name>".to_string())).unwrap_or_default()
 }
+
+#[cfg(test)]
+#[path = "nvse_dispatch_tests.rs"]
+mod dispatch_tests;

@@ -417,3 +417,6 @@ fn fixed_random_multi_projectile_launch_preserves_order_and_full_spawn_state() {
 
 #[path = "projectile_lifecycle_tests.rs"]
 mod lifecycle_tests;
+
+#[path = "projectile_zone_tests.rs"]
+mod projectile_zone_tests;

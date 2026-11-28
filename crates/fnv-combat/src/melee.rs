@@ -202,6 +202,10 @@ pub struct MeleeInput<'a> {
     /// attack plays it instead of `attackpower` [hypothesis: which power attacks it
     /// replaces is not documented; the directional ones keep their own clips].
     pub power_override: Option<&'a str>,
+    /// Block is held: new swings do not start while blocking unless `instant_power` is
+    /// also set [observed: player report in #3753; design: pending an original-game
+    /// capture of mid-block edge cases].
+    pub blocking: bool,
     /// NVForever's Power Attack If Blocking tweak (docs/design/tweaks.md): a press of Use
     /// starts a power attack at once, with no hold.
     pub instant_power: bool,
@@ -258,22 +262,30 @@ impl Melee {
         let pressed = input.trigger && !self.was_trigger;
         let released = !input.trigger && self.was_trigger;
         self.was_trigger = input.trigger;
-        if pressed {
-            self.held = Some(0.0);
-            self.chained = self.swing.is_some();
-            if input.instant_power {
+        if input.blocking && !input.instant_power {
+            // Holding Block with the Power Attack From a Block tweak off suppresses
+            // starting or queueing a swing until Block ends (#3753).
+            self.held = None;
+            self.tap = false;
+            self.power = false;
+        } else {
+            if pressed {
+                self.held = Some(0.0);
+                self.chained = self.swing.is_some();
+                if input.instant_power {
+                    self.held = None;
+                    self.power = true;
+                }
+            } else if let Some(h) = self.held.as_mut().filter(|_| input.trigger) {
+                *h += input.dt;
+            }
+            if self.held.is_some_and(|h| h >= tuning.power_hold) {
                 self.held = None;
                 self.power = true;
             }
-        } else if let Some(h) = self.held.as_mut().filter(|_| input.trigger) {
-            *h += input.dt;
-        }
-        if self.held.is_some_and(|h| h >= tuning.power_hold) {
-            self.held = None;
-            self.power = true;
-        }
-        if released && self.held.take().is_some() {
-            self.tap = true;
+            if released && self.held.take().is_some() {
+                self.tap = true;
+            }
         }
 
         if let Some(s) = self.swing.as_mut() {
@@ -349,7 +361,7 @@ mod tests {
         let mut now = 0.0;
         let mut i = 0u32;
         while now < secs {
-            let input = MeleeInput { trigger: trigger(now), dt: DT, forward, right: 0.0, first: "attackright", rolls: [0.25, (i % 2) as f32 * 0.6], power_override, instant_power: false };
+            let input = MeleeInput { trigger: trigger(now), dt: DT, forward, right: 0.0, first: "attackright", rolls: [0.25, (i % 2) as f32 * 0.6], power_override, blocking: false, instant_power: false };
             out.extend(m.tick(input, &t, SwingTiming::of(None, None, None, 1.0, 1.0)));
             if let Some(s) = m.swing.clone() {
                 let timing = if s.stem.starts_with("attackright_") { right() } else if s.stem.starts_with("attackleft_") { left() } else { power() };
@@ -403,20 +415,63 @@ mod tests {
 
     #[test]
     fn the_blocking_tweak_makes_a_tap_a_power_attack() {
-        // A tap far shorter than the power hold: a plain swing without the tweak, the
-        // standing power attack at once with it.
+        // A tap far shorter than the power hold: a plain swing without the tweak (not
+        // blocking), the standing power attack at once with the tweak while blocking.
         let t = CombatTuning::default();
-        for (instant, want) in [(false, None), (true, Some(PowerDir::Stand))] {
+        for (blocking, instant, want) in [(false, false, None), (true, true, Some(PowerDir::Stand))] {
             let mut m = Melee::default();
-            let input = |trigger| MeleeInput { trigger, dt: DT, forward: 0.0, right: 0.0, first: "attackright", rolls: [0.0, 0.0], power_override: None, instant_power: instant };
+            let input = |trigger| MeleeInput { trigger, dt: DT, forward: 0.0, right: 0.0, first: "attackright", rolls: [0.0, 0.0], power_override: None, blocking, instant_power: instant };
             let mut ev = m.tick(input(true), &t, SwingTiming::of(None, None, None, 1.0, 1.0));
             ev.extend(m.tick(input(false), &t, SwingTiming::of(None, None, None, 1.0, 1.0)));
             let power = ev.iter().find_map(|e| match e {
                 MeleeEvent::Started { power, .. } => Some(*power),
                 _ => None,
             });
-            assert_eq!(power, Some(want), "instant {instant}: {ev:?}");
+            assert_eq!(power, Some(want), "blocking {blocking}, instant {instant}: {ev:?}");
         }
+    }
+
+    #[test]
+    fn blocking_without_tweak_suppresses_taps_and_holds_until_block_ends() {
+        let t = CombatTuning::default();
+        let prov = SwingTiming::of(None, None, None, 1.0, 1.0);
+        let mk = |trigger, blocking| MeleeInput { trigger, dt: DT, forward: 0.0, right: 0.0, first: "attackright", rolls: [0.0, 0.0], power_override: None, blocking, instant_power: false };
+        let mut m = Melee::default();
+
+        // Tap while blocking: neither press nor release starts a swing.
+        assert!(m.tick(mk(false, true), &t, prov).is_empty());
+        assert!(m.tick(mk(true, true), &t, prov).is_empty());
+        assert!(m.tick(mk(false, true), &t, prov).is_empty());
+        assert!(m.swing.is_none());
+
+        // Hold past power_hold while blocking, then drop Block while still holding Use:
+        // no swing starts during Block or from the suppressed hold after Block ends.
+        let mut held = 0.0f32;
+        while held < t.power_hold + 0.3 {
+            assert!(m.tick(mk(true, true), &t, prov).is_empty());
+            held += DT;
+        }
+        assert!(m.tick(mk(true, false), &t, prov).is_empty());
+        assert!(m.tick(mk(false, false), &t, prov).is_empty());
+        assert!(m.swing.is_none());
+
+        // Fresh tap after Block ends starts a normal swing.
+        assert!(m.tick(mk(true, false), &t, prov).is_empty());
+        let ev = m.tick(mk(false, false), &t, prov);
+        assert!(ev.iter().any(|e| matches!(e, MeleeEvent::Started { power: None, .. })), "{ev:?}");
+    }
+
+    #[test]
+    fn raising_block_mid_charge_cancels_pending_attack() {
+        let t = CombatTuning::default();
+        let prov = SwingTiming::of(None, None, None, 1.0, 1.0);
+        let mk = |trigger, blocking| MeleeInput { trigger, dt: DT, forward: 0.0, right: 0.0, first: "attackright", rolls: [0.0, 0.0], power_override: None, blocking, instant_power: false };
+        let mut m = Melee::default();
+        assert!(m.tick(mk(true, false), &t, prov).is_empty());
+        assert!(m.tick(mk(true, true), &t, prov).is_empty());
+        assert!(m.tick(mk(false, true), &t, prov).is_empty());
+        assert!(m.tick(mk(false, false), &t, prov).is_empty());
+        assert!(m.swing.is_none());
     }
 
     #[test]
@@ -429,7 +484,7 @@ mod tests {
         let mut now = 0.0f32;
         while now < 1.5 {
             let trigger = now < 0.05 || (0.25..0.3).contains(&now);
-            let input = MeleeInput { trigger, dt: DT, forward: 0.0, right: 0.0, first: "attackright", rolls: [0.0, 0.0], power_override: None, instant_power: false };
+            let input = MeleeInput { trigger, dt: DT, forward: 0.0, right: 0.0, first: "attackright", rolls: [0.0, 0.0], power_override: None, blocking: false, instant_power: false };
             for e in m.tick(input, &t, SwingTiming::of(None, None, None, 1.0, 1.0)) {
                 if let MeleeEvent::Started { stem, .. } = e {
                     starts.push((now, stem));

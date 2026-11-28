@@ -1,0 +1,271 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6_t1_jg_camera_w2s",
+  "description": "Wave 6 Tier 1 strictly read-only console-only clean-room probes verifying JohnnyGuitar GetCameraTranslation world/local behavior and WorldToScreen NDC zOut depth and handleType 0/1/2 projections.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JohnnyGuitarNVSE": "528",
+    "lStewieAl Tweaks": "1005",
+    "JIP LN NVSE": "57.30 (5730)"
+  },
+  "batches": [
+    {
+      "id": "w6_t1_jg_camera_w2s",
+      "title": "Wave 6 Tier 1 - JohnnyGuitar GetCameraTranslation & WorldToScreen",
+      "extender": "xNVSE 6.4.9 + JohnnyGuitar 528",
+      "required_plugins": [
+        "johnnyguitar.dll",
+        "jip_nvse.dll"
+      ],
+      "default_wait_ticks": 1,
+      "probes": [
+        {
+          "id": "w6_t1_10a_jg_cam_trans",
+          "bucket": "A",
+          "extender": "JohnnyGuitarNVSE 528",
+          "required_plugins": [
+            "johnnyguitar.dll",
+            "jip_nvse.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": false,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-jg-nif-camera.md",
+          "spec_line": 46,
+          "functions_tested": [
+            "GetCameraTranslation"
+          ],
+          "claim": "Verify GetCameraTranslation (world=0 vs local=1) facing North (Z=0) and East (Z=90) using bare variable syntax.",
+          "expected": "Exact world and local camera translation relative to Player.",
+          "script_lines": [
+            "Player.SetAngle X 0",
+            "Player.SetAngle Z 0"
+          ],
+          "wait_ticks_after": 2,
+          "extra_steps": [
+            {
+              "suffix": "read_n",
+              "wait_ticks": 2,
+              "script_lines": [
+                "float px = Player.GetPos X",
+                "float py = Player.GetPos Y",
+                "float pz = Player.GetPos Z",
+                "float cx = 111",
+                "float cy = 222",
+                "float cz = 333",
+                "GetCameraTranslation cx cy cz 0",
+                "Player.AuxVarSetFlt \"*t1_wdx\" (cx - px)",
+                "Player.AuxVarSetFlt \"*t1_wdy\" (cy - py)",
+                "Player.AuxVarSetFlt \"*t1_wdz\" (cz - pz)",
+                "GetCameraTranslation cx cy cz 1",
+                "Player.AuxVarSetFlt \"*t1_lx0\" cx",
+                "Player.AuxVarSetFlt \"*t1_ly0\" cy",
+                "Player.AuxVarSetFlt \"*t1_lz0\" cz",
+                "Player.SetAngle Z 90"
+              ]
+            },
+            {
+              "suffix": "read_e",
+              "wait_ticks": 0,
+              "script_lines": [
+                "float px = Player.GetPos X",
+                "float py = Player.GetPos Y",
+                "float pz = Player.GetPos Z",
+                "float cx = 111",
+                "float cy = 222",
+                "float cz = 333",
+                "GetCameraTranslation cx cy cz 0",
+                "float edx = cx - px",
+                "float edy = cy - py",
+                "float edz = cz - pz",
+                "GetCameraTranslation cx cy cz 1",
+                "float wdx = Player.AuxVarGetFlt \"*t1_wdx\"",
+                "float wdy = Player.AuxVarGetFlt \"*t1_wdy\"",
+                "float wdz = Player.AuxVarGetFlt \"*t1_wdz\"",
+                "float lx0 = Player.AuxVarGetFlt \"*t1_lx0\"",
+                "float ly0 = Player.AuxVarGetFlt \"*t1_ly0\"",
+                "float lz0 = Player.AuxVarGetFlt \"*t1_lz0\"",
+                "PrintToConsole \"PROBE|w6_t1_10a_jg_cam_trans|N_w=(%.1f,%.1f,%.1f)|N_l=(%.1f,%.1f,%.1f)|E_w=(%.1f,%.1f,%.1f)|E_l=(%.1f,%.1f,%.1f)\" wdx wdy wdz lx0 ly0 lz0 edx edy edz cx cy cz"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "w6_t1_10b_jg_w2s_paren",
+          "bucket": "A",
+          "extender": "JohnnyGuitarNVSE 528",
+          "required_plugins": [
+            "johnnyguitar.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": false,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-jg-nif-camera.md",
+          "spec_line": 49,
+          "functions_tested": [
+            "WorldToScreen"
+          ],
+          "claim": "Verify WorldToScreen (ahead, off-right, behind, handleType 0/1/2, zOut units NDC vs world distance, ref-offset overload) with parenthesized out vars.",
+          "expected": "Exact (sx, sy, sz, onScreen) for handleType 0, 1, 2.",
+          "script_lines": [
+            "Player.SetAngle X 0",
+            "Player.SetAngle Z 0"
+          ],
+          "wait_ticks_after": 2,
+          "extra_steps": [
+            {
+              "suffix": "read",
+              "wait_ticks": 0,
+              "script_lines": [
+                "float cx = 0",
+                "float cy = 0",
+                "float cz = 0",
+                "GetCameraTranslation cx cy cz 0",
+                "float tx = cx",
+                "float ty = cy + 200",
+                "float tz = cz",
+                "float sx = 9",
+                "float sy = 9",
+                "float sz = 9",
+                "int wAh0 = WorldToScreen (sx) (sy) (sz) tx ty tz 0",
+                "float ahx = sx",
+                "float ahy = sy",
+                "float ahz = sz",
+                "float rx = cx + 500",
+                "int wR0 = WorldToScreen (sx) (sy) (sz) rx ty tz 0",
+                "float r0x = sx",
+                "float r0y = sy",
+                "float r0z = sz",
+                "int wR1 = WorldToScreen (sx) (sy) (sz) rx ty tz 1",
+                "float r1x = sx",
+                "float r1y = sy",
+                "float r1z = sz",
+                "int wR2 = WorldToScreen (sx) (sy) (sz) rx ty tz 2",
+                "float r2x = sx",
+                "float r2y = sy",
+                "float r2z = sz",
+                "float by = cy - 200",
+                "int wB0 = WorldToScreen (sx) (sy) (sz) tx by tz 0",
+                "float b0x = sx",
+                "float b0y = sy",
+                "float b0z = sz",
+                "int wB2 = WorldToScreen (sx) (sy) (sz) tx by tz 2",
+                "float b2x = sx",
+                "float b2y = sy",
+                "float b2z = sz",
+                "float f0 = 0",
+                "float f200 = 200",
+                "float f110 = 110",
+                "int wRef = WorldToScreen (sx) (sy) (sz) f0 f200 f110 0 Player",
+                "string_var s1 = sv_Construct \"ah0=%g(%.3f,%.3f,%.4f)|r0=%g(%.3f,%.3f,%.4f)|r1=%g(%.3f,%.3f,%.4f)|r2=%g(%.3f,%.3f,%.4f)\" wAh0 ahx ahy ahz wR0 r0x r0y r0z wR1 r1x r1y r1z wR2 r2x r2y r2z",
+                "string_var s2 = sv_Construct \"b0=%g(%.3f,%.3f,%.4f)|b2=%g(%.3f,%.3f,%.4f)|ref=%g(%.3f,%.3f,%.4f)\" wB0 b0x b0y b0z wB2 b2x b2y b2z wRef sx sy sz",
+                "PrintToConsole \"PROBE|w6_t1_10b_jg_w2s_paren|%z|%z\" s1 s2"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "w6_t1_10d_jg_w2s_depth",
+          "bucket": "A",
+          "extender": "JohnnyGuitarNVSE 528",
+          "required_plugins": [
+            "johnnyguitar.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": false,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-jg-nif-camera.md",
+          "spec_line": 49,
+          "functions_tested": [
+            "WorldToScreen"
+          ],
+          "claim": "Measure WorldToScreen zOut at distances 50, 100, 200, 1000, -100, -200 and off-screen diagonal / behind-camera handleType 0/1/2.",
+          "expected": "Exact NDC zOut vs depth and behind-camera handleType 0/1/2 projections.",
+          "script_lines": [
+            "Player.SetAngle X 0",
+            "Player.SetAngle Z 0"
+          ],
+          "wait_ticks_after": 2,
+          "extra_steps": [
+            {
+              "suffix": "read",
+              "wait_ticks": 0,
+              "script_lines": [
+                "float cx = 0",
+                "float cy = 0",
+                "float cz = 0",
+                "GetCameraTranslation cx cy cz 0",
+                "float sx = 0",
+                "float sy = 0",
+                "float sz = 0",
+                "float y50 = cy + 50",
+                "float y100 = cy + 100",
+                "float y200 = cy + 200",
+                "float y1000 = cy + 1000",
+                "float ym100 = cy - 100",
+                "float ym200 = cy - 200",
+                "WorldToScreen (sx) (sy) (sz) cx y50 cz 0",
+                "float z50 = sz",
+                "WorldToScreen (sx) (sy) (sz) cx y100 cz 0",
+                "float z100 = sz",
+                "WorldToScreen (sx) (sy) (sz) cx y200 cz 0",
+                "float z200 = sz",
+                "WorldToScreen (sx) (sy) (sz) cx y1000 cz 0",
+                "float z1000 = sz",
+                "WorldToScreen (sx) (sy) (sz) cx ym100 cz 2",
+                "float zm100 = sz",
+                "WorldToScreen (sx) (sy) (sz) cx ym200 cz 2",
+                "float zm200 = sz",
+                "float dx300 = cx + 300",
+                "float dz300 = cz + 300",
+                "int od0 = WorldToScreen (sx) (sy) (sz) dx300 y200 dz300 0",
+                "float od0x = sx",
+                "float od0y = sy",
+                "int od1 = WorldToScreen (sx) (sy) (sz) dx300 y200 dz300 1",
+                "float od1x = sx",
+                "float od1y = sy",
+                "int od2 = WorldToScreen (sx) (sy) (sz) dx300 y200 dz300 2",
+                "float od2x = sx",
+                "float od2y = sy",
+                "float bx = cx + 100",
+                "float bz = cz + 50",
+                "int ba0 = WorldToScreen (sx) (sy) (sz) bx ym200 bz 0",
+                "float ba0x = sx",
+                "float ba0y = sy",
+                "int ba1 = WorldToScreen (sx) (sy) (sz) bx ym200 bz 1",
+                "float ba1x = sx",
+                "float ba1y = sy",
+                "int ba2 = WorldToScreen (sx) (sy) (sz) bx ym200 bz 2",
+                "float ba2x = sx",
+                "float ba2y = sy",
+                "string_var s1 = sv_Construct \"z=(%.5f,%.5f,%.5f,%.5f,%.5f,%.5f)\" z50 z100 z200 z1000 zm100 zm200",
+                "string_var s2 = sv_Construct \"od0=%g(%.3f,%.3f)|od1=%g(%.3f,%.3f)|od2=%g(%.3f,%.3f)\" od0 od0x od0y od1 od1x od1y od2 od2x od2y",
+                "string_var s3 = sv_Construct \"ba0=%g(%.3f,%.3f)|ba1=%g(%.3f,%.3f)|ba2=%g(%.3f,%.3f)\" ba0 ba0x ba0y ba1 ba1x ba1y ba2 ba2x ba2y",
+                "PrintToConsole \"PROBE|w6_t1_10d_jg_w2s_depth|%z|%z|%z\" s1 s2 s3"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

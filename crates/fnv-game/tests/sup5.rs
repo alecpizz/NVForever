@@ -129,12 +129,12 @@ fn excel_cells_sheets_and_arrays() {
     assert_eq!(n(&mut g, "ExcelGetWorkSheetCount \"xlBook\""), 3.0);
     assert_eq!(s(&mut g, "ExcelSetSheetName \"xlBook\" 1"), "Sheet2");
     assert_eq!(n(&mut g, "ExcelSetSheetName \"xlBook\" 7"), -1.0);
-    // Names cut to 31 [documented: ExcelSetSheetName]; a rename returns 1 [hypothesis:
-    // not text, observed: sup5 xl.rename].
+    // Names cut to 31 [documented: ExcelSetSheetName]; a rename returns 1
+    // (see docs/spec-notes/ext-sup5.md §1).
     assert_eq!(n(&mut g, "ExcelSetSheetName \"xlBook\" 1 \"A name far longer than thirty-one letters\""), 1.0);
     assert_eq!(s(&mut g, "ExcelSetSheetName \"xlBook\" 1"), "A name far longer than thirty-o");
     // Erasing [documented: ExcelEraseCell, ExcelEraseSheet]; rows past 65,535 stay
-    // rejected with -1 [hypothesis].
+    // rejected with -1 (see docs/spec-notes/ext-sup5.md §1).
     assert_eq!(n(&mut g, "ExcelEraseCell \"xlBook\" 0 4 1"), 1.0);
     assert_eq!(n(&mut g, "ExcelGetCellValueType \"xlBook\" 0 4 1"), 0.0);
     assert_eq!(n(&mut g, "ExcelEraseSheet \"xlBook\" 2"), 1.0);
@@ -258,7 +258,7 @@ fn file_sizes_times_and_the_load_order() {
     let f = fixture();
     let mut g = game(&f);
     let (game_dir, layer) = folders();
-    // [documented: GetFileSize, in bytes from the game folder]; missing -1 [hypothesis].
+    // [documented: GetFileSize, in bytes from the game folder]; missing -1 (see docs/spec-notes/ext-sup5.md §3).
     assert_eq!(n(&mut g, "GetFileSize \"nvac.log\""), 10.0);
     assert_eq!(n(&mut g, "GetFileSize \"none.log\""), -1.0);
     // "DD/MM/YYYY  HH:MM" / "MM/DD/YYYY  HH:MM" [observed: 2026-11-23,

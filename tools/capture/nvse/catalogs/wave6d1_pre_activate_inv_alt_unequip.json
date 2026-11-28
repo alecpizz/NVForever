@@ -1,0 +1,223 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6d1_pre_activate_inv_alt_unequip",
+  "description": "Wave 6D-1 strictly read-only console-only clean-room probe catalog verifying ShowOff:OnPreActivateInventoryItemAlt fires on scripted UnequipItem (and EquipItem) with veto support.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)",
+    "ShowOffNVSE Plugin": "184",
+    "lStewieAl's Tweaks": "1005"
+  },
+  "batches": [
+    {
+      "id": "w6d1_pre_activate_inv_alt_unequip",
+      "title": "Wave 6D-1 - ShowOff:OnPreActivateInventoryItemAlt on Scripted UnequipItem",
+      "extender": "xNVSE 6.4.9 + JIP LN 57.30 + ShowOffNVSE 184",
+      "required_plugins": [
+        "jip_nvse.dll",
+        "ShowOffNVSE.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6d1_15_pre_activate_inv_aid_and_unequip",
+          "bucket": "A",
+          "extender": "ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/preactivation-events.md",
+          "spec_line": 107,
+          "functions_tested": [
+            "ShowOff:OnPreActivateInventoryItem",
+            "ShowOff:OnPreActivateInventoryItemAlt"
+          ],
+          "claim": "Verify ShowOff:OnPreActivateInventoryItem[Alt] on scripted Stimpak EquipItem (aid consumption + veto), multi-tick weapon EquipItem (allow vs veto), and UnequipItem.",
+          "expected": "Scripted Stimpak EquipItem fires Alt only and SetFunctionValue 0 prevents Stimpak consumption; check weapon EquipItem after tick and UnequipItem firing.",
+          "script_lines": [
+            "ref rStim = GetFormFromMod \"FalloutNV.esm\" \"15169\"",
+            "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+            "ref cbNA = CompileScript \"nvseprobe_s_w6d1_15_na.gek\"",
+            "ref cbAL = CompileScript \"nvseprobe_s_w6d1_15_al.gek\"",
+            "Player.AuxVarSetRef \"*w6d1_15_cbna\" cbNA",
+            "Player.AuxVarSetRef \"*w6d1_15_cbal\" cbAL",
+            "Player.AuxVarSetFlt \"*w6d1_15_na\" 0",
+            "Player.AuxVarSetFlt \"*w6d1_15_al\" 0",
+            "Player.AuxVarSetFlt \"*w6d1_15_veto\" 0",
+            "SetEventHandlerAlt \"ShowOff:OnPreActivateInventoryItem\" cbNA 0::Player",
+            "SetEventHandlerAlt \"ShowOff:OnPreActivateInventoryItemAlt\" cbAL 0::Player",
+            "Player.AddItem rStim 2 1",
+            "Player.AuxVarSetFlt \"*w6d1_15_veto\" 1",
+            "Player.EquipItem rStim 0 1",
+            "Player.AuxVarSetFlt \"*w6d1_15_s_v_cnt\" (Player.GetItemCount rStim)",
+            "Player.AuxVarSetFlt \"*w6d1_15_s_v_al\" (Player.AuxVarGetFlt \"*w6d1_15_al\")",
+            "Player.AuxVarSetFlt \"*w6d1_15_s_v_eq\" (Player.AuxVarGetFlt \"*w6d1_15_beq\")",
+            "Player.AuxVarSetFlt \"*w6d1_15_veto\" 0",
+            "Player.EquipItem rStim 0 1",
+            "Player.AuxVarSetFlt \"*w6d1_15_s_a_cnt\" (Player.GetItemCount rStim)",
+            "Player.AuxVarSetFlt \"*w6d1_15_s_a_al\" (Player.AuxVarGetFlt \"*w6d1_15_al\")",
+            "Player.AddItem r10 1 1",
+            "Player.AuxVarSetFlt \"*w6d1_15_veto\" 1",
+            "Player.EquipItem r10 0 1"
+          ],
+          "wait_ticks_after": 2,
+          "helper_scripts": {
+            "nvseprobe_s_w6d1_15_na.gek": [
+              "begin Function { ref rB, ref rR, int iOk, int iKey }",
+              "Player.AuxVarSetFlt \"*w6d1_15_na\" ((Player.AuxVarGetFlt \"*w6d1_15_na\") + 1)"
+            ],
+            "nvseprobe_s_w6d1_15_al.gek": [
+              "begin Function { ref rB, ref rR, int iOk, int iKey, int iEq }",
+              "Player.AuxVarSetFlt \"*w6d1_15_al\" ((Player.AuxVarGetFlt \"*w6d1_15_al\") + 1)",
+              "Player.AuxVarSetFlt \"*w6d1_15_beq\" iEq",
+              "Player.AuxVarSetFlt \"*w6d1_15_key\" iKey",
+              "if Player.AuxVarGetFlt \"*w6d1_15_veto\" == 1",
+              "  SetFunctionValue 0",
+              "endif"
+            ]
+          },
+          "extra_steps": [
+            {
+              "suffix": "allow_wep",
+              "wait_ticks": 2,
+              "script_lines": [
+                "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+                "Player.AuxVarSetFlt \"*w6d1_15_w_veto\" (Player.GetEquipped r10)",
+                "Player.AuxVarSetFlt \"*w6d1_15_veto\" 0",
+                "Player.EquipItem r10 0 1"
+              ]
+            },
+            {
+              "suffix": "unequip_wep",
+              "wait_ticks": 2,
+              "script_lines": [
+                "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+                "Player.AuxVarSetFlt \"*w6d1_15_w_alw\" (Player.GetEquipped r10)",
+                "Player.AuxVarSetFlt \"*w6d1_15_al_preun\" (Player.AuxVarGetFlt \"*w6d1_15_al\")",
+                "Player.UnequipItem r10 0 1"
+              ]
+            },
+            {
+              "suffix": "read",
+              "wait_ticks": 0,
+              "script_lines": [
+                "ref rStim = GetFormFromMod \"FalloutNV.esm\" \"15169\"",
+                "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+                "RemoveEventHandler \"ShowOff:OnPreActivateInventoryItem\" (Player.AuxVarGetRef \"*w6d1_15_cbna\")",
+                "RemoveEventHandler \"ShowOff:OnPreActivateInventoryItemAlt\" (Player.AuxVarGetRef \"*w6d1_15_cbal\")",
+                "int wPostUn = Player.GetEquipped r10",
+                "int alPostUn = (Player.AuxVarGetFlt \"*w6d1_15_al\") - (Player.AuxVarGetFlt \"*w6d1_15_al_preun\")",
+                "int bEqUn = Player.AuxVarGetFlt \"*w6d1_15_beq\"",
+                "Player.RemoveItem r10 1 1",
+                "Player.RemoveItem rStim (Player.GetItemCount rStim) 1",
+                "PrintToConsole \"PROBE|w6d1_15_pre_activate_inv_aid_and_unequip|na=%g|aid(vetoCnt=%g,vAl=%g,vEq=%g,alwCnt=%g,aAl=%g)|wep(veto=%g,alw=%g,postUn=%g,unAl=%g,unBEq=%g)\" (Player.AuxVarGetFlt \"*w6d1_15_na\") (Player.AuxVarGetFlt \"*w6d1_15_s_v_cnt\") (Player.AuxVarGetFlt \"*w6d1_15_s_v_al\") (Player.AuxVarGetFlt \"*w6d1_15_s_v_eq\") (Player.AuxVarGetFlt \"*w6d1_15_s_a_cnt\") (Player.AuxVarGetFlt \"*w6d1_15_s_a_al\") (Player.AuxVarGetFlt \"*w6d1_15_w_veto\") (Player.AuxVarGetFlt \"*w6d1_15_w_alw\") wPostUn alPostUn bEqUn"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "w6d1p3_15_unequip_alt_beq_and_veto",
+          "bucket": "A",
+          "extender": "ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/preactivation-events.md",
+          "spec_line": 107,
+          "functions_tested": [
+            "ShowOff:OnPreActivateInventoryItemAlt"
+          ],
+          "claim": "Verify ShowOff:OnPreActivateInventoryItemAlt exact bEquipping value on UnequipItem and whether SetFunctionValue 0 vetoes UnequipItem.",
+          "expected": "Check bEquipping (0 vs 1) and whether SetFunctionValue 0 prevents unequipping.",
+          "script_lines": [
+            "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+            "Player.AddItem r10 1 1",
+            "Player.EquipItem r10 0 1"
+          ],
+          "wait_ticks_after": 2,
+          "helper_scripts": {
+            "nvseprobe_s_w6d1p3_15_al.gek": [
+              "begin Function { ref rB, ref rR, int iOk, int iKey, int iEq }",
+              "Player.AuxVarSetFlt \"*p3_15_n\" ((Player.AuxVarGetFlt \"*p3_15_n\") + 1)",
+              "Player.AuxVarSetFlt \"*p3_15_beq\" iEq",
+              "if Player.AuxVarGetFlt \"*p3_15_veto\" == 1",
+              "  SetFunctionValue 0",
+              "endif"
+            ]
+          },
+          "extra_steps": [
+            {
+              "suffix": "unequip_veto",
+              "wait_ticks": 2,
+              "script_lines": [
+                "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+                "Player.AuxVarSetFlt \"*p3_15_pre\" (Player.GetEquipped r10)",
+                "ref cb = CompileScript \"nvseprobe_s_w6d1p3_15_al.gek\"",
+                "Player.AuxVarSetRef \"*p3_15_cb\" cb",
+                "Player.AuxVarSetFlt \"*p3_15_n\" 0",
+                "Player.AuxVarSetFlt \"*p3_15_beq\" -9",
+                "Player.AuxVarSetFlt \"*p3_15_veto\" 1",
+                "SetEventHandlerAlt \"ShowOff:OnPreActivateInventoryItemAlt\" cb 0::Player",
+                "Player.UnequipItem r10 0 1"
+              ]
+            },
+            {
+              "suffix": "unequip_allow",
+              "wait_ticks": 2,
+              "script_lines": [
+                "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+                "Player.AuxVarSetFlt \"*p3_15_v_eq\" (Player.GetEquipped r10)",
+                "Player.AuxVarSetFlt \"*p3_15_v_n\" (Player.AuxVarGetFlt \"*p3_15_n\")",
+                "Player.AuxVarSetFlt \"*p3_15_v_beq\" (Player.AuxVarGetFlt \"*p3_15_beq\")",
+                "Player.AuxVarSetFlt \"*p3_15_veto\" 0",
+                "Player.UnequipItem r10 0 1"
+              ]
+            },
+            {
+              "suffix": "read",
+              "wait_ticks": 0,
+              "script_lines": [
+                "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+                "int alEq = Player.GetEquipped r10",
+                "int alN = Player.AuxVarGetFlt \"*p3_15_n\"",
+                "int alBeq = Player.AuxVarGetFlt \"*p3_15_beq\"",
+                "RemoveEventHandler \"ShowOff:OnPreActivateInventoryItemAlt\" (Player.AuxVarGetRef \"*p3_15_cb\")",
+                "Player.UnequipItem r10 0 1",
+                "Player.RemoveItem r10 1 1",
+                "int pre = Player.AuxVarGetFlt \"*p3_15_pre\"",
+                "int vEq = Player.AuxVarGetFlt \"*p3_15_v_eq\"",
+                "int vN = Player.AuxVarGetFlt \"*p3_15_v_n\"",
+                "int vBeq = Player.AuxVarGetFlt \"*p3_15_v_beq\"",
+                "PrintToConsole \"PROBE|w6d1p3_15_unequip_alt_beq_and_veto|pre=%g|veto(eq=%g,n=%g,bEq=%g)|alw(eq=%g,n=%g,bEq=%g)\" pre vEq vN vBeq alEq alN alBeq"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

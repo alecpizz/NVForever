@@ -49,8 +49,8 @@ from pathlib import Path
 from . import choose, front, integrity, slots
 from .expect import ScenarioError
 from .plan import Launch, plan, split_args, window_size
-from .runner import (Env, Locks, Verdict, default_lock_paths, exe_is_stale, judge, missing_requirements,
-                     read_lines, report, run_launch, unmet_platforms)
+from .runner import (Env, Locks, Verdict, default_lock_paths, exe_is_stale, judge, missing_data_files,
+                     missing_requirements, read_lines, report, run_launch, unmet_platforms)
 from .scenarios import GAME, Suite, load
 
 HERE = Path(__file__).resolve().parent.parent  # tools/smoke
@@ -457,7 +457,11 @@ def run_launches(launches: list[Launch], env: Env, locks, jobs: int, a, say) -> 
             return
         missing = sorted({r for s in x.scenarios for r in missing_requirements(s)})
         if missing:
-            skip(i, f"set {', '.join(missing)}")
+            skip(i, "; ".join(f"unset {r[1:]}" if r.startswith("!") else f"set {r}" for r in missing))
+            return
+        absent = sorted({f for s in x.scenarios if s.data_files for f in missing_data_files(s, env.data)})
+        if absent:
+            skip(i, f"not in the Data folder: {', '.join(absent)}")
             return
         others = sorted({p for s in x.scenarios for p in unmet_platforms(s)})
         if others:

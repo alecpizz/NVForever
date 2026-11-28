@@ -460,3 +460,146 @@ fn session_zone_level_and_assignment_overrides_reach_spawns_and_survive_same_run
     same_run.player_entered(Some(FormId(ZONE_CELL)));
     assert_eq!(same_run.world.zone_level(FormId(ZONE)), Some(9), "carried SetZoneMinLevel 9 must govern entry after load");
 }
+
+/// `bNoLockEncounterZoneLevels` (#3878): off by default (vanilla locking unchanged);
+/// when enabled, entering or querying a zone recomputes its level against the current
+/// player level while respecting `min_level`, `Match PC Below Minimum Level`, and
+/// session `SetZoneMinLevel` / `SetZoneFlag` overrides.
+#[test]
+fn no_lock_encounter_zone_levels_defaults_off_and_scales_on_reentry_and_query() {
+    let f = fixture();
+    let q = |g: &mut Game, body: &str| {
+        g.run_query(&format!("Begin Function {{}}\n{body}\nEnd\n"), fnv_game::game::RunCtx::default()).unwrap()
+    };
+    let num = |g: &mut Game, expr: &str| match q(g, &format!("SetFunctionValue ({expr})")) {
+        fnv_script::vm::XVal::Num(n) => n,
+        other => panic!("{expr}: expected number, got {other:?}"),
+    };
+
+    // 1. Default OFF: vanilla locking keeps TestZone at 5 for both GetZoneLevel and later cells.
+    let mut off = game(&f);
+    assert!(!off.tweaks.no_lock_encounter_zone_levels);
+    off.player.level = Some(1);
+    off.player_entered(Some(FormId(ZONE_CELL)));
+    assert_eq!(num(&mut off, "GetZoneLevel TestZone"), 5.0);
+    off.player.level = Some(20);
+    assert_eq!(off.leveled_at(FormId(OWN_ZONE)), LevelAt::plain(5));
+    off.player_entered(Some(FormId(PLAIN_CELL)));
+    assert_eq!(off.world.zone_level(FormId(ZONE)), Some(5));
+    assert_eq!(num(&mut off, "GetZoneLevel TestZone"), 5.0);
+    assert_eq!(off.leveled_at(FormId(OWN_ZONE)), LevelAt::plain(5));
+
+    // 2. Enabled ON: zone recomputes as player levels up, respecting min_level and Match PC Below Min.
+    let mut g = game(&f);
+    g.tweaks.no_lock_encounter_zone_levels = true;
+    g.player.level = Some(1);
+    // Unvisited zone still reports 0 via GetZoneLevel.
+    assert_eq!(num(&mut g, "GetZoneLevel TestZone"), 0.0);
+
+    // First entry at level 1 respects TestZone min_level 5.
+    g.player_entered(Some(FormId(ZONE_CELL)));
+    assert_eq!(g.world.zone_level(FormId(ZONE)), Some(5));
+    assert_eq!(num(&mut g, "GetZoneLevel TestZone"), 5.0);
+    let news = g.take_level_news();
+    assert!(news.contains(&LevelNews::Zone { zone: FormId(ZONE), level: 5, min_level: 5, player_level: 1 }), "{news:?}");
+
+    // Leveling up to 20 updates live queries (GetZoneLevel and unfixed OWN_ZONE) immediately,
+    // while already-fixed IN_ZONE keeps its fixed level until cell reset.
+    g.player.level = Some(20);
+    assert_eq!(g.zone_level(FormId(ZONE)), Some(20));
+    assert_eq!(num(&mut g, "GetZoneLevel TestZone"), 20.0);
+    assert_eq!(g.leveled_at(FormId(OWN_ZONE)), LevelAt::plain(20));
+    assert_eq!(g.leveled_at(FormId(IN_ZONE)), LevelAt::plain(5));
+
+    // Entering PLAIN_CELL (containing OWN_ZONE with XEZN=ZONE) updates ZONE to 20 and fixes OWN_ZONE at 20.
+    g.player_entered(Some(FormId(PLAIN_CELL)));
+    assert_eq!(g.world.zone_level(FormId(ZONE)), Some(20));
+    assert_eq!(g.world.fixed_level(FormId(OWN_ZONE)), Some(LevelAt::plain(20)));
+    let news = g.take_level_news();
+    assert!(news.contains(&LevelNews::Zone { zone: FormId(ZONE), level: 20, min_level: 5, player_level: 20 }), "{news:?}");
+
+    // Re-entering ZONE_CELL at the same level 20 emits no duplicate LevelNews::Zone.
+    g.player_entered(Some(FormId(ZONE_CELL)));
+    assert!(g.take_level_news().is_empty());
+
+    // Session SetZoneMinLevel 25 raises the zone above player level 20 on query and re-entry.
+    q(&mut g, "SetZoneMinLevel TestZone 25");
+    assert_eq!(num(&mut g, "GetZoneLevel TestZone"), 25.0);
+    g.player_entered(Some(FormId(PLAIN_CELL)));
+    assert_eq!(g.world.zone_level(FormId(ZONE)), Some(25));
+
+    // Match PC Below Minimum Level on SafeZone (min 8, flags 3): scales at 3 -> 6 -> 12,
+    // then respects SetZoneFlag SafeZone 2 0 (back to min 8 when player is 3).
+    g.player.level = Some(3);
+    g.player_entered(Some(FormId(SAFE_CELL)));
+    assert_eq!(g.world.zone_level(FormId(SAFE_ZONE)), Some(3));
+    assert_eq!(num(&mut g, "GetZoneLevel SafeZone"), 3.0);
+    g.player.level = Some(6);
+    g.player_entered(Some(FormId(PLAIN_CELL)));
+    g.player_entered(Some(FormId(SAFE_CELL)));
+    assert_eq!(g.world.zone_level(FormId(SAFE_ZONE)), Some(6));
+    g.player.level = Some(12);
+    g.player_entered(Some(FormId(PLAIN_CELL)));
+    g.player_entered(Some(FormId(SAFE_CELL)));
+    assert_eq!(g.world.zone_level(FormId(SAFE_ZONE)), Some(12));
+    g.player.level = Some(3);
+    q(&mut g, "SetZoneFlag SafeZone 2 0");
+    assert_eq!(num(&mut g, "GetZoneLevel SafeZone"), 8.0);
+    g.player_entered(Some(FormId(PLAIN_CELL)));
+    g.player_entered(Some(FormId(SAFE_CELL)));
+    assert_eq!(g.world.zone_level(FormId(SAFE_ZONE)), Some(8));
+}
+
+/// Toggling `no_lock_encounter_zone_levels` on/off and round-tripping through snapshots
+/// keeps saved zone state clean and restores vanilla default (off) on load.
+#[test]
+fn no_lock_encounter_zone_levels_toggle_and_snapshot_stay_clean() {
+    let f = fixture();
+    let mut g = game(&f);
+    let q = |g: &mut Game, body: &str| {
+        g.run_query(&format!("Begin Function {{}}\n{body}\nEnd\n"), fnv_game::game::RunCtx::default()).unwrap()
+    };
+    let num = |g: &mut Game, expr: &str| match q(g, &format!("SetFunctionValue ({expr})")) {
+        fnv_script::vm::XVal::Num(n) => n,
+        other => panic!("{expr}: expected number, got {other:?}"),
+    };
+
+    // Visit TestZone at level 1 while tweak is OFF (locked at 5), plus simulate an
+    // offline-imported zone level on SafeZone (14).
+    g.player.level = Some(1);
+    g.player_entered(Some(FormId(ZONE_CELL)));
+    g.world.set_zone_level(FormId(SAFE_ZONE), 14);
+    g.player.level = Some(20);
+    assert_eq!(num(&mut g, "GetZoneLevel TestZone"), 5.0);
+    assert_eq!(num(&mut g, "GetZoneLevel SafeZone"), 14.0);
+    assert_eq!(g.leveled_at(FormId(OWN_ZONE)), LevelAt::plain(5));
+
+    // Toggle ON without re-entering: queries recompute to 20, underlying stored levels untouched.
+    g.tweaks.no_lock_encounter_zone_levels = true;
+    g.tick();
+    assert!(g.world.no_lock_encounter_zone_levels());
+    assert_eq!(num(&mut g, "GetZoneLevel TestZone"), 20.0);
+    assert_eq!(num(&mut g, "GetZoneLevel SafeZone"), 20.0);
+    assert_eq!(g.leveled_at(FormId(OWN_ZONE)), LevelAt::plain(20));
+
+    // Toggle back OFF without re-entering: prior locked levels return unchanged.
+    g.tweaks.no_lock_encounter_zone_levels = false;
+    g.tick();
+    assert!(!g.world.no_lock_encounter_zone_levels());
+    assert_eq!(num(&mut g, "GetZoneLevel TestZone"), 5.0);
+    assert_eq!(num(&mut g, "GetZoneLevel SafeZone"), 14.0);
+    assert_eq!(g.leveled_at(FormId(OWN_ZONE)), LevelAt::plain(5));
+
+    // Re-enable, enter PLAIN_CELL at level 20 (updating TestZone to 20), then snapshot/restore.
+    g.tweaks.no_lock_encounter_zone_levels = true;
+    g.player_entered(Some(FormId(PLAIN_CELL)));
+    assert_eq!(g.world.zone_level(FormId(ZONE)), Some(20));
+    let snap = g.snapshot();
+    let world = World::restore(&f.forms, &f.refs, &snap.sim).unwrap();
+    let mut restored = Game::restore(&f.data, world, GameConfig { strict: true, ..GameConfig::default() }, &snap).unwrap();
+    assert!(!restored.tweaks.no_lock_encounter_zone_levels, "tweak is a setting, not saved");
+    assert!(!restored.world.no_lock_encounter_zone_levels());
+    assert_eq!(restored.world.zone_level(FormId(ZONE)), Some(20));
+    restored.player.level = Some(30);
+    assert_eq!(num(&mut restored, "GetZoneLevel TestZone"), 20.0, "restored game defaults to vanilla locking");
+}

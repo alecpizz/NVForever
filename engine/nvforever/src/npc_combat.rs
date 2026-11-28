@@ -689,6 +689,8 @@ pub struct Fighters {
     grenade_rng: u64,
     /// Each fighter's pose this frame.
     poses: HashMap<u32, Pose>,
+    /// Co-op puppets' poses (coop.rs): kept until changed, not cleared each frame.
+    puppets: HashMap<u32, Pose>,
     /// People locked on their target this frame: they see it and are not running from
     /// it; where its feet are drawn (`residents` turns them to it and holds them on it,
     /// [`Fighters::lock_on`]); keyed by the person, with its target.
@@ -718,30 +720,55 @@ pub struct Fighters {
     player_swing_at: f32,
 }
 
+/// A co-op puppet's aim (coop.rs), drawn as a fighter's ([`Fighters::set_puppet`]).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PuppetPose {
+    pub pitch: f32,
+    pub weapon: Option<FormId>,
+    pub sights: bool,
+    pub crouched: bool,
+}
+
 impl Fighters {
+    /// A co-op puppet aims (and may attack) as a fighter does, or (None) stands down.
+    pub fn set_puppet(&mut self, actor: u32, pose: Option<PuppetPose>) {
+        match pose {
+            Some(p) => {
+                self.puppets.insert(actor, Pose { pitch: p.pitch, weapon: p.weapon, sights: p.sights, crouched: p.crouched, ..Pose::default() });
+            }
+            None => {
+                self.puppets.remove(&actor);
+            }
+        }
+    }
+
+    fn pose(&self, actor: u32) -> Option<&Pose> {
+        self.poses.get(&actor).or_else(|| self.puppets.get(&actor))
+    }
+
     /// The pitch from a fighting actor's eyes to its target's chest, while it fights.
     pub fn pitch(&self, actor: u32) -> Option<f32> {
-        self.poses.get(&actor).map(|p| p.pitch)
+        self.pose(actor).map(|p| p.pitch)
     }
 
     /// The weapon drawn on a fighting actor.
     pub fn weapon(&self, actor: u32) -> Option<FormId> {
-        self.poses.get(&actor).and_then(|p| p.weapon)
+        self.pose(actor).and_then(|p| p.weapon)
     }
 
     /// Whether a fighting actor aims down its weapon's sights.
     pub fn sights(&self, actor: u32) -> bool {
-        self.poses.get(&actor).is_some_and(|p| p.sights)
+        self.pose(actor).is_some_and(|p| p.sights)
     }
 
     /// Whether a fighting actor is crouched to fire (docs/design/combat-ai.md §14.2).
     pub fn crouched(&self, actor: u32) -> bool {
-        self.poses.get(&actor).is_some_and(|p| p.crouched)
+        self.pose(actor).is_some_and(|p| p.crouched)
     }
 
     /// Whether a fighting actor blocks (§14.3).
     pub fn blocking(&self, actor: u32) -> bool {
-        self.poses.get(&actor).is_some_and(|p| p.blocking)
+        self.pose(actor).is_some_and(|p| p.blocking)
     }
 
     /// The flat distance from a fighting actor's feet to its target's, units.
@@ -3724,7 +3751,8 @@ mod tests {
         let id = 123;
         let feet = [10.0, 20.0, 30.0];
         let ch = phys.world.add_character(id, fnv_phys::CharacterParams::default(), feet);
-        phys.npcs.insert(id, NpcBody { ch, prev_feet: feet, velocity: [0.0; 2], jump: false, sink: 0.0, lift: Default::default() });
+        let standing_height = ch.params.height;
+        phys.npcs.insert(id, NpcBody { ch, prev_feet: feet, velocity: [0.0; 2], jump: false, sink: 0.0, lift: Default::default(), standing_height, sneak_crouch: false });
         assert!(CombatBodies::new(Some(&phys), None).body(id, 456).is_none());
         phys.actor_block_radii.insert(id, 10.0);
         assert!(CombatBodies::new(Some(&phys), None).body(id, 456).is_none());
@@ -3781,7 +3809,8 @@ mod tests {
             let creature_reach = creature_reach(Some(64.0), Some(r"Creatures\Radscorpion\Skeleton.nif"), scale);
             for (id, feet) in [(person, [0.0; 3]), (creature, [combined + 0.01, 0.0, 0.0])] {
                 let ch = phys.world.add_character(id, fnv_phys::CharacterParams::default(), feet);
-                phys.npcs.insert(id, NpcBody { ch, prev_feet: feet, velocity: [25.0, 0.0], jump: false, sink: 0.0, lift: Default::default() });
+                let standing_height = ch.params.height;
+                phys.npcs.insert(id, NpcBody { ch, prev_feet: feet, velocity: [25.0, 0.0], jump: false, sink: 0.0, lift: Default::default(), standing_height, sneak_crouch: false });
             }
             phys.actor_block_radii.insert(creature, width);
             let height = phys.npcs[&creature].ch.params.height;
@@ -3796,7 +3825,8 @@ mod tests {
                 } else if !phys.npcs.contains_key(&creature) {
                     let feet = [combined + 0.01, 0.0, 0.0];
                     let ch = phys.world.add_character(creature, fnv_phys::CharacterParams::default(), feet);
-                    phys.npcs.insert(creature, NpcBody { ch, prev_feet: feet, velocity: [25.0, 0.0], jump: false, sink: 0.0, lift: Default::default() });
+                    let standing_height = ch.params.height;
+                    phys.npcs.insert(creature, NpcBody { ch, prev_feet: feet, velocity: [25.0, 0.0], jump: false, sink: 0.0, lift: Default::default(), standing_height, sneak_crouch: false });
                     blocks.list.clear();
                 }
                 for offset in [0.0, 15.0] {

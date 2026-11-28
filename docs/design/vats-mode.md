@@ -116,7 +116,10 @@ needs no second press; until the weapon is out the mode waits, and a second V ca
   longer and lower (owner 2026-10-18: "more drawn out and lower pitch like the base
   game"), as for the death camera, but less than the clock: `audio_out::slowed_sound`,
   the square root of the engine's scale, no lower than 0.4 [design], so 0.71 while
-  firing and 0.4 while marking. Sounds already playing follow at once. Effects,
+  firing, and while marking as while firing (`VatsMode::sound_scale`: no slower than
+  firing's clock while targets are chosen) [design, #3784: at the 0.4 floor a voice
+  spoken while the player took 17 s to mark played as a drone a player read as broken
+  sound; owner-review.md]. Sounds already playing follow at once. Effects,
   footsteps and voices slow; music, radio and interface sounds (`UI…`, the UIVATS ones
   among them) keep their speed [hypothesis]. A script's SetGlobalTimeMultiplier still
   slows only the clock. The test aids' clock is the virtual one, so aids

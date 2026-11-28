@@ -31,6 +31,23 @@ fn luminance(c: vec3<f32>) -> f32 {
     return dot(c, vec3(0.2126, 0.7152, 0.0722));
 }
 
+// Maximum Reverse-Z depth across MSAA samples so partial sky coverage on foreground
+// silhouettes (such as the gun edge against the sun) does not leak into the shaft source.
+@if(SOURCE && MULTISAMPLED)
+fn sky_depth_at(q: vec2<i32>) -> f32 {
+    let n = i32(textureNumSamples(depth));
+    var d = 0.0;
+    for (var s = 0; s < n; s++) {
+        d = max(d, textureLoad(depth, q, s));
+    }
+    return d;
+}
+
+@if(SOURCE && !MULTISAMPLED)
+fn sky_depth_at(q: vec2<i32>) -> f32 {
+    return textureLoad(depth, q, 0);
+}
+
 @if(SOURCE) @fragment
 fn source(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     // Four pixels of the 4 x 4 under this one: sky only, the brighter part of it (linear
@@ -40,7 +57,7 @@ fn source(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     var c = vec3(0.0);
     for (var i = 0; i < 4; i++) {
         let q = clamp(base + vec2(1 + 2 * (i & 1), 1 + 2 * (i >> 1u)), vec2(0), dims - 1);
-        let d = textureLoad(depth, q, 0);
+        let d = sky_depth_at(q);
         if d <= 0.0 || shafts.source.z / d > shafts.source.y {
             let s = textureLoad(picture, q, 0).rgb;
             c += s * smoothstep(0.04, 0.4, luminance(s));

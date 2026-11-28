@@ -46,7 +46,7 @@ gives no scale].
 
 | Function | NVForever |
 |---|---|
-| DebugTextCreate `name x y text` | a text at x, y in the window's pixels [hypothesis: the page's 100 100 and 600 700]; a name already there is moved and changed, not doubled [hypothesis] |
+| DebugTextCreate `name x y text` | creates a debug text at `x, y` in the window's pixels [hypothesis: the page's 100 100 and 600 700] and returns `1`; if `name` already exists, moves and changes it in place (preserving zoom, not doubled) [documented: DebugTextCreate; hypothesis: `w4c_b4_03` does not read back x, y, or text] while returning `-1` [observed: Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 + SUP NVSE 855, 2026-11-24, `GSDocMitchellHouse` (`0x00103DF9`), 10 official base masters, `w4c_b4_03_sup6_bobbypin_debugtext` (`tools/capture/nvse/catalogs/wave4c_extenders.json`, #3679): `mw(0,0)|bp(init=-1.00,set=-1.00,rd=-1.00)|dt(1,-1)`; no DLL or source consulted] |
 | DebugTextDestroy, DebugTextExists | gone; 0/1 [documented] |
 | DebugTextSetPos, DebugTextSetString, DebugTextSetZoom | its place, its text, its size [documented]; the zoom is the letters' height in pixels, 16 until set [hypothesis: the page's example sets 20] |
 

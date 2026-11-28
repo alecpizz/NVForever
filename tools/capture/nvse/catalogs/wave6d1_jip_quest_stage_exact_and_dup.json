@@ -1,0 +1,93 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6d1_jip_quest_stage_exact_and_dup",
+  "description": "Wave 6D-1 strictly read-only console-only clean-room probe catalog verifying JIP LN SetOnQuestStageEventHandler duplicate return (0), exact stage matching (stage 0 not wildcard), null self, and POST-update GetStage.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)",
+    "lStewieAl's Tweaks": "1005"
+  },
+  "batches": [
+    {
+      "id": "w6d1_jip_quest_stage_exact_and_dup",
+      "title": "Wave 6D-1 - JIP SetOnQuestStageEventHandler Exact Stage and Duplicate Return",
+      "extender": "xNVSE 6.4.9 + JIP LN 57.30",
+      "required_plugins": [
+        "jip_nvse.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6d1_23_jip_quest_stage_and_skip_script",
+          "bucket": "A",
+          "extender": "JIP LN 57.30",
+          "required_plugins": [
+            "jip_nvse.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/jip-events.md",
+          "spec_line": 52,
+          "functions_tested": [
+            "SetOnQuestStageEventHandler",
+            "SetStage"
+          ],
+          "claim": "Verify SetOnQuestStageEventHandler return values (add/dup/rem/rem-miss), (quest, stage) and (quest, 0) filters, GetSelfAlt, args (quest, stage), and GetStage PRE-vs-POST inside callback.",
+          "expected": "Returns 1 on add/remove; verify dup/miss returns, stage 0 wildcard, and GetStage inside callback.",
+          "script_lines": [
+            "ref rQ = GetFormFromMod \"FalloutNV.esm\" \"E282D\"",
+            "ref cb1 = CompileScript \"nvseprobe_s_w6d1_23_c1.gek\"",
+            "ref cb2 = CompileScript \"nvseprobe_s_w6d1_23_c2.gek\"",
+            "Player.AuxVarSetFlt \"*w6d1_23_n1\" 0",
+            "Player.AuxVarSetFlt \"*w6d1_23_n2\" 0",
+            "int a1 = SetOnQuestStageEventHandler cb1 1 rQ 10 0",
+            "int aDup = SetOnQuestStageEventHandler cb1 1 rQ 10 0",
+            "int a2 = SetOnQuestStageEventHandler cb2 1 rQ 0 0",
+            "StartQuest rQ",
+            "SetStage rQ 10",
+            "int n1 = Player.AuxVarGetFlt \"*w6d1_23_n1\"",
+            "int n2 = Player.AuxVarGetFlt \"*w6d1_23_n2\"",
+            "int s0 = ((Player.AuxVarGetRef \"*w6d1_23_self\") == 0)",
+            "int qOk = ((Player.AuxVarGetRef \"*w6d1_23_q\") == rQ)",
+            "int stArg = Player.AuxVarGetFlt \"*w6d1_23_st\"",
+            "int stIn = Player.AuxVarGetFlt \"*w6d1_23_in\"",
+            "int stPost = GetStage rQ",
+            "int r1 = SetOnQuestStageEventHandler cb1 0 rQ 10",
+            "int rMiss = SetOnQuestStageEventHandler cb1 0 rQ 10",
+            "int r2 = SetOnQuestStageEventHandler cb2 0 rQ 0",
+            "PrintToConsole \"PROBE|w6d1_23_jip_quest_stage_and_skip_script|ret=%g,%g,%g,%g|n1=%g,n2=%g|s0=%g,qOk=%g,arg=%g,in=%g,post=%g\" a1 aDup r1 rMiss n1 n2 s0 qOk stArg stIn stPost"
+          ],
+          "helper_scripts": {
+            "nvseprobe_s_w6d1_23_c1.gek": [
+              "begin Function { ref rQu, int iSt }",
+              "Player.AuxVarSetFlt \"*w6d1_23_n1\" ((Player.AuxVarGetFlt \"*w6d1_23_n1\") + 1)",
+              "Player.AuxVarSetRef \"*w6d1_23_self\" (GetSelfAlt)",
+              "Player.AuxVarSetRef \"*w6d1_23_q\" rQu",
+              "Player.AuxVarSetFlt \"*w6d1_23_st\" iSt",
+              "Player.AuxVarSetFlt \"*w6d1_23_in\" (GetStage rQu)"
+            ],
+            "nvseprobe_s_w6d1_23_c2.gek": [
+              "begin Function { ref rQu, int iSt }",
+              "Player.AuxVarSetFlt \"*w6d1_23_n2\" ((Player.AuxVarGetFlt \"*w6d1_23_n2\") + 1)"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

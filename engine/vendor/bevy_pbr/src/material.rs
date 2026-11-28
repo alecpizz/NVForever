@@ -189,6 +189,13 @@ pub trait Material: Asset + AsBindGroup + Clone + Sized {
         false
     }
 
+    /// Blend into the scene before copying it for screen-space transmission.
+    /// Used for marks on opaque receivers behind a refractive surface.
+    #[inline]
+    fn render_before_transmission(&self) -> bool {
+        false
+    }
+
     /// Controls if the prepass is enabled for the Material.
     /// For more information about what a prepass is, see the [`bevy_core_pipeline::prepass`] docs.
     #[inline]
@@ -1481,6 +1488,7 @@ pub fn queue_material_meshes(
                         continue;
                     };
                     transmissive_phase.add_retained(Transmissive3d {
+                        before_copy: !material.properties.reads_view_transmission_texture,
                         sorting_info: TransparentSortingInfo3d::Sorted {
                             mesh_center: get_mesh_instance_world_from_local(
                                 *visible_entity,
@@ -1916,7 +1924,9 @@ where
         let mesh_pipeline_key_bits = ErasedMeshPipelineKey::new(mesh_pipeline_key_bits);
 
         let render_phase_type = match alpha_mode {
-            _ if reads_view_transmission_texture => RenderPhaseType::Transmissive,
+            _ if reads_view_transmission_texture || material.render_before_transmission() => {
+                RenderPhaseType::Transmissive
+            }
             AlphaMode::Blend | AlphaMode::Premultiplied | AlphaMode::Add | AlphaMode::Multiply => {
                 RenderPhaseType::Transparent
             }

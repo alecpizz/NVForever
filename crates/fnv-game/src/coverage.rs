@@ -157,7 +157,7 @@ impl Reached {
 
 /// The main quest's Editor ID prefixes in FalloutNV.esm [observed: the quests the
 /// main-quest walkthroughs run: VCG (Goodsprings start), VMQ, VHD (Hoover Dam), VEnding].
-const MAIN_PREFIXES: [&str; 4] = ["vmq", "vhd", "vending", "vcg0"];
+pub(crate) const MAIN_PREFIXES: [&str; 4] = ["vmq", "vhd", "vending", "vcg0"];
 
 /// The four story add-ons' plugins.
 const STORY_ADDONS: [&str; 4] = ["deadmoney.esm", "honesthearts.esm", "oldworldblues.esm", "lonesomeroad.esm"];

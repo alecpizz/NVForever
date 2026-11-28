@@ -1,0 +1,6 @@
+plugins { id 'com.android.application' version '8.9.2' apply false }
+// Keep generated output separate from sources; useful on hosts with protected Documents.
+allprojects {
+    def outputRoot = providers.environmentVariable('NVF_ANDROID_BUILD_DIR')
+    if (outputRoot.isPresent()) layout.buildDirectory = file(outputRoot.get() + '/' + project.name)
+}

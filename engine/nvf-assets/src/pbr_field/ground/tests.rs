@@ -38,8 +38,8 @@ fn the_generated_height_map_is_a_valid_bc4_chain_with_the_full_range() {
 #[test]
 fn every_landscape_texture_gets_a_height_only_set_where_the_index_looks() {
     let diffuses = ["Landscape\\Dirt01.dds", "landscape/dirt01.dds", "data\\textures\\landscape\\Rocks02.dds", "landscape\\xbox\\Sand.dds", ""];
-    let files = ground_fixture(&diffuses);
-    assert_eq!(files, ground_fixture(&diffuses), "deterministic");
+    let files = ground_fixture(GroundPack::Heights, &diffuses);
+    assert_eq!(files, ground_fixture(GroundPack::Heights, &diffuses), "deterministic");
     let names: Vec<&str> = files.iter().map(|(p, _)| p.as_str()).collect();
     assert_eq!(
         names,
@@ -80,7 +80,7 @@ fn the_terrain_lookup_takes_the_generated_height_map_at_the_set_depth() {
     let data_dir = home.join("Data");
     fs::create_dir_all(data_dir.join("textures").join("landscape")).unwrap();
     fs::write(data_dir.join("textures").join("landscape").join("dirt01.dds"), crate::authored::tests::legacy(b"DXT1", 4, 4, &[0xFF, 0xFF, 0, 0, 0, 0, 0, 0])).unwrap();
-    let (pack, sets, written) = seed_ground_pack_in(&home, 3, 1, &["Landscape\\Dirt01.dds"]).unwrap();
+    let (pack, sets, written) = seed_ground_pack_in(&home, 3, 1, GroundPack::Heights, &["Landscape\\Dirt01.dds"]).unwrap();
     assert_eq!((sets, written), (1, 2));
     let mut vfs = fnv_vfs::Vfs::open(&data_dir, &[]).unwrap();
     vfs.add_loose_root(&pack);
@@ -98,6 +98,35 @@ fn the_terrain_lookup_takes_the_generated_height_map_at_the_set_depth() {
     let _ = fs::remove_dir_all(&home);
 }
 
+/// #3486: a diffuse's alpha is a height only where the authored index knows no set for it.
+#[test]
+fn a_diffuse_alpha_is_a_height_only_without_an_authored_set() {
+    let home = temp_home("alpha-height");
+    let data_dir = home.join("Data");
+    let land = data_dir.join("textures").join("landscape");
+    fs::create_dir_all(&land).unwrap();
+    for name in ["dirt01.dds", "sand01.dds"] {
+        fs::write(land.join(name), ground_diffuse_dds(0)).unwrap();
+    }
+    // A set for dirt01 only: without a `_p`, a colour set that gives no height.
+    let pbr = data_dir.join("textures").join("pbr").join("landscape");
+    fs::create_dir_all(&pbr).unwrap();
+    fs::write(pbr.join("dirt01_orm.dds"), ground_diffuse_dds(1)).unwrap();
+    let data = GameData::new(Arc::new(fnv_vfs::Vfs::open(&data_dir, &[]).unwrap()), Arc::new(fnv_nif::Schema::default()));
+    let mut cache = TextureCache::default();
+    let mut images = Assets::<Image>::default();
+    assert!(cache.alpha_height_with(true, "Landscape\\Dirt01.dds", &data, &mut images, None).is_none(), "the set decides: no _p, no height");
+    assert!(cache.alpha_height_with(false, "landscape\\sand01.dds", &data, &mut images, None).is_none(), "the setting off");
+    let (height, depth) = cache.alpha_height_with(true, "landscape\\sand01.dds", &data, &mut images, None).expect("a varying alpha and no set");
+    assert_eq!(depth, crate::texture::ALPHA_HEIGHT_DEPTH);
+    let image = images.get(&height).unwrap();
+    assert_eq!((image.texture_descriptor.format, image.texture_descriptor.mip_level_count), (TextureFormat::Bc4RUnorm, GROUND_SIDE.ilog2() + 1));
+    assert_eq!(cache.alpha_height_with(true, "Landscape\\Sand01.dds", &data, &mut images, None).unwrap().0, height, "made once");
+    assert!(cache.failures.is_empty() && cache.alpha_height_with(true, "landscape\\none.dds", &data, &mut images, None).is_none());
+    assert!(cache.failures.is_empty(), "nothing to report: the diffuse's own load does");
+    let _ = fs::remove_dir_all(&home);
+}
+
 /// The pack writes only into a fresh folder of its own: a second run gets another one, files
 /// already in the home are never touched, and nothing is written without a texture or a home.
 #[test]
@@ -106,21 +135,21 @@ fn the_ground_pack_writes_only_a_fresh_folder_of_its_own() {
     let mine = home.join("mods").join("textures").join("pbr").join("landscape");
     fs::create_dir_all(&mine).unwrap();
     fs::write(mine.join("dirt01_p.dds"), b"the player's own").unwrap();
-    let (first, ..) = seed_ground_pack_in(&home, 7, 1, &["landscape\\dirt01.dds"]).unwrap();
-    let (second, ..) = seed_ground_pack_in(&home, 7, 1, &["landscape\\dirt01.dds"]).unwrap();
+    let (first, ..) = seed_ground_pack_in(&home, 7, 1, GroundPack::Heights, &["landscape\\dirt01.dds"]).unwrap();
+    let (second, ..) = seed_ground_pack_in(&home, 7, 1, GroundPack::Heights, &["landscape\\dirt01.dds"]).unwrap();
     assert_ne!(first, second, "a new folder per run");
     assert!(first.starts_with(home.join("pbr-ground-pack")));
-    for (rel, bytes) in ground_fixture(&["landscape\\dirt01.dds"]) {
+    for (rel, bytes) in ground_fixture(GroundPack::Heights, &["landscape\\dirt01.dds"]) {
         assert_eq!(fs::read(first.join(&rel)).unwrap(), bytes, "{rel}");
     }
     assert_eq!(fs::read(mine.join("dirt01_p.dds")).unwrap(), b"the player's own", "the home's files untouched");
-    assert!(seed_ground_pack_in::<&str>(&home, 8, 1, &[]).is_err(), "no texture: nothing written");
+    assert!(seed_ground_pack_in::<&str>(&home, 8, 1, GroundPack::Heights, &[]).is_err(), "no texture: nothing written");
     assert!(!home.join("pbr-ground-pack").join("run-8-1-0").exists());
     assert!(ground_pack_home(None).is_err() && ground_pack_home(Some("".into())).is_err());
     assert_eq!(ground_pack_home(Some("h".into())).unwrap(), PathBuf::from("h"));
     // A file in the way inside a fresh folder cannot happen, but write_files refuses one.
     let taken = home.join("taken");
-    let files = ground_fixture(&["landscape\\dirt01.dds"]);
+    let files = ground_fixture(GroundPack::Heights, &["landscape\\dirt01.dds"]);
     fs::create_dir_all(taken.join("textures").join("pbr").join("landscape")).unwrap();
     fs::write(taken.join(&files[0].0), b"there before").unwrap();
     assert!(write_files(&taken, &files).is_err());
@@ -135,19 +164,19 @@ fn the_ground_pack_writes_only_a_fresh_folder_of_its_own() {
 fn no_texture_path_can_write_outside_the_pack_folder() {
     let hostile = [r"..\..\..\escape.dds", r"landscape\..\..\..\..\escape.dds", r"landscape\.\dot.dds", r"landscape\c:\stream.dds", r"landscape\xbox\..\..\..\escape.dds"];
     for d in hostile {
-        assert!(ground_fixture(&[d]).is_empty(), "{d}: {:?}", ground_fixture(&[d]).iter().map(|f| &f.0).collect::<Vec<_>>());
+        assert!(ground_fixture(GroundPack::Heights, &[d]).is_empty(), "{d}: {:?}", ground_fixture(GroundPack::Heights, &[d]).iter().map(|f| &f.0).collect::<Vec<_>>());
     }
     // Mixed with a plain texture, only the plain one is written.
-    let mixed = ground_fixture(&[r"..\..\escape.dds", r"landscape\dirt01.dds"]);
+    let mixed = ground_fixture(GroundPack::Heights, &[r"..\..\escape.dds", r"landscape\dirt01.dds"]);
     assert_eq!(mixed.iter().map(|f| f.0.as_str()).collect::<Vec<_>>(), ["textures/pbr/landscape/dirt01_p.dds", "textures/pbr/landscape/dirt01.toml"]);
     let home = temp_home("contain");
     // The home exists, as the game's NVFOREVER_HOME does (the pack makes only its own folder).
     fs::create_dir_all(&home).unwrap();
-    let (dir, sets, _) = seed_ground_pack_in(&home, 9, 1, &[r"..\..\..\..\..\escape.dds", r"landscape\dirt01.dds"]).unwrap();
+    let (dir, sets, _) = seed_ground_pack_in(&home, 9, 1, GroundPack::Heights, &[r"..\..\..\..\..\escape.dds", r"landscape\dirt01.dds"]).unwrap();
     assert_eq!(sets, 1);
     let written: Vec<PathBuf> = walk(&home);
     assert!(written.iter().all(|p| p.starts_with(&dir)), "every file inside the run's folder: {written:?}");
-    assert!(seed_ground_pack_in(&home, 10, 1, &[r"..\..\escape.dds"]).is_err(), "nothing safe to write: refused");
+    assert!(seed_ground_pack_in(&home, 10, 1, GroundPack::Heights, &[r"..\..\escape.dds"]).is_err(), "nothing safe to write: refused");
     // The writer's own check, before any write.
     let out = home.join("guarded");
     fs::create_dir_all(&out).unwrap();
@@ -158,6 +187,57 @@ fn no_texture_path_can_write_outside_the_pack_folder() {
     }
     assert!(!home.parent().unwrap().join("escape_p.dds").exists());
     let _ = fs::remove_dir_all(&home);
+}
+
+/// #3789: the alpha pack's diffuses: where the game's own lie, each of one flat colour of its
+/// own with the checkerboard alpha, over the same height sets.
+#[test]
+fn the_alpha_pack_replaces_every_diffuse_with_a_flat_colour_and_a_checkerboard_alpha() {
+    let diffuses = ["Landscape\\Dirt01.dds", "landscape\\Rocks02.dds"];
+    let names: Vec<String> = ground_fixture(GroundPack::Alpha, &diffuses).into_iter().map(|f| f.0).collect();
+    assert_eq!(
+        names,
+        [
+            "textures/pbr/landscape/dirt01_p.dds",
+            "textures/pbr/landscape/dirt01.toml",
+            "textures/landscape/dirt01.dds",
+            "textures/landscape/dirt01_n.dds",
+            "textures/pbr/landscape/rocks02_p.dds",
+            "textures/pbr/landscape/rocks02.toml",
+            "textures/landscape/rocks02.dds",
+            "textures/landscape/rocks02_n.dds",
+        ]
+    );
+    let mut colours = Vec::new();
+    for (_, bytes) in ground_fixture(GroundPack::Alpha, &diffuses).iter().filter(|f| f.0.starts_with("textures/landscape/") && !f.0.ends_with("_n.dds")) {
+        let dds = fnv_dds::Dds::parse(bytes).expect("a DDS file the engine reads");
+        assert_eq!((dds.header.width, dds.header.height, dds.header.levels()), (GROUND_SIDE, GROUND_SIDE, GROUND_SIDE.ilog2() + 1));
+        let top = fnv_dds::decode_blocks(dds.format, GROUND_SIDE, GROUND_SIDE, dds.levels[0][0]).expect("level 0 decodes");
+        let px: Vec<[u8; 4]> = top.as_chunks::<4>().0.to_vec();
+        assert!(px.iter().all(|p| p[..3] == px[0][..3]), "one colour");
+        let at = |x: usize, y: usize| px[y * GROUND_SIDE as usize + x][3];
+        assert_eq!((at(0, 0), at(31, 31), at(32, 0), at(0, 32), at(32, 32)), (255, 255, 0, 0, 255));
+        colours.push(px[0]);
+    }
+    assert_ne!(colours[0], colours[1], "a colour of its own each");
+    let home = temp_home("alpha");
+    fs::create_dir_all(&home).unwrap();
+    let (_, sets, files) = seed_ground_pack_in(&home, 11, 1, GroundPack::Alpha, &diffuses).unwrap();
+    assert_eq!((sets, files), (2, 8));
+    let _ = fs::remove_dir_all(&home);
+    // The alpha-height pack (#3486): the diffuses and normal maps alone, the height map in
+    // the diffuse's alpha, the colour in two shades.
+    let files = ground_fixture(GroundPack::AlphaHeight, &diffuses);
+    assert_eq!(files.iter().map(|f| f.0.as_str()).collect::<Vec<_>>(), ["textures/landscape/dirt01.dds", "textures/landscape/dirt01_n.dds", "textures/landscape/rocks02.dds", "textures/landscape/rocks02_n.dds"]);
+    let dds = fnv_dds::Dds::parse(&files[0].1).unwrap();
+    let top = fnv_dds::decode_blocks(dds.format, GROUND_SIDE, GROUND_SIDE, dds.levels[0][0]).unwrap();
+    let px = top.as_chunks::<4>().0;
+    assert_eq!((px[0][3], px[30 * GROUND_SIDE as usize + 30][3]), (255, 0), "a ridge and the ground between");
+    let shades: std::collections::HashSet<[u8; 3]> = px.iter().map(|p| [p[0], p[1], p[2]]).collect();
+    assert_eq!(shades.len(), 2);
+    let named = |v: &str| ground_pack_named(std::ffi::OsStr::new(v));
+    assert_eq!((named("1"), named("alpha"), named("alpha-height")), (Some(GroundPack::Heights), Some(GroundPack::Alpha), Some(GroundPack::AlphaHeight)));
+    assert_eq!((named("0"), named("")), (None, None));
 }
 
 /// Every file under `dir`.

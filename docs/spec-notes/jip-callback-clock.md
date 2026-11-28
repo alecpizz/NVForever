@@ -22,20 +22,33 @@ dispatch supplies no callback-specific clock. The existing game clock is
 quantized to 1/64 second and pauses during menus/loading. Ordinary instance and
 trigger clocks are separate consumers and retain their existing behavior.
 
-[hypothesis: bounded compatibility policy] A registration keeps the quantized
-game-clock time of registration or its last actual invocation. A due callback
-receives the nonnegative difference, shared by repeated reads and its nested UDF
-Calls. Different registrations keep independent origins. Re-registration resets
-the origin; callbacks retained across session transfer rebase to the receiving
-game's clock. A frozen game clock contributes zero. Native interval parity has
-not been measured.
+[observed: Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 + JIP LN 57.30, 2026-11-24,
+GSDocMitchellHouse (`0x00103DF9`), 10 official base masters, isolated staging copy
+(read-only), committed probe `w4g_03_jip_callback_getsecondspassed` in
+`tools/capture/nvse/catalogs/wave4g_f2_extenders.json` (companion catalog PR #3803);
+no DLL or source consulted] Both `SetGameMainLoopCallback` (at `callDelay=1`, `5`, and
+`10`) and ordinary stateless UDFs (`CallAfterSeconds 0.05`) return the **single-frame**
+delta from `GetSecondsPassed`, NOT accumulated time across skipped frames and NOT `0.0`.
+Repeated reads (`r1 == r2`) and nested `Call`s (`nest == r1`) share the exact same
+delta within a tick. Verbatim probe output:
+- `PROBE|w4g_03_jip_callback_getsecondspassed|harnessLoop(r1=0.010000,r2=0.010000,nest=0.010000)`
+- `PROBE|w4g_03_jip_callback_getsecondspassed|cb_d1(tick=0,r1=0.015000,r2=0.015000,nest=0.015000)`
+- `PROBE|w4g_03_jip_callback_getsecondspassed|cb_d1(tick=1,r1=0.016000,r2=0.016000,nest=0.016000)`
+- `PROBE|w4g_03_jip_callback_getsecondspassed|cb_d1(tick=2,r1=0.010000,r2=0.010000,nest=0.010000)`
+- `PROBE|w4g_03_jip_callback_getsecondspassed|callAfterSec(r1=0.010000,r2=0.010000,nest=0.010000)`
+- `PROBE|w4g_03_jip_callback_getsecondspassed|cb_d5(tick=0,r1=0.010000,r2=0.010000,nest=0.010000)`
+- `PROBE|w4g_03_jip_callback_getsecondspassed|cb_d5(tick=1,r1=0.016000,r2=0.016000,nest=0.016000)`
+- `PROBE|w4g_03_jip_callback_getsecondspassed|cb_d5(tick=2,r1=0.016000,r2=0.016000,nest=0.016000)`
 
-[hypothesis: invocation scope] Carry the optional interval only through the
-callback UDF execution and nested UDF Calls. Only GetSecondsPassed without a
-persistent instance uses it. Ordinary UDFs, result scripts, persistent instance
-clocks, callback filtering and normal function-result bookkeeping remain on
-their existing paths. No global override, serialized clock field, opcode change,
-actor-value special case or script-name matching is introduced.
+[design] NVForever supplies `Game::stateless_udf_seconds()` (`0.0` while paused in
+menus, loading, or `FreezeTime`, otherwise the current frame step `cfg.frame_seconds`)
+to `SetGameMainLoopCallback`, `run_function` (including `CallAfterSeconds` and nested
+`Call`), and `run_query`, captured at UDF entry so repeated reads and nested `Call`s
+within the same execution see the identical value. Only `GetSecondsPassed` without a
+persistent instance uses it; persistent script instances (`ctx.inst.is_some()`) and
+result scripts (`run_source`, which pass `seconds: None`) keep their existing paths.
+No global override, serialized clock field, opcode change, actor-value special case or
+script-name matching is introduced.
 
 [documented: authored control source in
 `crates/fnv-game/tests/common/jip_callback_clock.rs`, registered by the existing

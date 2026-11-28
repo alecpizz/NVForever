@@ -25,7 +25,12 @@
 @group(0) @binding(11) var mip_11: texture_storage_2d<r32float, write>;
 @group(0) @binding(12) var mip_12: texture_storage_2d<r32float, write>;
 @group(0) @binding(13) var samplr: sampler;
-struct Constants { max_mip_level: u32 }
+// NVForever (bevy#26239 backported): only the main pass's region of the depth buffer.
+struct Constants {
+    source_origin: vec2<u32>,
+    source_size: vec2<u32>,
+    max_mip_level: u32,
+}
 var<immediate> constants: Constants;
 
 // TODO:
@@ -314,33 +319,37 @@ fn reduce_load_mip_6(tex: vec2u) -> f32 {
 /// See the comments in `ViewDepthPyramid::downsample_depth` for more
 /// information.
 fn load_mip_0(x: u32, y: u32) -> f32 {
-    let actual_size = textureDimensions(mip_0).xy;
+    let source_origin = vec2<f32>(constants.source_origin);
+    let source_size = constants.source_size;
     let virtual_size = vec2<u32>(
-        next_power_of_two(actual_size.x),
-        next_power_of_two(actual_size.y)
+        next_power_of_two(source_size.x),
+        next_power_of_two(source_size.y)
     );
     let virtual_uv = (vec2<f32>(f32(x), f32(y)) + 0.5) / vec2<f32>(virtual_size);
+    // Keep the 2×2 texels around `st` inside the source region.
+    let st = clamp(
+        source_origin + virtual_uv * vec2<f32>(source_size),
+        source_origin + 1.0,
+        source_origin + vec2<f32>(source_size) - 1.0,
+    );
     @if(MESHLET_VISIBILITY_BUFFER_RASTER_PASS_OUTPUT) {
-    let virtual_st = virtual_uv * vec2<f32>(actual_size);
-    let visibility = load_mip_0_meshlet(virtual_st, 32u);
+    let visibility = load_mip_0_meshlet(st, 32u);
     return reduce_4(visibility);
     } @elif(MESHLET) {
-    let virtual_st = virtual_uv * vec2<f32>(actual_size);
-    let visibility = load_mip_0_meshlet(virtual_st, 0u);
+    let visibility = load_mip_0_meshlet(st, 0u);
     return reduce_4(visibility);
     } @elif(MULTISAMPLE) {
     // Downsample the top level.
     // The top level is multisampled, so we need to loop over all the samples
     // and reduce them to 1.
-    let virtual_st = virtual_uv * vec2<f32>(actual_size);
-    var result = load_mip_0_single_sample(virtual_st, 0);
+    var result = load_mip_0_single_sample(st, 0);
     let sample_count = i32(textureNumSamples(mip_0));
     for (var sample = 1; sample < sample_count; sample += 1) {
-        result = min(result, load_mip_0_single_sample(virtual_st, sample));
+        result = min(result, load_mip_0_single_sample(st, sample));
     }
     return result;
     } @else {
-    return reduce_4(textureGather(mip_0, samplr, virtual_uv));
+    return reduce_4(textureGather(mip_0, samplr, st / vec2<f32>(textureDimensions(mip_0))));
     }
 }
 

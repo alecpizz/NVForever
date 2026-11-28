@@ -536,7 +536,7 @@
     },
     {
       "op": "note",
-      "text": "Mr. House (40): the player walks into his chamber (the move loads it: his OnLoad sets HouseState 1), opens his pod at the control terminal, waits out the pod's 15 s timer (L38TimerQuest sets open), and unplugs him."
+      "text": "Mr. House (40): the player walks into his chamber (the move loads it: his OnLoad sets HouseState 1), opens his pod at the control terminal, waits out the pod's 15 s timer (L38TimerQuest sets open), and unplugs him. (L38TimerQuest's 15 s, counted at the quest delay of 5 s, opens the pod about 20 s after it was unsealed: the wait is 21 s, #4851)"
     },
     {
       "op": "move_player",
@@ -569,7 +569,7 @@
     },
     {
       "op": "advance_seconds",
-      "seconds": 16
+      "seconds": 21
     },
     {
       "op": "terminal",

@@ -90,7 +90,9 @@ impl Level {
         }
     }
 
-    /// The name the menu shows ("Lock Level  Easy" [observed: the owner's screenshots]).
+    /// The name the menu shows: the level's name as the GECK wiki's GetLockLevel and the
+    /// Bethsoft tutorial name the levels [documented: see [`Level`]], not read off a screen
+    /// (#2984).
     pub fn name(self) -> &'static str {
         match self {
             Level::VeryEasy => "Very Easy",

@@ -98,23 +98,27 @@ at once), `fnv_game` (`Game::image_modifiers`, the three script functions),
 - Between keys the value moves in a straight line; before the first and after the last
   key it holds [hypothesis: xEdit calls the lists interpolators, the curve is not
   documented].
-- **Applying one that is already playing stacks another instance for event counting**
+- **Applying one that is already playing stacks another instance in application order**
   [observed: Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9, 2026-11-23, GSDocMitchellHouse
   (`0x00103DF9`), 10 official base masters, clean-room script probes
   `w1_3656_objectives_unholster_imod` (`imod` twice + `rimod` twice on `WhiteNonAnimated`
   `0x000C9AFA`; `imod GetHit` `0x00000162` 0.4 s + ~1.5 s wait) and
   `b3_core_ex_06_on_apply_imod_event` (`ApplyImageSpaceModifier`/`RemoveImageSpaceModifier`
-  on `0x00144C41`) in #3679; no DLL or source consulted: re-applying an active IMAD fires
-  `OnApplyIMOD` with `IsImageSpaceActive == 1` and stacks a second instance; a single
+  on `0x00144C41`) in #3679; and 2026-11-24 with JIP LN 57.30, `w4d_24_active_imods_order`
+  (`tools/capture/nvse/catalogs/wave4d_extenders.json`, #3679): applying non-animatable
+  `0x00054E13`, `0x001736A8`, `0x00054E13` yields `n=3,0=00054E13,1=001736A8,2=00054E13`
+  from `GetActiveIMODs`; no DLL or source consulted: re-applying an active IMAD fires
+  `OnApplyIMOD` with `IsImageSpaceActive == 1` and stacks another instance; a single
   `RemoveImageSpaceModifier` removes all matching instances and fires `OnRemoveIMOD` once
   per removed instance (twice for two stacked instances). VCG00 also applies
-  Addiction01ISFX at stages 27 and 30, half a second apart]. Because the probe measured
-  event counts rather than whether the original blends duplicate instances visually,
-  NVForever keeps **one drawn instance per `IMAD` form** (the most recently applied entry)
-  in `nvforever::imagespace::screen_effect`, keeps a single `ActiveImageModifier` entry
-  plus a counted stack for non-animatable re-applies, and caps stacked instances per form
-  at `Game::MAX_IMOD_STACK = 64` so unmodded visuals stay unchanged and repeated re-applies
-  cannot grow unbounded [design].
+  Addiction01ISFX at stages 27 and 30, half a second apart]. Because the probes measured
+  event counts and `GetActiveIMODs` order rather than whether the original blends duplicate
+  instances visually, NVForever keeps each stacked instance (animatable and non-animatable)
+  in `Game::image_modifiers` in exact application order, caps stacked instances per form at
+  `Game::MAX_IMOD_STACK = 64` (evicting the oldest matching entry at capacity so repeated
+  re-applies cannot grow unbounded), and draws **one instance per `IMAD` form** (the most
+  recently applied entry) in `nvforever::imagespace::screen_effect` so unmodded visuals stay
+  unchanged [design].
 - **A modifier's time passes with the game outside menus and loading screens,
   conversations included** [hypothesis: `Game::tick` ages modifiers where it advances a
   conversation's lines]. Not known: whether an animated modifier goes on behind a

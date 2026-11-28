@@ -15,6 +15,9 @@
 //!   spot's horizon line, about three eye heights back, and aims the view at the spot;
 //!   `head-on` stands the player on it looking straight down.
 //!
+//! - `base` (#3846; the first sequence that asks for a pose decides): the spot is on ground of
+//!   a quadrant without painted layers whose base has a height map.
+//!
 //! **The spot** (once, at the first sequence that asks for a pose): among the loaded cells
 //! around the player (3 x 3), the nearest landscape vertex where the march moves almost all of
 //! what shows ([`SPOT_SHARE`] of it, at the vertex and its eight neighbours: terrain.rs
@@ -23,10 +26,12 @@
 //! reaches it over the landscape, from a stand on the physics' landscape inside the same
 //! loaded cells. None found: a `FAIL` line and the sequence is skipped.
 //!
-//! **What is under the centre**, logged for every sequence before shot A: the physics ray
+//! **What is under the centre**, logged for every sequence before shot A (and again before shot
+//! B, the switch on, when the first found nothing to move: heights from diffuse alphas are held
+//! only while it is on): the physics ray
 //! along the view meets the landscape of a cell or a placed object; for the landscape the
 //! ground cover there (terrain.rs `ground_cover`, an estimate: the meshes' interpolation of
-//! the painted opacities, each layer texture's alpha taken as 1). Where the march would move
+//! the painted opacities). Where the march would move
 //! less than [`BARE_SHARE`] of it the verdict is `bare`: the readback says nothing about the
 //! march. With the aid's own pose a cover that cannot be told counts as none (`bare`).
 //!
@@ -186,6 +191,8 @@ pub struct Spec {
     pub at: f32,
     pub hold: bool,
     pub pose: Pose,
+    /// The pose's spot on a base alone (#3846).
+    pub base: bool,
 }
 
 /// `<seconds>[:<word>]…[,…]`, in time order (module notes).
@@ -195,7 +202,7 @@ pub fn parse(value: &str) -> Result<Vec<Spec>, String> {
         let mut words = item.split(':').map(str::trim);
         let time = words.next().unwrap_or_default();
         let at: f32 = time.parse().map_err(|_| format!("{item:?}: a time in seconds first"))?;
-        let mut spec = Spec { at, hold: false, pose: Pose::View };
+        let mut spec = Spec { at, hold: false, pose: Pose::View, base: false };
         for w in words {
             match w {
                 "flip" => spec.hold = false,
@@ -203,7 +210,8 @@ pub fn parse(value: &str) -> Result<Vec<Spec>, String> {
                 "view" => spec.pose = Pose::View,
                 "grazing" => spec.pose = Pose::Grazing,
                 "head-on" => spec.pose = Pose::HeadOn,
-                _ => return Err(format!("{item:?}: {w:?} is none of flip, hold, view, grazing, head-on")),
+                "base" => spec.base = true,
+                _ => return Err(format!("{item:?}: {w:?} is none of flip, hold, view, grazing, head-on, base")),
             }
         }
         specs.push(spec);
@@ -425,7 +433,12 @@ pub struct Spot {
 /// The landscape vertices of the loaded cells around `feet` whose shifted share, and that of
 /// each of their eight neighbours, reaches [`SPOT_SHARE`], nearest first: (point, the cover's
 /// description).
-fn spot_candidates(world: &WorldData, cache: &TerrainCache, materials: &Assets<TerrainMaterial>, tile: f32, feet: [f32; 3]) -> Vec<([f32; 2], String)> {
+///
+/// Of the ground the march moves, the layers' part alone counts (not the base's, #3846), so the
+/// spot is the same whether the base has a height map or not; with `base` instead, only
+/// quadrants without painted layers, whose base has one.
+fn spot_candidates(world: &WorldData, cache: &TerrainCache, materials: &Assets<TerrainMaterial>, tile: f32, feet: [f32; 3], base: bool) -> Vec<([f32; 2], String)> {
+    let moved = |c: &crate::terrain::GroundCover| if base { if c.folded == 0 && c.over == 0 { c.shifted() } else { 0.0 } } else { c.layers_shifted() };
     let size = fnv_world::CELL_SIZE;
     let spacing = fnv_world::land::SPACING;
     let half = size / 2.0;
@@ -440,10 +453,10 @@ fn spot_candidates(world: &WorldData, cache: &TerrainCache, materials: &Assets<T
                     for c in 1..side {
                         let (lx, ly) = (qx as f32 * half + c as f32 * spacing, qy as f32 * half + r as f32 * spacing);
                         let here = cell.at(lx, ly);
-                        if here.shifted() < SPOT_SHARE {
+                        if moved(&here) < SPOT_SHARE {
                             continue;
                         }
-                        let around = (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (dx, dy))).all(|(dx, dy)| cell.at(lx + dx as f32 * spacing, ly + dy as f32 * spacing).shifted() >= SPOT_SHARE);
+                        let around = (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (dx, dy))).all(|(dx, dy)| moved(&cell.at(lx + dx as f32 * spacing, ly + dy as f32 * spacing)) >= SPOT_SHARE);
                         if !around {
                             continue;
                         }
@@ -460,8 +473,8 @@ fn spot_candidates(world: &WorldData, cache: &TerrainCache, materials: &Assets<T
 }
 
 /// The nearest spot (module notes): `Ok((spot, the cover's description))`, or why none.
-pub fn find_spot(world: &WorldData, cache: &TerrainCache, materials: &Assets<TerrainMaterial>, tile: f32, phys: &mut PhysState, player: &Player) -> Result<(Spot, String), String> {
-    let candidates = spot_candidates(world, cache, materials, tile, player.feet);
+pub fn find_spot(world: &WorldData, cache: &TerrainCache, materials: &Assets<TerrainMaterial>, tile: f32, phys: &mut PhysState, player: &Player, base: bool) -> Result<(Spot, String), String> {
+    let candidates = spot_candidates(world, cache, materials, tile, player.feet, base);
     if candidates.is_empty() {
         return Err(format!("no landscape vertex in the 3 x 3 cells around ({:.0}, {:.0}) where the march moves {SPOT_SHARE} of what shows", player.feet[0], player.feet[1]));
     }
@@ -573,10 +586,10 @@ fn set_switch(graphics: Option<&mut crate::graphics::Graphics>, on: bool, at: f3
 type Land<'w> = (Option<Res<'w, WorldData>>, Option<Res<'w, TerrainCache>>, Option<Res<'w, Assets<TerrainMaterial>>>, Option<Res<'w, TerrainSettings>>);
 
 /// Put the player in `pose` at the spot; `false` when there is none (logged once).
-fn pose_player(ab: &mut Ab, pose: Pose, at: f32, land: &Land, phys: &mut PhysState, player: &mut Player) -> bool {
+fn pose_player(ab: &mut Ab, pose: Pose, base: bool, at: f32, land: &Land, phys: &mut PhysState, player: &mut Player) -> bool {
     if ab.spot.is_none() {
         let found = match land {
-            (Some(world), Some(cache), Some(materials), Some(settings)) => find_spot(world, cache, materials, settings.tile, phys, player),
+            (Some(world), Some(cache), Some(materials), Some(settings)) => find_spot(world, cache, materials, settings.tile, phys, player, base),
             _ => Err("no landscape state to look in".into()),
         };
         match &found {
@@ -665,7 +678,7 @@ fn tick(
         ab.queue.pop_front();
         if spec.pose != Pose::View {
             let placed = match (phys.as_deref_mut(), player.as_deref_mut()) {
-                (Some(phys), Some(player)) => pose_player(ab, spec.pose, spec.at, &land, phys, player),
+                (Some(phys), Some(player)) => pose_player(ab, spec.pose, spec.base, spec.at, &land, phys, player),
                 _ => {
                     warn!("terrain parallax ab at {} s: FAIL no physics or player to pose", spec.at);
                     false
@@ -732,7 +745,10 @@ fn tick(
     if waited < settle || (busy > 0 && waited < CAP_SECS) {
         return;
     }
-    if run.shifted.is_none() {
+    // Told once, before shot A; again with the switch on when nothing there was to be moved
+    // with it off: heights from diffuse alphas are held only while it is on (terrain.rs).
+    let bare = |s: Option<f32>| s.unwrap_or(0.0) < BARE_SHARE;
+    if run.shifted.is_none() || (run.phase == 1 && !run.spec.hold && run.shifted.is_some_and(bare)) {
         run.shifted = Some(under_centre(at, &land, phys.as_deref_mut(), player.as_deref()));
     }
     run.unsettled |= busy > 0;

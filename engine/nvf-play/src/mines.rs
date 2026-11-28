@@ -126,6 +126,19 @@ fn heading(dir: V3) -> f32 {
     }
 }
 
+/// Disable a mine that went off (or DisableAllMines turned off) for good: its own flag
+/// counts from now on, not its enable parent's state. A placed mine with an enable parent
+/// (XESP) otherwise stays enabled whatever its own flag says (`World::is_enabled`), so it
+/// stayed live and went off again every couple of seconds [observed: player report
+/// R-P9A6CD42, bottlecap mine 0x0008424C (enable parent 0x00126F4E, FalloutNV.esm) going
+/// off 26 times in a minute, #3881]. This is the engine taking the mine away, not a
+/// script's Disable, which a reference with an enable parent ignores [documented: GECK
+/// wiki Enable and Disable].
+fn put_out(world: &mut fnv_sim::World, id: FormId) -> Result<(), fnv_sim::world::SimError> {
+    world.keep_own_enable(id);
+    world.set_enabled(id, false)
+}
+
 /// Place thrown mines, set off, burn and explode mines (module notes).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn tick(
@@ -198,7 +211,7 @@ pub(crate) fn tick(
         let cell_of = |id: FormId| sim.world.peek(id).and_then(|r| r.cell).or_else(|| sim.refs.get(id).and_then(|p| p.cell));
         let off: Vec<FormId> = live.keys().copied().filter(|&id| here.is_some() && cell_of(id) == here).collect();
         for &id in &off {
-            if let Err(e) = sim.world.set_enabled(id, false) {
+            if let Err(e) = put_out(&mut sim.world, id) {
                 warn!("mines: mine {id} could not be disabled: {e}");
             }
             changed.write(RefChanged::new(id.0));
@@ -296,7 +309,7 @@ pub(crate) fn tick(
             }
             FuseStep::Done => {
                 let by = m.burning.remove(&id).and_then(|b| b.by);
-                if let Err(e) = sim.world.set_enabled(id, false) {
+                if let Err(e) = put_out(&mut sim.world, id) {
                     warn!("mines: mine {id} could not be disabled: {e}");
                 }
                 changed.write(RefChanged::new(id.0));
@@ -403,6 +416,24 @@ fn show_lights(mines: Res<Mines>, sim: Res<SimState>, script: Option<Res<ScriptS
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #3881: a placed mine with an enable parent is gone once it went off; the parent and
+    /// what else hangs on it are not touched.
+    #[test]
+    fn a_mine_with_an_enable_parent_stays_off_after_it_goes_off() {
+        use fnv_sim::refs::EnableParent;
+        const PARENT: u32 = 0x0012_6F4E;
+        const MINE: u32 = 0x0008_424C;
+        const SIBLING: u32 = 0x0008_4250;
+        let child = |id| fnv_sim::refs::PlacedRef { enable_parent: Some(EnableParent { reference: FormId(PARENT), opposite: false, pop_in: false }), ..crate::sim::placed_ref(id) };
+        let mut sim = SimState::over_placed([crate::sim::placed_ref(PARENT), child(MINE), child(SIBLING)]);
+        // The plain disable has no effect: the parent decides.
+        sim.world.set_enabled(FormId(MINE), false).unwrap();
+        assert!(sim.present(MINE), "the bug: the mine stayed live");
+        put_out(&mut sim.world, FormId(MINE)).unwrap();
+        assert!(!sim.present(MINE));
+        assert!(sim.present(PARENT) && sim.present(SIBLING));
+    }
 
     #[test]
     fn distance_is_to_the_upright_body() {

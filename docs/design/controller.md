@@ -301,10 +301,15 @@ Start cannot be bound.
   original, issue #1667], a note window (385) a second at a full push [design: as far a
   second as one LB/RB page]; LB/RB (Page Up/Down) page it (`pipboy/data.rs`
   `scroll_pane`, docs/spec-notes/pipboy.md §5.3).
-- The prompt under the crosshair names the Activate control's own key ("E)") or, with a
-  controller, its button ("A)") (`Bindings::prompt`). The original shows the button's
+- The prompt under the crosshair names the Activate control's own key ("[E]") or, with a
+  controller, its button ("[A]") (`Bindings::prompt`). The original shows the button's
   picture there (`&xbuttona;`, `general_button_a.dds`): NVForever draws its own for the
   four face buttons under the PlayStation names (§3a), and letters stand in for the rest.
+- **Hint shape** (#4495): every key hint is the key's name in square brackets, "[E]",
+  "Take All [R]", "Close [B]", the shape NVForever's own labels for `sPCMenuHint*` use
+  [design: the original's "E)" shape was read from its screen, and strings seen only on the
+  screen are not transcribed (LEGAL.md)]. The "X)" examples below and in the spec notes
+  describe the original.
 - **Menu hints follow the device** (#1662). Every hint names the key its menu answers
   ("Take All R)", "Close [E]") or, with a controller, the button that presses that key
   there (`pad::hint`, looked up in the tables above through `pad::button_for`, the

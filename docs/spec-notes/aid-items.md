@@ -91,7 +91,41 @@ The ActorValue page's three pools (actor-values.md §1) [documented: ActorValue]
     scripts.md §7.6].
   - With a duration it acts **magnitude per second** while it lasts [hypothesis: the
     Hardcore Stimpak restores 5 for 6 s where the normal one restores 30 at once; Nuka-Cola
-    2 for 25 s]. An ability (no duration) without Recover acts once [hypothesis].
+    2 for 25 s]. An ability (no duration) without Recover acts once [hypothesis], but for
+    a regeneration:
+  - **Regeneration** (#3471). The base effect `Regen` (0x000F3D42, named "Regeneration":
+    Health, flags Self and No Duration, no Recover) is the only Health one with No Duration
+    in FalloutNV.esm and the add-ons [observed: `fnvtool esm decode` of every MGEF in the ten
+    masters, 2026-11-24]. Its users: the
+    stages of radiation sickness `Radiation200` to `Radiation800` (Disease; 2, 4, 6, 8, on
+    `HasPerk RadChild`), and the Abilities `PerkSolarPowered` (1, outdoors from 6 to 18),
+    `RegenLow` (3) and `RegenMed` (5; `VLegateScript`, God), Dead Money's
+    `NVDLC01RegenDean` (1), `…02` (3) and `…03` (5) and `NVDLC01HologramRegen` (100), and
+    Old World Blues's `NVDLC03HologramRegen` (100) [observed]. The perks' words are "you
+    will regenerate more and more health" and "slowly regenerate lost Health" [observed:
+    PERK DESC of `RadChild`, `SolarPowered`], though the GECK wiki calls a No Duration
+    effect "instantaneous" [documented: Base Effect]. So in a permanent effect (an ability,
+    a stage's) such an effect that is neither Hostile nor Detrimental gives Health back
+    every frame while it is active, never past the maximum, magnitude ×
+    `fnv_game::aid::REGENERATION_RATE` (1) per real second [observed:
+    obs284_rad_child_regen, obs284_stage250: 2, 4, 6 and 8 at the stages, 1 for Solar
+    Powered, 5 for the Legate, 100 for Dead Money's holograms], and not on the dead
+    [hypothesis]. Cast once it acts at once. A stage change swaps the rate in the frame
+    [observed: obs284_rad_child_regen]; a perk added or lost is noticed within a second
+    (0.3 to 0.9 s [observed: obs284_rad_child_regen, obs284_stage250]), here at the next
+    condition check (§13). A wait gives the seconds its hours stand for (§6)
+    [hypothesis: observer check 3471-rad-child-regeneration-rate, still open for the Wait
+    menu; moving `GameHour` or `TimeScale` gave nothing extra [observed:
+    obs284_rad_child_regen]]. A game saved before
+    2026-11-23 holds it as a single restoration, which a load turns into the rate.
+  - Left acting once, for want of evidence that they repeat [hypothesis]: "Restore Health"
+    (without the flag) in `GhoulRadHeal` (10, with the subject in radiation), Lonesome
+    Road's `NVDLC04MarkedMenRadHeal` (15) and its worn `NVDLC04ArmorPowerNCRScorchedOE` (2),
+    and the limb restorations of `MS03PerkMutation` (1 each, from 400 rads) and
+    `NVDLC03TorsoRestoration` (100). "Damage Health" 10,000 of the fatal stages
+    (`Radiation1000`, `Dehydration1000`, `Starvation1000`, `SleepDeprivation1000`) is
+    Hostile and Detrimental and stays at once [observed: their records]. The Monocyte
+    Breeder and Old World Blues's regenerating helmets are Script effects [observed].
 - The **sign**: Detrimental lowers, the rest raise or restore [hypothesis: the effect names,
   "Increase …"/"Restore …" without the flag, "Reduce …"/"Damage …" with it].
 - **Values that grow** — Rad Level (rads), Dehydration, Hunger, Sleep Deprivation — go the
@@ -244,8 +278,16 @@ Food:      fMagicSurvivalSkillBase + fMagicSurvivalSkillMult × Survival / 100  
   FalloutNV.esm); that effects go with them, and at the TimeScale's pace, is ours].
   Buffout (240 s) wears off in the second hour waited; the usage monitors (108,000 s)
   last 900 hours waited. Each effect runs one ScriptEffectUpdate with the hour's
-  seconds, a value changed by the second changes by the seconds of its duration left,
-  and an effect whose time is up finishes [hypothesis].
+  seconds, a value changed by the second changes by the seconds of its duration left
+  (a regeneration, §3, by all of them), and an effect whose time is up finishes
+  [hypothesis]. Conditions are checked before each step, with the clock already moved
+  [design: the game's own time stands still in the menu, so the once-a-second check
+  would not come round, and Solar Powered would heal all night]. **Known limit**: a
+  jump of several hours in one step (SetGameHour, fast travel) checks conditions once,
+  at the destination, and then advances the whole jump under that answer. Solar Powered
+  from 17:00 to 20:00 heals nothing, and from 3:00 to 9:00 the whole six hours. The
+  Sleep / Wait menu steps hour by hour, so its error is at most an hour. Not split into
+  intervals [design].
 - An effect with a duration whose conditions fail when it is applied (a Stimpak's
   Hardcore heal over time used outside Hardcore) is held inactive, as a spell's is
   (§5.3), and its time runs all the same: it goes when its duration has passed, with no

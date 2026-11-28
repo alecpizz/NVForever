@@ -85,15 +85,7 @@ pub use fnv_game::item_text::{avif_form, changes_text, whole, Change};
 
 // The karma's alignment, the titles and their columns live with the rules
 // (`fnv_game::karma_titles`), which GetPlayerKarmaTitle reads too.
-pub use fnv_game::karma_titles::{karma_alignment, karma_column, karma_title, karma_title_with_ttw, TtwKarmaTitles, KARMA_TITLES};
-
-/// The setting alone, without the table, for a view drawn from the menu's file. Unlike [`karma_title`] it also finds the two-digit names.
-pub fn karma_title_setting(level: i64, alignment: &str, setting: impl Fn(&str) -> Option<String>) -> Option<String> {
-    let level = level.clamp(1, 30) as usize;
-    // FalloutNV.esm spells levels below 10 with two digits (`sKarmicTitleNeutral01`) [documented: `fnvtool esm inventory`].
-    let column = ["Good", "Neutral", "Evil"][karma_column(alignment)];
-    [format!("sKarmicTitle{column}{level:02}"), format!("sKarmicTitle{column}{level}")].iter().find_map(|name| setting(name).filter(|s| !s.is_empty()))
-}
+pub use fnv_game::karma_titles::{karma_alignment, karma_column, karma_title, karma_title_setting, karma_title_with_ttw, TtwKarmaTitles};
 
 /// [`karma_title_setting`] with optional `Data\NVSE\Plugins\TTW.ini` `[Karma Titles]`
 /// overrides checked first (the INI file belongs to the player's installed data, not a
@@ -353,21 +345,21 @@ mod tests {
         assert_eq!(karma_alignment(0.0, -750.0, -250.0, 250.0, 750.0).0, "Neutral");
         assert_eq!(karma_alignment(250.0, -750.0, -250.0, 250.0, 750.0).0, "Good");
         assert_eq!(karma_alignment(-800.0, -750.0, -250.0, 250.0, 750.0), ("Very Evil", "karma_evil"));
-        // The plugins' setting wins; the owner's table fills the rest; 30 and over share.
+        // The plugins' setting wins; a level without one takes the nearest in its column;
+        // none at all, the alignment word; 30 and over share.
         let esm = |n: &str| (n == "sKarmicTitleEvil29").then(|| "Demon Spawn".to_string());
         assert_eq!(karma_title(29, "Very Evil", esm), "Demon Spawn");
-        assert_eq!(karma_title(29, "Neutral", esm), "Gray Stranger");
-        assert_eq!(karma_title(1, "Good", |_| None), "Samaritan");
-        assert_eq!(karma_title(45, "Evil", |_| None), "Devil");
-        assert_eq!(karma_title(7, "Neutral", |_| None), "Vagabond of the Wastes");
+        assert_eq!(karma_title(45, "Evil", esm), "Demon Spawn");
+        assert_eq!(karma_title(29, "Neutral", esm), "Neutral");
+        assert_eq!(karma_title(1, "Good", |_| None), "Good");
         assert_eq!(karma_title_setting(29, "Very Evil", esm).as_deref(), Some("Demon Spawn"));
         assert_eq!(karma_title_setting(29, "Neutral", esm), None);
         let padded = |n: &str| (n == "sKarmicTitleNeutral01").then(|| "From the plugin".to_string());
         assert_eq!(karma_title_setting(1, "Neutral", padded).as_deref(), Some("From the plugin"));
-        assert_ne!(karma_title(1, "Neutral", padded), "From the plugin", "the hand-built page keeps the table");
+        assert_eq!(karma_title(1, "Neutral", padded), "From the plugin");
         assert_eq!(reputation_title(0, 0), "Neutral");
-        assert_eq!(reputation_title(3, 0), "Idolized");
-        assert_eq!(reputation_title(1, 1), "Mixed");
+        assert_eq!(reputation_title(3, 0), "Celebrated");
+        assert_eq!(reputation_title(1, 1), "Uncertain");
     }
 
     #[test]

@@ -296,7 +296,12 @@ work in New Vegas.
 - **Collision markers and collision layers** are not described on these pages. [observed]:
   no reference in FalloutNV.esm has `XTRI`, and the Vigor Tester trigger 0x00104C16 and its
   activator 0x00104C07 carry no record flags, so where the GECK stores ActorZone and
-  Projectile is unknown (§13).
+  Projectile is unknown (§13). In Fallout3.esm, `MS01TriggerJunkyard1Ref` (0x000651DA),
+  `MS01TriggerJunkyard2Ref` (0x0002E738, both `OnHit` shooting-range triggers), and
+  `0x00054468` (`FFBaseballSCRIPT`: `OnTriggerEnter`, `OnHitWith`) carry `XTRI` 23
+  [documented: xEdit names layer 23 `Projectile Zone`; GECK wiki Creating Primitives: the
+  Projectile flag is "Used for triggers which can be activated by a projectile";
+  hypothesis: `XTRI` 23 is how the Projectile flag is stored, #3662].
 
 ### 4.1 What a primitive shows in game
 
@@ -490,7 +495,7 @@ scripts, so picking one up is detected from a trigger with `GetHasNote`
 | T2 | Trigger detection: how | a collision check of the object against the volume; thin triggers can be missed at low frame rates [Primitives] | since 5D round 2: the actor's capsule (the player's physics capsule; `CharacterParams::default()` × scale for others [hypothesis]) against the box or sphere, once per frame | `engine/nvf-play/src/script_events.rs` (`Capsule`, `TriggerShape::touches`), layer5-play.md §3 | agrees in method (geometric, not physics sensors, T6); capsule sizes hypothesis |
 | T3 | OnTrigger frequency | every frame while inside [Basic Quest] | every frame inside, entering frame included, OnTriggerEnter first on that frame [hypothesis] | script_trigger.rs, layer5-play.md §3 | settled for frequency; order on the first frame still open (§13 question 2) |
 | T4 | Trigger scripts and cell loading | trigger scripts run only while their cell is loaded [Basic Quest] | candidates are scripted references of loaded cells | script_trigger.rs | agrees |
-| T5 | Trigger flags | ActorZone and Projectile flags on the primitive [Primitives] | not read anywhere; storage unknown (no `XTRI` in FalloutNV.esm) | `crates/fnv-phys/src/primitive.rs`, schemas/fnv/world.json | gap (data) |
+| T5 | Trigger flags | ActorZone and Projectile flags on the primitive [Primitives] | `XTRI 23` (`Projectile Zone`) scripted primitives (`OnHit`/`OnHitWith`) are crossed by flying and hitscan shot segments without stopping the shot (`script_trigger::projectile_zones`, `combat::fly` -> `Game::hit_object`) [hypothesis: #3662]; ActorZone still unread (no `XTRI` in FalloutNV.esm) | `crates/fnv-phys/src/primitive.rs`, `engine/nvf-play/src/script_trigger.rs`, `engine/nvf-play/src/combat.rs` | Projectile Zone built (hypothesis); ActorZone open |
 | T6 | "Physics sensors (5D)" | detection is the physics engine's collision | layer5.md §3.4 table already says physics sensors; the implementation is geometric | docs/design/layer5.md §3.4 vs layer5-play.md §3 | consistent with the plan, not with the interim code |
 | C1 | Room/portal culling | rooms, portals, unbounded space, portal frusta (§3.1) | built (#606): in interiors only the rooms seen through portals are drawn; membership by box overlap grown by 32 units, the narrower frustum a screen rectangle, everything drawn with the camera in no room (never the void); portals wholly behind an occlusion plane are not followed (C3); `--no-room-culling` turns it off | `engine/nvforever/src/rooms.rs`, smoke `rooms-repconn` | simplified (performance; the original can show "the void" where portals are missing, NVForever does not) |
 | C2 | Moved objects and rooms | a settled object is drawn only with its original room [Optimization] | dropped items, actors and effects are never room-culled; moved objects are always drawn | `engine/nvf-play/src/dropped.rs`, world.rs | difference (fidelity edge case) |

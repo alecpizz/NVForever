@@ -54,12 +54,6 @@ fn list(g: &mut Game, items: Vec<XVal>) -> XVal {
 /// nvse_steam_loader give 1, "jip_nvse.dll" 0].
 const DLLS: [&str; 7] = ["jip_nvse", "johnnyguitar", "showoffnvse", "knvse", "mcm", "nvse_1_4", "nvse_steam_loader"];
 
-/// ALCH ENIT flag bits by LU's flag ID: 0 none, 1 and 3 bit 0 (No Auto-Calc), 2 bit 1
-/// (Food Item) [observed: plugins1 and plugins2, Cram and Beer (flags 3) read 0 1 1 1,
-/// Nuka-Cola, a poison (flags 1) and the stimpak (flags 5) 0 1 0 1, Silver Sting (0)
-/// 0 0 0 0; hypothesis: what IDs 1 and 3 stand for].
-const INGESTIBLE_BITS: [Option<u32>; 4] = [None, Some(0), Some(1), Some(0)];
-
 /// ShowOff's easing of `t` (0–1) by name and mode, 0 in, 1 out, 2 in-out, the Penner
 /// curves; an unknown name gives -1 [observed: plugins1 and plugins2, quad, cubic, quart,
 /// quint, sine, expo, circ, back, elastic and bounce at 0.25 in all three modes;
@@ -211,10 +205,18 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
             let a = subject.unwrap_or(FormId::PLAYER_REF);
             XVal::Num(if a == FormId::PLAYER_REF { f64::from(g.player.perks.get(&p).copied().unwrap_or(0)) } else { 0.0 })
         }
+        // `ingestible flag`: bitmask test `(ENIT.flags & flag) != 0` (1 No Auto-Calc, 2
+        // Food Item, 4 Medicine) [observed: plugins1 and plugins2; Fallout: New Vegas
+        // 1.4.0.525 + xNVSE 6.4.9 + JIP LN 57.30, 2026-11-25, GSDocMitchellHouse
+        // (0x00103DF9), 10 official base masters,
+        // `w6d2p2_25_ingestible_flag_and_skill_magazine`
+        // (`tools/capture/nvse/catalogs/wave6d2_get_ingestible_flag_bitmask.json`):
+        // `stim=1,0,1,1,1,1|cram=1,0|set4=0->1(ef2=1)->0|mag=1,0`].
         "getingestibleflag" => {
             let flags = form(args, 0).and_then(|f| g.ingestible_def(f)).map_or(0, |d| u32::from(d.flags));
-            let k = num(args, 1, -1.0);
-            yes((0.0..4.0).contains(&k) && INGESTIBLE_BITS[k as usize].is_some_and(|b| flags >> b & 1 != 0))
+            let k = num(args, 1, 0.0);
+            let mask = if k.is_finite() && k > 0.0 && k <= f64::from(u32::MAX) && k.fract() == 0.0 { k as u32 } else { 0 };
+            yes(mask != 0 && (flags & mask) != 0)
         }
         // [observed: plugins1, 2]
         "getdefaultmessagetime" => XVal::Num(crate::nvse_lutana::message_time(g)),
@@ -273,12 +275,14 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
             XVal::Num(((p[3] - p[0]).powi(2) + (p[4] - p[1]).powi(2) + (p[5] - p[2]).powi(2)).sqrt())
         }
         // Load-order override queries backed by `GameData::form_overrides`
-        // [documented: GECK wiki GetFormOverrideIndex, IsFormOverridden;
+        // [documented: GECK wiki GetFormOverrideIndex, IsFormOverridden ("overridden by a
+        // plugin lower in the load order than the calling script");
         // observed: plugins1, non-overridden Stimpak returns 0 and 0;
         // observed: Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 + JohnnyGuitarNVSE 528,
-        // clean-room script probe jg_01_form_override_index_edge: overridden pistol=5,
-        // null=0, TempCloneForm=255, IsFormOverridden(clone)=0; no DLL or source consulted].
-        "isformoverridden" => yes(form(args, 0).or(subject).is_some_and(|f| g.data.is_form_overridden(f))),
+        // clean-room script probe jg_01_form_override_index_edge (runtime CompileScript
+        // caller): overridden pistol GetFormOverrideIndex=5, null=0, TempCloneForm=255,
+        // IsFormOverridden(pistol)=0, IsFormOverridden(clone)=0; no DLL or source consulted].
+        "isformoverridden" => yes(form(args, 0).or(subject).is_some_and(|f| g.data.is_form_overridden_after(f, &g.other.plugin))),
         "getformoverrideindex" => {
             let Some(f) = form(args, 0).or(subject) else { return Some(Ok(XVal::Num(0.0))) };
             let idx = if let Some(i) = g.data.form_override_index(f) {
@@ -392,8 +396,17 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
             _ => XVal::Ref(0),
         },
         "setbipedmodellist" => {
-            if let Some(f) = form(args, 0) {
-                g.field_overrides.insert((f, "BIPL/".into()), XVal::Ref(form(args, 1).map_or(0, |l| l.0)));
+            if let Some(f) = form(args, 0).filter(|&f| g.data.sig(g.unclone(f)) == Some(*b"ARMO")) {
+                match args.get(1) {
+                    None => {
+                        g.field_overrides.insert((f, "BIPL/".into()), XVal::Ref(0));
+                    }
+                    Some(_) => {
+                        if let Some(l) = form(args, 1).filter(|&l| g.data.sig(g.unclone(l)) == Some(*b"FLST")) {
+                            g.field_overrides.insert((f, "BIPL/".into()), XVal::Ref(l.0));
+                        }
+                    }
+                }
             }
             zero
         }
@@ -449,9 +462,13 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
         }
         // `armor modelID(1-4) index3D`, success(0/1) [documented: ClearArmorAltTexture].
         // NVForever keeps no alternate textures on armour models [hypothesis], so there is
-        // nothing at any index to clear (0), while clearing them all (-1) succeeds
-        // [observed: plugin-odds, armour 00020423 model 1: index -1 gave 1, index 0 gave
-        // 0]; no form or a model ID outside 1-4 gives 0 [hypothesis].
+        // nothing at any index to clear (0), while clearing them all (-1) succeeds on
+        // modelID 1..=4 and fails (0) on modelID 0 or 5 or index 0 or 99 [observed:
+        // plugin-odds, armour 00020423 model 1: index -1 gave 1, index 0 gave 0; observed
+        // 2026-11-24: `w6t2_30_jg5_get_weapons_for_mod_and_armor_alt_tex`
+        // (`tools/capture/nvse/catalogs/wave6_t2_observed_matches.json`):
+        // `clr(1m1=1,10=0,4m1=1,0m1=0,5m1=0,199=0)`; zero DLL, PDB, or third-party source
+        // consulted]; no form gives 0 [hypothesis].
         "cleararmoralttexture" => {
             yes(form(args, 0).is_some() && (1.0..=4.0).contains(&num(args, 1, 0.0)) && num(args, 2, 0.0) == -1.0)
         }
@@ -459,7 +476,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
         "setjohnnyonstartquesteventhandler" | "setjohnnyonstopquesteventhandler" => {
             let start = name == "setjohnnyonstartquesteventhandler";
             let Some(f) = args.get(1).cloned() else { return Some(Ok(zero)) };
-            let quest = form(args, 3);
+            let quest = form(args, 3).filter(|&id| id != FormId(0x0000_003B));
             g.gaps.quest_handlers.retain(|(s, h, q)| !(*s == start && *h == f && *q == quest));
             if num(args, 0, 1.0) != 0.0 {
                 g.gaps.quest_handlers.push((start, f, quest));
@@ -609,10 +626,11 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
             g.player.xp += num(args, 0, 0.0).trunc();
             zero
         }
-        // `set|remove function flag [code]` [documented: SetOnActorValueChangeEventHandler].
+        // `set|remove function flag [code]` [documented: SetOnActorValueChangeEventHandler;
+        // observed 2026-11-24: -1 is a wildcard like omitted].
         "setonactorvaluechangeeventhandler" => {
             let Some(f) = args.get(1).cloned() else { return Some(Ok(zero)) };
-            let code = args.get(3).and_then(|v| v.num().ok()).map(|c| c as u16);
+            let code = args.get(3).and_then(|v| v.num().ok()).filter(|&c| c >= 0.0).map(|c| c as u16);
             let exact = (num(args, 2, 0.0) as i64) & 1 != 0;
             g.gaps.av_handlers.retain(|(h, c, _)| !(*h == f && *c == code));
             if num(args, 0, 1.0) != 0.0 {

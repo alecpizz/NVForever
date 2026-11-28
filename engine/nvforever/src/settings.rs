@@ -30,6 +30,7 @@ use crate::player_body::PlayerBody;
 use crate::sky::SkyState;
 use crate::ssao::{AoLevel, AO_CHOICES};
 use crate::upscaler::{DlssModel, UpscaleQuality, Upscaler, UpscalerChoice};
+use crate::volumetric_clouds::{CloudLevel, CLOUD_CHOICES};
 use crate::window_mode;
 use crate::world::Streamer;
 use crate::{Args, Overlay};
@@ -128,61 +129,7 @@ pub fn register(app: &mut App) {
         },
     );
     // The resolution first, then full screen [owner 2026-10-18].
-    add_choice_list(
-        app,
-        Setting {
-            key: "resolution",
-            group: GROUP_PICTURE,
-            label: "Resolution",
-            note: "The window's size, or in full screen the monitor's (its own size: borderless). A new one goes back after 20 seconds unless you keep it.",
-            switches: "--size",
-            get: |_| false,
-            set: |_, _| {},
-            slider: None,
-        },
-        ChoiceList {
-            names: window_mode::resolution_names,
-            chosen: window_mode::resolution_chosen,
-            pick: window_mode::resolution_pick,
-            save: window_mode::resolution_save,
-            load: window_mode::resolution_load,
-            ask_keep: true,
-        },
-    );
-    add_setting(
-        app,
-        Setting {
-            key: "borderless",
-            group: GROUP_PICTURE,
-            label: "Full screen",
-            note: "On: the game fills its monitor without a frame, at the full screen resolution above. Off: a window of the window resolution.",
-            switches: "--window",
-            get: |w| w.resource::<Args>().window == window_mode::WindowChoice::Borderless,
-            set: window_mode::set_borderless,
-            slider: None,
-        },
-    );
-    add_choice_list(
-        app,
-        Setting {
-            key: "monitor",
-            group: GROUP_PICTURE,
-            label: "Monitor",
-            note: "The display the game opens on in full screen (the main display until you pick one).",
-            switches: "--window",
-            get: |_| false,
-            set: |_, _| {},
-            slider: None,
-        },
-        ChoiceList {
-            names: window_mode::monitor_names,
-            chosen: window_mode::monitor_chosen,
-            pick: window_mode::monitor_pick,
-            save: window_mode::monitor_save,
-            load: window_mode::monitor_load,
-            ask_keep: false,
-        },
-    );
+    register_window_display(app);
     if has_body {
         add_setting(
             app,
@@ -375,6 +322,9 @@ pub fn register(app: &mut App) {
     register_display(app);
     register_distances(app);
     register_graphics(app);
+    if crate::mobile_performance::enabled() {
+        crate::mobile_performance::register(app);
+    }
     // The Quality and Enhanced effects rows over the rows above (#1966).
     crate::quality::register(app, GROUP_GRAPHICS);
     // Renderer edits are latched by the shared settings setters, including Defaults.
@@ -519,9 +469,13 @@ fn register_display(app: &mut App) {
         .with_switches("--viewmodel-fov"),
     );
     // The HUD's size (#1631), kept by nvf-play's interface and fixed for the run at start.
-    let (row, list) = nvf_play::interface::ui_scale_row(GROUP_PICTURE);
-    nvf_play::settings::add_choice_list(app, row, list);
+    nvf_play::interface::register_hud_scale(app, GROUP_PICTURE);
     nvf_play::menu_scale::register(app, GROUP_PICTURE);
+    #[cfg(target_os = "android")]
+    {
+        nvf_play::menu_readability::register(app, GROUP_PICTURE);
+        nvf_play::hud_readability::register(app, GROUP_PICTURE);
+    }
     add_setting(
         app,
         Setting {
@@ -564,6 +518,10 @@ fn register_display(app: &mut App) {
         },
     );
     app.add_systems(PostStartup, read_old_vsync.after(nvf_play::settings::apply_stored));
+    register_frame_cap(app);
+}
+
+fn register_frame_cap(app: &mut App) {
     // A list of the limits [design: the menu overhaul]; the INI's older slider part loads.
     add_choice_list(
         app,
@@ -1124,7 +1082,7 @@ fn register_graphics(app: &mut App) {
         Setting {
             key: "light-shadows",
             group: GROUP_GRAPHICS,
-            label: "ALC shadows",
+            label: "ALCS (experimental)",
             note: LIGHT_SHADOWS_NOTE,
             switches: "--light-shadows",
             get: |_| false,
@@ -1188,7 +1146,14 @@ fn register_graphics(app: &mut App) {
         Setting { key: AO_KEY, group: GROUP_GRAPHICS, label: "Ambient occlusion", note: AO_NOTE, switches: "--graphics, --ambient-occlusion", get: |_| false, set: |_, _| {}, slider: None },
         ChoiceList { names: |_| AO_CHOICES.iter().map(|c| (*c).to_string()).collect(), chosen: ao_chosen, pick: take_ao, save: ao_chosen, load: take_ao, ask_keep: false },
     );
-    let switches: [Switch; 24] = [
+    // Volumetric clouds: a list of Off and its levels [design, 2026-11-23: 7
+    // or fewer values]; the INI's older on/off still loads, on as Normal.
+    add_choice_list(
+        app,
+        Setting { key: CLOUDS_KEY, group: GROUP_GRAPHICS, label: "Volumetric clouds (experimental)", note: CLOUDS_NOTE, switches: "--graphics-only", get: |_| false, set: |_, _| {}, slider: None },
+        ChoiceList { names: |_| CLOUD_CHOICES.iter().map(|c| (*c).to_string()).collect(), chosen: clouds_chosen, pick: take_clouds, save: clouds_chosen, load: take_clouds, ask_keep: false },
+    );
+    let switches: [Switch; 26] = [
         (
             "fine-shadows",
             "Longer sun shadows",
@@ -1336,6 +1301,14 @@ fn register_graphics(app: &mut App) {
             |w, on| w.resource_mut::<Graphics>().desert_haze = on,
         ),
         (
+            VOLUMETRIC_LIGHT_KEY,
+            "Volumetric light (experimental)",
+            VOLUMETRIC_LIGHT_NOTE,
+            "--graphics-only",
+            |w| w.resource::<Graphics>().volumetric_light,
+            |w, on| w.resource_mut::<Graphics>().volumetric_light = on,
+        ),
+        (
             "aerial-perspective",
             "Aerial perspective (experimental)",
             "On: far land takes on the sky's colours with distance, bluer at noon, warmer at dusk, brighter toward the sun, inside the weather's fog. Not in the original.",
@@ -1350,6 +1323,14 @@ fn register_graphics(app: &mut App) {
             "--graphics, --graphics-only",
             |w| w.resource::<Graphics>().night_sky_detail,
             |w, on| w.resource_mut::<Graphics>().night_sky_detail = on,
+        ),
+        (
+            "physical-pbr",
+            "Physical lighting (experimental)",
+            PHYSICAL_PBR_NOTE,
+            "--graphics-only",
+            |w| w.resource::<Graphics>().physical_pbr,
+            |w, on| w.resource_mut::<Graphics>().physical_pbr = on,
         ),
         (
             "distant-lights",
@@ -1369,8 +1350,8 @@ fn register_graphics(app: &mut App) {
         ),
         (
             "water-effects",
-            "Water caustics and river flow",
-            "Sunlight shifts across shallow beds. Deeper water looks murkier from shore and underwater. Selected rivers drift downstream.",
+            "Enhanced water effects",
+            "Sunlight shifts across shallow beds. Deeper water looks murkier. Selected rivers flow, shorelines lap, and shots and blasts disturb the surface.",
             "--graphics, --graphics-only",
             |w| w.resource::<Graphics>().water_effects,
             |w, on| w.resource_mut::<Graphics>().water_effects = on,
@@ -1398,7 +1379,63 @@ fn register_graphics(app: &mut App) {
     for (key, label, note, switches, get, set) in switches {
         add_setting(app, Setting { key, group: GROUP_GRAPHICS, label, note, switches, get, set, slider: None });
     }
+    // Read once at the start like Authored materials; the row keeps the next start's choice
+    // (gpu_occlusion.rs).
+    crate::gpu_occlusion::add_row(app, GROUP_GRAPHICS);
     nvf_play::settings::set_needs_in_game(app, "terrain-parallax", |w| parallax_status(nvf_assets::authored::enabled(), w.get_resource::<Graphics>().is_some_and(|g| g.authored_materials)));
+    // #3032 stage 3: the light in the air's strength, 0 to 200 % in steps of 10 (greyed while
+    // its switch is off: `settings_layout::NEEDS`); Sun shafts are greyed while the light is
+    // wanted at a strength above 0 (they yield to it where it draws, shafts.rs): the game's page
+    // alone, for the launcher's shared rules know no slider's value.
+    nvf_play::settings::set_needs_in_game(app, "light-shafts", |w| {
+        use crate::medium_air_demand::{AirStrengthSetting, AirWanted};
+        #[cfg(any(test, debug_assertions, feature = "dev-aids"))]
+        let aid = w.get_resource::<crate::medium_air_demand::AirAid>().is_some_and(|a| a.0);
+        #[cfg(not(any(test, debug_assertions, feature = "dev-aids")))]
+        let aid = false;
+        shafts_status(w.get_resource::<AirWanted>().is_some_and(|a| a.0), aid, w.get_resource::<AirStrengthSetting>().copied().unwrap_or_default().0)
+    });
+    add_setting(app, Setting::slider(VOLUMETRIC_LIGHT_STRENGTH_KEY, GROUP_GRAPHICS, "Volumetric light strength", VOLUMETRIC_LIGHT_STRENGTH_NOTE, air_strength_slider()));
+}
+
+/// Why the Sun shafts row cannot apply: the light in the air is wanted (so drawn on this device)
+/// at a strength above 0 (the debug aid's always is); at 0 the shafts draw.
+fn shafts_status(wanted: bool, aid: bool, strength: f32) -> Option<&'static str> {
+    (wanted && (aid || strength > 0.0)).then_some("Replaced by Volumetric Light.")
+}
+
+/// The Volumetric light row's key (#3032 stage 3; graphics.rs `Graphics::volumetric_light`).
+pub(crate) const VOLUMETRIC_LIGHT_KEY: &str = "volumetric-light";
+/// Its strength's slider (medium_air_demand.rs `AirStrengthSetting`).
+pub(crate) const VOLUMETRIC_LIGHT_STRENGTH_KEY: &str = "volumetric-light-strength";
+
+/// The Volumetric light row's note: what it does and what it looks best with (its rays are
+/// cut by the Cloud shadows image and the Terrain shadows map, medium_air_grid.rs) [design].
+pub(crate) const VOLUMETRIC_LIGHT_NOTE: &str = "On: sunlight and moonlight show in the air as rays and a glow toward a low sun. An addition of NVForever's.";
+
+/// The strength slider's note [design].
+pub(crate) const VOLUMETRIC_LIGHT_STRENGTH_NOTE: &str = "How strongly the light in the air brightens lit air and darkens shaded air: 100% is the look as tuned, 0% none.";
+
+/// The strength's slider: the part strength / 2 (0..=1) in steps of 0.05 (10 %), shown as
+/// 0 to 200 %; read from and written to `AirStrengthSetting` (made when it is not there yet:
+/// the INI is read before every plugin's resource may exist) [design].
+fn air_strength_slider() -> Slider {
+    use crate::medium_air_demand::AirStrengthSetting;
+    Slider {
+        get: |w| w.get_resource::<AirStrengthSetting>().copied().unwrap_or_default().part(),
+        set: |w, v| {
+            let next = AirStrengthSetting::from_part(v);
+            match w.get_resource_mut::<AirStrengthSetting>() {
+                Some(mut s) => {
+                    s.set_if_neq(next);
+                }
+                None => w.insert_resource(next),
+            }
+        },
+        min: 0.0,
+        step: 0.05,
+        shown: Some(AirStrengthSetting::shown),
+    }
 }
 
 /// The Terrain parallax row's availability in the game, by the run's Authored materials
@@ -1423,7 +1460,7 @@ pub(crate) const PARALLAX_RESTART: &str = "After a restart (Authored Materials)"
 
 /// The Authored materials row's note (#2981): it takes effect at the next start, as the run's
 /// state is fixed before the first material (main.rs).
-pub(crate) const AUTHORED_MATERIALS_NOTE: &str = "On: surfaces whose textures a texture pack gives material maps for (textures\\pbr\\) are shaded from them. Off: every surface uses the game's own values. Takes effect at the next start.";
+pub(crate) const AUTHORED_MATERIALS_NOTE: &str = "On: a material pack's maps (textures\\pbr\\) shade its surfaces. Off: the game's own values. Takes effect at the next start.";
 
 /// The command-line switches the Authored materials row weighs against the INI at the start
 /// (`authored_after_ini`).
@@ -1441,9 +1478,25 @@ pub(crate) fn authored_after_ini(command_line: bool, given: Option<&nvf_play::se
     nvf_play::settings::switch_after_ini(command_line, stored, given, AUTHORED_MATERIALS_SWITCHES)
 }
 
+/// The Physical lighting row's note (graphics-enhanced.md §3.25).
+const PHYSICAL_PBR_NOTE: &str = "On: light, sky, fog and exposure follow physical rules instead of the original's display values. Still being tuned. Takes effect at the next start. Not in the original.";
+
+/// The run's Physical PBR lighting state, decided before the first shader hook and material
+/// by [`authored_after_ini`]'s rule: the command line's (`--graphics-only physical-pbr`),
+/// then the INI's stored row. In a build with the developer aids (dev_aids.rs),
+/// `NVF_PHYSICAL_PBR=1` or `0` overrides both, for comparing.
+pub(crate) fn physical_pbr_after_ini(command_line: bool, given: Option<&nvf_play::settings::GivenSwitches>) -> bool {
+    if let Some(v) = crate::dev_aids::var("NVF_PHYSICAL_PBR") {
+        return v.trim() == "1";
+    }
+    let Some(given) = given else { return command_line };
+    let stored = stored_at_start("physical-pbr").and_then(|v| nvf_play::settings::parse_switch(&v));
+    nvf_play::settings::switch_after_ini(command_line, stored, given, "--graphics-only")
+}
+
 /// The Reflections on authored materials row's note (#2981 reflections): it needs a pack and
 /// Authored materials, and takes effect at the next start (main.rs).
-pub(crate) const AUTHORED_REFLECTIONS_NOTE: &str = "On: pack materials reflect the sky outdoors and an approximation of the room and nearby lights indoors. Needs a material pack and Authored materials on. Takes effect at the next start.";
+pub(crate) const AUTHORED_REFLECTIONS_NOTE: &str = "On: pack materials reflect the sky outside and nearby lights inside. Needs Authored materials on. Takes effect at the next start.";
 
 /// The run's Reflections on authored materials state (#2981 reflections), decided before the
 /// first NIF pipeline by [`authored_after_ini`]'s rule: the command line's
@@ -1486,6 +1539,38 @@ fn take_ao(world: &mut World, text: &str) -> bool {
     true
 }
 
+/// The Volumetric clouds row's key and note (volumetric_clouds.rs `CloudLevel`).
+const CLOUDS_KEY: &str = "volumetric-clouds";
+const CLOUDS_NOTE: &str = "The weather's clouds drawn with depth and lit by the sun: Off, or Performance, Normal or High. A prototype. Not in the original.";
+
+/// The Volumetric clouds row's choice now: Off, or the level the clouds are drawn at.
+fn clouds_chosen(world: &World) -> String {
+    let g = world.resource::<Graphics>();
+    if g.volumetric_clouds { g.volumetric_clouds_level.name() } else { CLOUD_CHOICES[0] }.to_string()
+}
+
+/// The page's, the INI's and the test aids' Volumetric clouds: one of [`CLOUD_CHOICES`] (any
+/// case), or the row's older on/off as Normal and Off (it was never a slider, so no other
+/// number is read); false otherwise.
+fn take_clouds(world: &mut World, text: &str) -> bool {
+    let level = match text.trim() {
+        t if t.eq_ignore_ascii_case(CloudLevel::Performance.name()) => Some(CloudLevel::Performance),
+        t if t.eq_ignore_ascii_case(CloudLevel::Normal.name()) => Some(CloudLevel::Normal),
+        t if t.eq_ignore_ascii_case(CloudLevel::High.name()) => Some(CloudLevel::High),
+        t => match nvf_play::settings::parse_switch(t) {
+            Some(on) => on.then_some(CloudLevel::Normal),
+            None => return false,
+        },
+    };
+    let mut g = world.resource_mut::<Graphics>();
+    // Off keeps the level, as the Ambient occlusion row does.
+    let want = (level.is_some(), level.unwrap_or(g.volumetric_clouds_level));
+    if (g.volumetric_clouds, g.volumetric_clouds_level) != want {
+        (g.volumetric_clouds, g.volumetric_clouds_level) = want;
+    }
+    true
+}
+
 /// The Cloud shadows row's note (#2670; docs/design/sun-visibility.md): the label says the
 /// feature is experimental (as 3D scopes' says "(test)"), the note that its look is still
 /// being tuned (the relative rule, §7a, and the calibration, §8).
@@ -1503,7 +1588,7 @@ fn register_pipeline_waits(app: &mut App) {
         "anti-aliasing", "shadow-filter", "upscaler", "upscaler-quality", "ambient-occlusion",
         "fine-shadows", "bloom", "glow", "eye-adaptation", "neon-glow", "sharpen",
         "light-shafts", "water-reflections", "water-effects", "water-mirror", "sun-shadows", "grade",
-        "terrain-height-blend", "terrain-anti-tiling", "terrain-parallax", "cloud-shadows", "terrain-shadows", "heat-haze", MESH_BLEND_KEY, "distant-lights",
+        "terrain-height-blend", "terrain-anti-tiling", "terrain-parallax", "cloud-shadows", "terrain-shadows", "heat-haze", CLOUDS_KEY, VOLUMETRIC_LIGHT_KEY, MESH_BLEND_KEY, "distant-lights",
         // ALC shadows' first point and spot light shadow views specialize their passes.
         "light-shadows",
     ] {
@@ -1764,9 +1849,10 @@ fn take_shadow_resolution(w: &mut World, text: &str) -> bool {
     }
 }
 
-/// The ALC shadows row's note (light_shadows.rs; ALC: All Lights Cast, the user-visible
+/// The ALCS (experimental) row's note (light_shadows.rs; ALCS: All Lights Cast Shadows; the
+/// row was ALC shadows until 2026-11-24 and Lamp shadows until 2026-11-19; the user-visible
 /// name since 2026-11-19, once Lamp shadows; the INI key stays `light-shadows`).
-const LIGHT_SHADOWS_NOTE: &str = "ALC (All Lights Cast): lamps, fires and spot lights cast shadows within the shadow distance, so walls stop their light. Performance redraws less often. Costs frame rate. Not in the original.";
+const LIGHT_SHADOWS_NOTE: &str = "ALCS (All Lights Cast Shadows): lamps, fires and spot lights cast shadows in the shadow distance; Performance casts fewer. Costs frame rate. Not in the original.";
 
 fn light_shadows_chosen(w: &World) -> String {
     let choice = w.get_resource::<crate::light_shadows::LightShadows>().map_or(0, |l| l.choice);
@@ -2146,6 +2232,12 @@ fn set_overlay(world: &mut World, on: bool) {
 }
 
 #[cfg(test)]
+pub(crate) fn register_mobile_test_rows(app: &mut App) {
+    register_graphics(app);
+    register_frame_cap(app);
+}
+
+#[cfg(test)]
 mod fsr_settings_tests {
     use super::*;
 
@@ -2351,6 +2443,51 @@ mod fsr_settings_tests {
         app.insert_resource(Graphics::preset(graphics::Preset::Vanilla));
         register_graphics(&mut app);
         app
+    }
+
+    #[test]
+    fn android_player_defaults_allow_the_settings_export_but_explicit_overrides_do_not() {
+        use clap::Parser;
+        use nvf_play::settings_menu::write_menu;
+        use window_mode::WindowChoice::{Borderless, Windowed};
+
+        let _offer_probe = crate::dlss_download::TestOfferProbe::new(Some(false));
+        let dir = std::env::temp_dir().join(format!("nvf-android-start-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = rows_app();
+        app.insert_resource(SettingsFile(Some(dir.join("NVForever.ini"))));
+        let export = dir.join("settings-menu.json");
+
+        let line = crate::android_startup_line(Vec::new());
+        let mut restart = crate::restart_args(&line[1..]);
+        restart.extend(["--load", "quicksave"].map(String::from));
+        for line in [line, crate::android_startup_line(restart)] {
+            let args = Args::try_parse_from(&line).unwrap();
+            assert!(args.play);
+            assert_eq!(args.msaa, 1);
+            assert!(args.window == Borderless);
+            app.insert_resource(given_switches(&args, &line));
+            write_menu(app.world());
+            assert!(export.is_file(), "a normal Android start publishes the settings catalogue");
+            std::fs::remove_file(&export).unwrap();
+        }
+
+        let explicit = crate::android_startup_line(["--play", "--msaa=1", "--window=borderless"].map(String::from).to_vec());
+        let args = Args::try_parse_from(&explicit).unwrap();
+        assert_eq!(args.msaa, 1);
+        assert!(args.window == Borderless);
+        let given = given_switches(&args, &explicit);
+        assert!(given.given.iter().any(|flag| flag == "--window"));
+        app.insert_resource(given);
+        write_menu(app.world());
+        assert!(!export.exists(), "an explicit switch setting the same value still blocks export");
+
+        let custom = crate::android_startup_line(vec!["--play".into()]);
+        let args = Args::try_parse_from(&custom).unwrap();
+        assert_eq!(args.msaa, 4);
+        assert!(args.window == Windowed);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     fn row(app: &App, key: &str) -> usize {
@@ -2978,6 +3115,49 @@ dlss-model=Preset K
         assert_eq!(app.world().resource::<Graphics>().distant_objects, DistantObjects::Eight, "unchanged");
     }
 
+    /// The Volumetric clouds row is a list of Off and its levels: the choice sets the switch and
+    /// the level, Off keeps the level, and the INI's older on/off loads as Normal and Off.
+    #[test]
+    fn volumetric_clouds_are_a_list_of_off_and_the_levels() {
+        let _offer_probe = crate::dlss_download::TestOfferProbe::new(Some(false));
+        let mut app = rows_app();
+        let i = row(&app, CLOUDS_KEY);
+        let s = app.world().resource::<Settings>().list()[i];
+        assert_eq!((s.group, s.label, s.note, s.switches), (GROUP_GRAPHICS, "Volumetric clouds (experimental)", CLOUDS_NOTE, "--graphics-only"));
+        assert!(CLOUDS_NOTE.chars().count() <= 200 && CLOUDS_NOTE.ends_with("Not in the original."));
+        let list = app.world().resource::<Settings>().choices(i).expect("a list");
+        assert_eq!((list.names)(app.world()), ["Off", "Performance", "Normal", "High"]);
+        assert_eq!((list.chosen)(app.world()), "Off", "off at the start");
+        let state = |app: &App| {
+            let g = app.world().resource::<Graphics>();
+            (g.volumetric_clouds, g.volumetric_clouds_level)
+        };
+        for (name, level) in [("Performance", CloudLevel::Performance), ("High", CloudLevel::High), ("Normal", CloudLevel::Normal)] {
+            assert!(nvf_play::settings::pick(app.world_mut(), i, name));
+            assert_eq!((state(&app), (list.save)(app.world()).as_str()), ((true, level), name));
+        }
+        // The INI: the names in any case, the switch's older values.
+        for (text, want) in [
+            ("high", (true, CloudLevel::High)),
+            ("0", (false, CloudLevel::High)),
+            ("1", (true, CloudLevel::Normal)),
+            (" PERFORMANCE ", (true, CloudLevel::Performance)),
+            ("off", (false, CloudLevel::Performance)),
+            ("true", (true, CloudLevel::Normal)),
+            ("false", (false, CloudLevel::Normal)),
+            ("on", (true, CloudLevel::Normal)),
+            ("no", (false, CloudLevel::Normal)),
+            ("yes", (true, CloudLevel::Normal)),
+        ] {
+            assert!(take_clouds(app.world_mut(), text), "{text}");
+            assert_eq!(state(&app), want, "{text}");
+        }
+        for text in ["ultra", "0.5", "2", ""] {
+            assert!(!take_clouds(app.world_mut(), text), "{text}");
+        }
+        assert_eq!(state(&app), (true, CloudLevel::Normal), "a value not taken changes nothing");
+    }
+
     /// #2377: the command-line switches moved out of the notes into `Setting::switches`; each
     /// row of the Graphics tab still names the switches its note named, in the note's order
     /// (`--shadow-distance` of Longer sun shadows too: it was not "a part of" there), and no
@@ -3017,9 +3197,13 @@ dlss-model=Preset K
             ("light-shafts", &["--graphics"]),
             ("heat-haze", &["--graphics-only"]),
             ("desert-haze", &["--graphics", "--graphics-only"]),
+            ("volumetric-clouds", &["--graphics-only"]),
             ("aerial-perspective", &["--graphics", "--graphics-only"]),
             ("night-sky-detail", &["--graphics", "--graphics-only"]),
+            ("physical-pbr", &["--graphics-only"]),
             ("distant-lights", &["--graphics", "--graphics-only"]),
+            (VOLUMETRIC_LIGHT_KEY, &["--graphics-only"]),
+            (VOLUMETRIC_LIGHT_STRENGTH_KEY, &[]),
             ("water-reflections", &["--graphics"]),
             ("water-effects", &["--graphics", "--graphics-only"]),
             ("water-mirror", &["--graphics-only"]),
@@ -3035,6 +3219,71 @@ dlss-model=Preset K
         assert!(settings.list().iter().all(|s| !s.note.contains("--")), "no Graphics row's note names a switch");
         assert_eq!(nvf_play::settings::note_switches(FPS_COUNTER_SWITCHES), ["--fps"]);
         assert!(nvf_play::settings::note_switches(FPS_SPLIT_SWITCHES).is_empty());
+    }
+
+    /// #3032 stage 3: the Volumetric light switch is off in a vanilla start and switches
+    /// `Graphics::volumetric_light`; its strength slider runs 0 to 200 % in steps of 10 from
+    /// 100 % and is greyed while the switch is off (`settings_layout::NEEDS`); Sun shafts are
+    /// greyed while the light is wanted at a strength above 0.
+    #[test]
+    fn the_volumetric_light_rows_switch_scale_and_grey() {
+        use crate::medium_air_demand::AirStrengthSetting;
+        let mut app = rows_app();
+        let (on_row, strength_row, shafts) = (row(&app, VOLUMETRIC_LIGHT_KEY), row(&app, VOLUMETRIC_LIGHT_STRENGTH_KEY), row(&app, "light-shafts"));
+        let s = app.world().resource::<Settings>().list()[on_row];
+        assert_eq!((s.group, s.label, s.note, s.switches), (GROUP_GRAPHICS, "Volumetric light (experimental)", VOLUMETRIC_LIGHT_NOTE, "--graphics-only"));
+        assert!(s.slider.is_none() && !(s.get)(app.world()), "a switch, off in a vanilla start");
+        let k = app.world().resource::<Settings>().list()[strength_row];
+        assert_eq!((k.group, k.label, k.note, k.switches), (GROUP_GRAPHICS, "Volumetric light strength", VOLUMETRIC_LIGHT_STRENGTH_NOTE, ""));
+        let slider = k.slider.expect("a slider");
+        // 0..=1 in twentieths: 21 values, 0 % to 200 % in steps of 10 %.
+        assert_eq!(nvf_play::settings::slider_values(&slider), 21);
+        assert_eq!((slider.text(0.0), slider.text(slider.step), slider.text(1.0)), ("0%".to_string(), "10%".to_string(), "200%".to_string()));
+        assert_eq!((slider.get)(app.world()), 0.5, "100 % by default (no resource yet: the default)");
+        assert_eq!(slider.text((slider.get)(app.world())), "100%");
+        // The greyed states: the slider while the switch is off, Sun shafts while it is on.
+        let status = |app: &App, i: usize| app.world().resource::<Settings>().disabled_status(app.world(), i);
+        assert_eq!(status(&app, strength_row), Some("Needs Volumetric Light."));
+        assert_eq!(status(&app, shafts), None);
+        assert_eq!(nvf_play::settings::flip(app.world_mut(), on_row), Some(true));
+        assert!(app.world().resource::<Graphics>().volumetric_light);
+        assert_eq!(status(&app, strength_row), None);
+        // The demand follows in the next frame (medium_air_demand.rs; not on a device that cannot).
+        assert_eq!(status(&app, shafts), None, "not wanted yet");
+        app.insert_resource(crate::medium_air_demand::AirWanted(true));
+        assert_eq!(status(&app, shafts), Some("Replaced by Volumetric Light."));
+        // At 0 % the shafts draw, and the row says nothing.
+        assert_eq!(nvf_play::settings::set_slider(app.world_mut(), strength_row, 0.0), Some(0.0));
+        assert_eq!(status(&app, shafts), None, "0 %");
+        assert_eq!((shafts_status(true, true, 0.0), shafts_status(false, true, 1.0)), (Some("Replaced by Volumetric Light."), None), "the aid has a strength of its own");
+        // The slider sets the strength: 150 % is the part 0.75, strength 1.5.
+        assert_eq!(nvf_play::settings::set_slider(app.world_mut(), strength_row, 0.75), Some(0.75));
+        assert_eq!(*app.world().resource::<AirStrengthSetting>(), AirStrengthSetting(1.5));
+        assert_eq!(nvf_play::settings::flip(app.world_mut(), on_row), Some(false));
+        app.insert_resource(crate::medium_air_demand::AirWanted(false));
+        assert_eq!(status(&app, shafts), None);
+        assert_eq!(nvf_play::settings::set_slider(app.world_mut(), strength_row, 0.25), None, "greyed: not moved");
+    }
+
+    /// #3032 stage 3: both rows are kept in the INI by their keys and read back at the start.
+    #[test]
+    fn the_volumetric_light_rows_are_kept_in_the_ini() {
+        use crate::medium_air_demand::AirStrengthSetting;
+        let dir = std::env::temp_dir().join(format!("nvf-volumetric-light-rows-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("NVForever.ini");
+        let mut app = ini_app(&path, "[Settings]\nvolumetric-light=1\nvolumetric-light-strength=0.75\n", UpscalerChoice::Off, GivenSwitches::default());
+        assert!(app.world().resource::<Graphics>().volumetric_light, "the stored switch turns it on at the start");
+        assert_eq!(*app.world().resource::<AirStrengthSetting>(), AirStrengthSetting(1.5), "the stored 150 %");
+        let i = row(&app, VOLUMETRIC_LIGHT_STRENGTH_KEY);
+        nvf_play::settings::set_slider(app.world_mut(), i, 0.25);
+        let ini = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(fnv_install::ini_get(&ini, nvf_play::settings::SECTION, VOLUMETRIC_LIGHT_STRENGTH_KEY), Some("0.25".to_string()), "{ini}");
+        assert_eq!(fnv_install::ini_get(&ini, nvf_play::settings::SECTION, VOLUMETRIC_LIGHT_KEY), Some("1".to_string()), "{ini}");
+        let again = ini_app(&path, &ini, UpscalerChoice::Off, GivenSwitches::default());
+        assert_eq!(*again.world().resource::<AirStrengthSetting>(), AirStrengthSetting(0.5), "50 % at the next start");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// #3322 review: in the game the Terrain parallax row follows the run's Authored
@@ -3351,5 +3600,123 @@ mod terrain_wireframe_tests {
 
     fn row_of(app: &App, key: &str) -> usize {
         app.world().resource::<Settings>().index(key).unwrap()
+    }
+}
+
+/// Register the Display group's window rows (`resolution`, `borderless`, `monitor`).
+fn register_window_display(app: &mut App) {
+    add_choice_list(
+        app,
+        Setting {
+            key: "resolution",
+            group: GROUP_PICTURE,
+            label: "Resolution",
+            note: "The window's size, or in full screen the monitor's (its own size: borderless). A new one goes back after 20 seconds unless you keep it.",
+            switches: "--size",
+            get: |_| false,
+            set: |_, _| {},
+            slider: None,
+        },
+        ChoiceList {
+            names: window_mode::resolution_names,
+            chosen: window_mode::resolution_chosen,
+            pick: window_mode::resolution_pick,
+            save: window_mode::resolution_save,
+            load: window_mode::resolution_load,
+            ask_keep: true,
+        },
+    );
+    add_setting(
+        app,
+        Setting {
+            key: "borderless",
+            group: GROUP_PICTURE,
+            label: "Full screen",
+            note: "On: the game fills its monitor without a frame, at the full screen resolution above. Off: a window of the window resolution.",
+            // [design, #3884] In a test run (`given_switches` win), an explicit `--size`
+            // asks for a window of that size, so a saved `borderless=1` in `NVForever.ini`
+            // does not override it into borderless full screen (which ignores `--size`).
+            switches: "--window --size",
+            get: |w| w.resource::<Args>().window == window_mode::WindowChoice::Borderless,
+            set: window_mode::set_borderless,
+            slider: None,
+        },
+    );
+    add_choice_list(
+        app,
+        Setting {
+            key: "monitor",
+            group: GROUP_PICTURE,
+            label: "Monitor",
+            note: "The display the game opens on in full screen (the main display until you pick one).",
+            switches: "--window",
+            get: |_| false,
+            set: |_, _| {},
+            slider: None,
+        },
+        ChoiceList {
+            names: window_mode::monitor_names,
+            chosen: window_mode::monitor_chosen,
+            pick: window_mode::monitor_pick,
+            save: window_mode::monitor_save,
+            load: window_mode::monitor_load,
+            ask_keep: false,
+        },
+    );
+}
+
+#[cfg(test)]
+mod display_precedence_tests {
+    use super::*;
+    use clap::Parser;
+    use nvf_play::settings::{apply_stored, SettingsFile};
+    use window_mode::WindowChoice;
+
+    fn run_with_ini(cli: &[&str], ini_text: &str, tag: &str) -> Args {
+        let dir = std::env::temp_dir().join(format!("nvf-display-prec-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("NVForever.ini");
+        std::fs::write(&path, ini_text).unwrap();
+        let line: Vec<String> = cli.iter().map(|s| (*s).to_string()).collect();
+        let args = Args::try_parse_from(&line).unwrap();
+        let given = given_switches(&args, &line);
+        let mut app = App::new();
+        app.insert_resource(args);
+        app.init_resource::<window_mode::FullScreenSize>();
+        app.init_resource::<window_mode::MonitorModes>();
+        app.init_resource::<window_mode::MonitorChoice>();
+        app.insert_resource(SettingsFile(Some(path)));
+        app.insert_resource(given);
+        register_window_display(&mut app);
+        apply_stored(app.world_mut());
+        let out = app.world().resource::<Args>().clone();
+        let _ = std::fs::remove_dir_all(&dir);
+        out
+    }
+
+    /// #3884: in a timed/test run (`--run-seconds`), an explicit `--size` keeps the run
+    /// windowed at that size instead of letting a saved `borderless=1` in `NVForever.ini`
+    /// switch the window to borderless full screen (which ignores `--size`). Interactive
+    /// runs without `--run-seconds` still honor the INI, and an explicit `--window
+    /// borderless` still enters borderless full screen.
+    #[test]
+    fn explicit_size_in_a_test_run_is_not_overridden_by_saved_borderless() {
+        let ini = "[Settings]\nborderless=1\nresolution=1920x1080;desktop\n";
+        let timed_sized = run_with_ini(&["nvforever", "--play", "--size", "1280x720", "--run-seconds", "16"], ini, "timed-sized");
+        assert_eq!(timed_sized.window, WindowChoice::Windowed);
+        assert_eq!(timed_sized.size, "1280x720");
+
+        let timed_borderless = run_with_ini(
+            &["nvforever", "--play", "--size", "1280x720", "--window", "borderless", "--run-seconds", "16"],
+            "[Settings]\nborderless=0\nresolution=1920x1080;desktop\n",
+            "timed-borderless",
+        );
+        assert_eq!(timed_borderless.window, WindowChoice::Borderless);
+        assert_eq!(timed_borderless.size, "1280x720");
+
+        let interactive = run_with_ini(&["nvforever", "--play"], ini, "interactive");
+        assert_eq!(interactive.window, WindowChoice::Borderless);
+        assert_eq!(interactive.size, "1920x1080");
     }
 }

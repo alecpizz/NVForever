@@ -1309,7 +1309,8 @@ fn idle_lines_wait_for_each_other_and_do_not_repeat() {
 /// packages.md §7.6b): an actor whose package allows the behaviour, within
 /// `SPECTATOR_FLEE_DISTANCE` of a fighter (here the player, hunted), runs from it
 /// without entering a combat state, stays at its spot, and goes back to its package once
-/// the fight is over. A fight farther off sends nobody running.
+/// the fight is over. A fight farther off sends nobody running, and so does a foe in
+/// another interior at the same coordinates (#4891).
 #[test]
 fn a_spectator_runs_from_a_fight_that_comes_too_close() {
     use fnv_ai::social::{OBSERVE_DISTANCE, SPECTATOR_FLEE_DISTANCE};
@@ -1322,15 +1323,22 @@ fn a_spectator_runs_from_a_fight_that_comes_too_close() {
     s.game.awareness.tactics.settings = Some(GroupSettings { flee_normal: 700.0, ..GroupSettings::default() });
     s.run_social(1.0);
     // Someone (no resident) fights the player.
-    let foe = FormId(0xF00);
+    let foe = FormId(R_GREET);
     let (now, t) = (s.game.time, Timers::default());
     let dist = |a: [f32; 3], b: [f32; 3]| (a[0] - b[0]).hypot(a[1] - b[1]);
     let a = s.game.awareness.actors.entry(foe).or_default();
     a.observe(FormId::PLAYER_REF, &Detection { value: 5.0, band: Band::Detected, ..Default::default() }, [0.0; 3], now, &t);
     a.settle(foe, now, &t, true);
-    // It stands in the room's corner (a foe with no place is near no one, #3223).
-    a.at = Some([0.0; 3]);
     assert!(s.game.awareness.hunted(FormId::PLAYER_REF));
+    // #4891: it stands at the room's corner's coordinates in another interior (the NCR
+    // Correctional Facility's cells overlap in x and y): no fight here, even close.
+    let close = [10.0, 10.0, 0.0];
+    s.game.set_actor_place(foe, Some(FormId(CELL + 1)), [0.0; 3], 0.0).unwrap();
+    s.player_to(close);
+    s.run_social(2.0);
+    assert!(!s.events().iter().any(|e| matches!(e, AiEvent::SpectatorFlee { .. } | AiEvent::ObserveCombat { .. })), "{:?}", s.events());
+    // It stands in the room's corner (a foe with no place is near no one, #3223).
+    s.game.set_actor_place(foe, Some(FormId(CELL)), [0.0; 3], 0.0).unwrap();
     // Far off: it watches.
     let feet = s.agent(R_IDLE).walker.feet;
     let far = [feet[0], (feet[1] + SPECTATOR_FLEE_DISTANCE + 200.0).min(1150.0), 0.0];
@@ -1340,7 +1348,6 @@ fn a_spectator_runs_from_a_fight_that_comes_too_close() {
     assert!(!s.events().iter().any(|e| matches!(e, AiEvent::SpectatorFlee { .. })), "{:?}", s.events());
     // Too close: it runs, out of a combat state.
     // Between it and the room's corner, so there is room to run (it idles near the corner).
-    let close = [10.0, 10.0, 0.0];
     assert!(dist(close, s.agent(R_IDLE).walker.feet) <= SPECTATOR_FLEE_DISTANCE);
     s.player_to(close);
     s.run_social(0.5);

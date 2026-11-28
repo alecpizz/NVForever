@@ -164,6 +164,7 @@ impl Game<'_> {
         // Made anew: at its level now, its leveled pick and carried items with it.
         self.refix_level(r);
         let _ = self.world.reset_inventory(r);
+        self.maybe_apply_npc_weapon_mods(r);
         // A new pick may run another script (template flag "Script"): when the script it
         // runs changes, its instance starts fresh; a ScriptWait ends unless it is the
         // script it runs now [design, #3228].

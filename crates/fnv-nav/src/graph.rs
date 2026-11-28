@@ -31,6 +31,11 @@ pub const MAX_TRI_SPAN: f32 = 65_536.0;
 /// setting) are cut to this [engine choice].
 pub const MAX_QUERY_RADIUS: f32 = 65_536.0;
 
+/// [`NavGraph::step_between`]: how far apart the points along an outline edge are looked at.
+pub const STEP_SAMPLE: f32 = 8.0;
+/// [`NavGraph::step_between`]: how far into its triangle the point stepped onto is moved.
+pub const STEP_IN: f32 = 16.0;
+
 /// A worldspace or an interior cell (load-order FormIDs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize)]
 pub enum Space {
@@ -907,6 +912,60 @@ impl NavGraph {
             }
         }
         best.map(|(_, t, q)| (t, q))
+    }
+
+    /// Where a walker can step from walkable area `from` onto area `to` of the same
+    /// `space` though no link joins them: the nearest pair of points, one on the outline
+    /// of `from` (an edge that leads nowhere), one on a usable triangle of `to`, at most
+    /// `across` units apart on the ground and `rise` units in height. The point on `to`
+    /// is moved up to [`STEP_IN`] units into its triangle, so that a walker who reaches
+    /// it stands on `to`. SSHQ01's prize room navmesh 0x0010489C has no link to the
+    /// cell's main one, their stair tops 17 to 31 units apart [observed, #3473]; the
+    /// original's followers do not cross there either (observer check 279), a player
+    /// walks the stairs. Every triangle of `space` is looked at: meant for an interior.
+    pub fn step_between(&self, space: Space, from: u32, to: u32, across: f32, rise: f32) -> Option<([f32; 3], [f32; 3])> {
+        if from == to || from == NONE || to == NONE {
+            return None;
+        }
+        let mut best: Option<(f32, [f32; 3], [f32; 3])> = None;
+        for t in 0..self.tris.len() as u32 {
+            if self.area.get(t as usize) != Some(&from) || self.space_of_tri(t) != Some(space) {
+                continue;
+            }
+            let tri = self.tris[t as usize];
+            for e in 0..3 {
+                if tri.kind[e] != EdgeKind::Boundary {
+                    continue;
+                }
+                let (a, b) = (self.vertex(tri.v[e]), self.vertex(tri.v[(e + 1) % 3]));
+                let len = (b[0] - a[0]).hypot(b[1] - a[1]);
+                let n = ((len / STEP_SAMPLE).ceil() as usize).max(1);
+                for k in 0..=n {
+                    let s = k as f32 / n as f32;
+                    let p = [a[0] + (b[0] - a[0]) * s, a[1] + (b[1] - a[1]) * s, a[2] + (b[2] - a[2]) * s];
+                    for u in self.triangles_near(space, p[0], p[1], across) {
+                        if self.area.get(u as usize) != Some(&to) || !self.usable(u) {
+                            continue;
+                        }
+                        let q = closest_on_triangle(p, self.corners(u));
+                        let (h, dz) = ((q[0] - p[0]).hypot(q[1] - p[1]), (q[2] - p[2]).abs());
+                        if h > across || dz > rise {
+                            continue;
+                        }
+                        let score = h * h + dz * dz;
+                        if best.is_none_or(|(s, ..)| score < s) {
+                            let c = self.centre(u);
+                            let to_c = [c[0] - q[0], c[1] - q[1], c[2] - q[2]];
+                            let d = to_c[0].hypot(to_c[1]);
+                            let f = if d > 1e-3 { STEP_IN.min(d) / d } else { 0.0 };
+                            let q = [q[0] + to_c[0] * f, q[1] + to_c[1] * f, q[2] + to_c[2] * f];
+                            best = Some((score, p, q));
+                        }
+                    }
+                }
+            }
+        }
+        best.map(|(_, p, q)| (p, q))
     }
 
     /// The segment through which a path leaves triangle `t` by edge `e`, as (left, right)

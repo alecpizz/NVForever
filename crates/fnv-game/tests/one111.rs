@@ -315,7 +315,7 @@ fn worn_armor_adds_up() {
     // In the unit GetArmorArmorRating reads.
     let rating = val(&mut g, "GetArmorArmorRating Vest");
     assert_eq!(val(&mut g, "PlayerRef.GetActorTotalArmorDR"), rating);
-    // Nothing equipped, no spread [hypothesis].
+    // Nothing equipped, no spread (see docs/spec-notes/ext-one111.md).
     assert_eq!(val(&mut g, "PlayerRef.GetCalculatedSpreadAlt 2"), x(0.0));
 }
 

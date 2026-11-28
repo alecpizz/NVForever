@@ -48,11 +48,14 @@ menu: scripts see it as open until the player leaves it.
   brackets after it when more than one is made ("Antivenom (2)"). NVForever's campfire
   list starts "Antivenom (2), Atomic Cocktail (4), Battle Brew, Bighorner Steak, Black
   Blood Sausage, Black Coffee", the same as the original's [observed, smoke `crafting`].
-- The arrows beside "RECIPES" filter the list by subcategory [hypothesis].
-- For the chosen recipe, at the right: "Made at ..." with its category's name; "Skill
-  Requirement" as "<skill> (<player's value>/<level>)"; "Ingredients" as
-  "<name> (<have>/<need>)".
-- Under the list: the first output's WG and VAL.
+- The arrows beside the list's title filter the list by subcategory [hypothesis].
+- For the chosen recipe, at the right: where it is made, with its category's name; the
+  skill as "<skill> (<player's value>/<level>)"; the ingredients as
+  "<name> (<have>/<need>)". NVForever's hand-built page writes the titles the file's
+  settings give (`sRecipes` in capitals, `sMadeAt`, `sSkillRequirement`, `sIngredients`),
+  as the tile page does [design, #4495: in place of the words read from the screen].
+- Under the list: the first output's WG and VAL. NVForever's cards read the settings
+  `sInventoryWeightUpper` and `sInventoryValue`, as the Pip-Boy's do [design, #4495].
 - Accept A) and Exit X).
 - **The shade** (2026-10-19) [observed: the owner's screenshot at 1920 x 1080,
   C:\fnv-private\references\crafting_repair\recipes.jpg; documented: `RM_Background`,
@@ -163,3 +166,32 @@ would write the same for each.
 
 **Smoke**: `tiles-recipe-places` (the pointer's places, no click), `tiles-recipe`,
 `recipe-default-drawing`.
+
+
+### Ordinary workbench finger input and typography
+
+[design] The saved touch maintenance preference also enables finger input over
+the ordinary workbench, campfire and reloading-bench presentations. The native
+file keeps its actual recipe and ingredient lists and scroll consumers; the
+hand-built recipe list uses its measured clipped window. A vertical drag browses
+without selecting or making anything. Another-row End selects; a selected-row
+End or Accept requests the existing quantity prompt. Its original default one,
+maximum, arrows, tap-to-amount, confirmation, cancellation and ingredient/output
+consumer remain authoritative. Touch does not mark input as a physical key.
+
+Independent workbench size changes glyph metrics and wrapping within the fixed
+viewport. Measured hand-built recipe rows retain at least 52 interface units;
+XML rows preserve larger explicit heights. Physical navigation and post-make
+selection follow the measured window; touch browse is not forced back to a
+fixed seven-row selection window. Paint, native input and late admission share
+the current size/source. Effective setting changes retire pending input, while
+a no-op value preserves it. The native writer publishes readiness; the prompt's
+post-input drawing publishes its current amount before the next raw contact.
+
+Continuous workbench quantity-meter dragging and a new hand-built ingredient
+scroll state remain follow-ups. Hand-built ingredients retain their original
+wrapped explanatory presentation; native ingredient scrolling remains its
+original independent list. No separate crafting rule/effect handler is added.
+Authored native/hand-built producer-to-consumer, late-requirement, immediate
+quantity and physical navigation controls are uncompiled and unexecuted at this
+source checkpoint; loaded-game and phone acceptance remain open.

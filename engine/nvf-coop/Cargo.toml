@@ -1,0 +1,40 @@
+[package]
+name = "nvf-coop"
+description = "Co-op: the game protocol between a host's game and its guests', and the internet transport under it"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# Nothing of Bevy or the game: the game side draws the other players; the transport
+# (`seam::Transport`: `stack::Stack` over the internet) carries the packets.
+[dependencies]
+# The lobby's secret, from the OS random source (`seam::SharedSecret`); already in
+# the engine's lock through Bevy. MIT/Apache.
+getrandom = "0.3.4"
+# The co-op crate's notes reach the game's log (Bevy's LogPlugin takes `log` records):
+# the `co-op connect:` line and the online checks' notes. MIT/Apache.
+log = "0.4"
+# Noise (noise.rs, docs/design/coop-networking.md §4): every co-op packet sealed and
+# authenticated, a key per player. Apache-2.0/MIT.
+snow = "0.10"
+# The IPv6 socket is bound IPv6-only (sockets.rs), so it never takes the IPv4 socket's
+# port; std cannot set that before binding. MIT/Apache.
+socket2 = "0.6"
+# The router's address (the default gateway), which PCP and NAT-PMP are asked at
+# (portmap.rs), and this PC's addresses (online::local_addrs); std cannot read the
+# routing table. MIT.
+netdev = { version = "0.48", default-features = false, features = ["gateway"] }
+# The host's router opens the lobby's port (UPnP IGD; portmap.rs and reach.rs); its
+# blocking API. MIT.
+igd-next = { version = "0.18.0", default-features = false, features = ["io_sync"] }
+# NAT traversal (STUN, the checks, port-mapping packets, the hosted relay's client) and
+# the matchmaking service's client, both sans-IO, from this repository's crates.
+nvf-nat = { path = "../../crates/nvf-nat" }
+nvf-signal = { path = "../../crates/nvf-signal" }
+# The matchmaking service's I/O (signal_io.rs): HTTPS as player reports do it (the
+# system's TLS and certificates, nvforever/Cargo.toml), and its lobby WebSocket the same.
+ureq = { version = "3", default-features = false, features = ["native-tls-no-default"] }
+tungstenite = { version = "0.30", default-features = false, features = ["handshake", "native-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

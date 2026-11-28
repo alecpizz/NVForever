@@ -141,6 +141,11 @@ fn bodies_through_the_view() {
     assert_eq!(n(&mut g, "BoxRef.GetCollisionObjProperty \"Box\" 7"), 12.0);
     assert_eq!(n(&mut g, "BoxRef.GetRigidBodyMass"), 12.0);
     assert_eq!(n(&mut g, "NpcRef.GetRigidBodyMass"), 0.0, "an actor's is 0 [documented]");
+    // Static (non-dynamic) rigid body reports 0.0, not 100.0 [observed: w4c_b4_06_jip13_physics_queries].
+    let mut static_view = box_view();
+    static_view.bodies[0].dynamic = false;
+    g.set_phys_view(FormId(OTHER_REF), Some(static_view));
+    assert_eq!(n(&mut g, "OtherRef.GetRigidBodyMass"), 0.0, "static rigid body returns 0.0");
     // Revolutions a second; 7 game units a second the linear unit.
     assert!(close(n(&mut g, "BoxRef.GetAngularVelocity \"Box\" Z"), 1.0));
     q(&mut g, "let fX := 0\nlet aList := 0");

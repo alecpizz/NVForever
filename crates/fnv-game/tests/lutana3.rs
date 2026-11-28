@@ -274,6 +274,22 @@ fn cell_events_follow_the_player() {
     assert_eq!(n(&mut g, "PlayerREF.AuxVarGetRef \"*exit\""), f64::from(ROOM));
 }
 
+/// The co-op perks are offered at a level-up only in a co-op game: a single player game
+/// lists what the original does (`fnv_game::coop_perks`).
+#[test]
+fn the_co_op_perks_are_offered_only_in_a_co_op_game() {
+    let mut f = fixture();
+    fnv_game::coop_perks::add(&mut f.data);
+    let mut g = game(&f);
+    let coop = [fnv_game::coop_perks::HEALING_HANDS, fnv_game::coop_perks::QUACK_SURGEON];
+    let sheet = fnv_game::levelup::PerkSheet::of_player(&mut g, 10);
+    assert!(sheet.perks.contains(&FormId(PERK)), "the plugin's perk is offered");
+    assert!(coop.iter().all(|p| !sheet.perks.contains(p)), "no co-op perk out of a session");
+    g.coop_session = true;
+    let sheet = fnv_game::levelup::PerkSheet::of_player(&mut g, 10);
+    assert!(coop.iter().all(|p| sheet.perks.contains(p)), "both in a session");
+}
+
 /// Session `SetPerkLevel`, `SetPerkFlag` (0 trait, 1 playable, 2 hidden), and
 /// `LNSetIsPlayable` on PERK forms must reach `PerkSheet::of_player`, `TraitSheet::of_player`,
 /// `chargen::requirement_line`, ITR `GetPerkEligibility`, `GetAllPerks`, and

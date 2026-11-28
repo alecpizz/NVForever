@@ -214,7 +214,13 @@ What it does now:
   match), scaled to the billboard size. Leaf cards cast shadows but receive none (their
   own light-facing shadow copies blackened the lower half of every bush); instead the
   crown darkens towards its bottom by the TREE record's CNAM leaf and branch dimming,
-  as vertex colours (speedtree.md §6). Trees rock and their leaves rustle in the
+  as vertex colours (speedtree.md §6). Other objects still shade them: a card takes
+  the sun's shadow at the point where the ray towards the sun leaves the tree's crown
+  sphere (the cards' places plus a card's reach, rocking with the tree), past its own
+  cards and before anything else (tree.wesl `NVF_CROWN_SHADOW`; vendored bevy_pbr
+  `pbr_functions.wesl`). Without it, shrubs in a cliff's shadow were lit as in full sun
+  [observed 2026-11-23, 0x00109682, WastelandNV (-18, -3)]. Lamps' shadows stay off
+  for the cards. Trees rock and their leaves rustle in the
   weather's wind (WTHR wind speed, TREE CNAM rock and rustle speeds; tree.wesl, also in
   the shadow pass). A tree that fails to generate falls back to its
   billboard: one upright quad turned towards the camera every frame, normals up.

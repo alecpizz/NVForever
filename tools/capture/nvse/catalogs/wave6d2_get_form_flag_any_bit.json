@@ -1,0 +1,90 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6d2_get_form_flag_any_bit",
+  "description": "Wave 6D-2 read-only probe confirming GetFormFlag tests any bit in a multi-bit mask.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "jip_ln_nvse": "57.30 (5730)"
+  },
+  "batches": [
+    {
+      "id": "w6d2_form_flag",
+      "title": "Wave 6D-2: GetFormFlag any-bit mask semantics",
+      "extender": "JIP LN NVSE 57.30",
+      "required_plugins": [
+        "jip_nvse.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6d2_32_lutana_form_flag_service_and_casino",
+          "bucket": "A",
+          "extender": "JIP LN 57.30",
+          "required_plugins": [
+            "jip_nvse.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-lutana.md",
+          "spec_line": 114,
+          "functions_tested": [
+            "GetFormFlag",
+            "SetFormFlag",
+            "GetCasinoReelStops",
+            "SetCasinoReelStops",
+            "GetLoadScreenType",
+            "SetLoadScreenType",
+            "GetPCCanUsePowerArmor",
+            "IsTrait",
+            "GetTimeStamp",
+            "GetShowQuestItems"
+          ],
+          "claim": "Verify GetFormFlag/SetFormFlag bit 30 (1073741824 used by gr_zpipboypanelmini.txt) & multi-bit mask (all-bits vs any-bit), SetCasinoReelStops total!=14 (ext-lutana.md:46), SetLoadScreenType non-LSCT, IsTrait, GetPCCanUsePowerArmor, GetTimeStamp, and GetShowQuestItems.",
+          "expected": "Confirm GetFormFlag tests all-bits vs any-bit on multi-bit mask, SetCasinoReelStops stores unclamped count even when sum!=14, SetLoadScreenType validates LSCT, and GetTimeStamp has HH-mm-SS length 8.",
+          "script_lines": [
+            "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+            "ref rTops = GetFormFromMod \"FalloutNV.esm\" \"144C3F\"",
+            "ref rLscr = GetFormFromMod \"FalloutNV.esm\" \"166D93\"",
+            "ref rStim = GetFormFromMod \"FalloutNV.esm\" \"15169\"",
+            "ref rSm = GetFormFromMod \"FalloutNV.esm\" \"135EC6\"",
+            "ref rEd = GetFormFromMod \"FalloutNV.esm\" \"31DD8\"",
+            "int f0 = GetFormFlag r10 1073741824",
+            "SetFormFlag r10 1073741824 1",
+            "int f1 = GetFormFlag r10 1073741824",
+            "int fMsk = GetFormFlag r10 1073742080",
+            "SetFormFlag r10 1073741824 f0",
+            "int rs0 = GetCasinoReelStops rTops 1",
+            "SetCasinoReelStops rTops 1 99",
+            "int rs99 = GetCasinoReelStops rTops 1",
+            "SetCasinoReelStops rTops 1 rs0",
+            "ref lt0 = GetLoadScreenType rLscr",
+            "SetLoadScreenType rLscr rStim",
+            "ref ltBad = GetLoadScreenType rLscr",
+            "SetLoadScreenType rLscr lt0",
+            "int tr1 = IsTrait rSm",
+            "int tr0 = IsTrait rEd",
+            "int pa = GetPCCanUsePowerArmor",
+            "int sqi = GetShowQuestItems",
+            "string_var ts = GetTimeStamp",
+            "PrintToConsole \"PROBE|w6d2_32_lutana_form_flag_service_and_casino|ff=%g->%g,msk=%g|rs=%g->%g|lscr(badEq0=%g,badZ=%g)|tr=%g/%g,pa=%g,sqi=%g,tsLen=%g\" f0 f1 fMsk rs0 rs99 (ltBad == lt0) (ltBad == 0) tr1 tr0 pa sqi (sv_Length ts)"
+          ]
+        }
+      ]
+    }
+  ]
+}

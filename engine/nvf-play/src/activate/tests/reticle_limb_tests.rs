@@ -8,6 +8,7 @@ use crate::script::ScriptState;
 use fnv_combat::data::{BodyPart, BodyPartData, Limb};
 use fnv_esm::raw::{write_subrecords, Subrecord};
 use fnv_game::game::RunCtx;
+use fnv_phys::gore::GoreStart;
 use fnv_phys::{HitVolume, PartCapsule};
 use fnv_script::vm::XVal;
 
@@ -103,6 +104,19 @@ fn limb_scene() -> App {
             scale: 1.0,
         };
         phys.world.add_ref(&pose, &[boxed(15.0)]);
+        // A detached gore piece (`GORE_PART`) west and below eye level at (-80, 0, 50)
+        // so level west (-X, z=100) still misses into open sky while pitching down hits gore.
+        phys.world.add_gore(&GoreStart {
+            id: 1,
+            actor: NPC_REF,
+            translation: [-80.0, 0.0, 50.0],
+            rotation: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+            half_extents: [15.0, 15.0, 15.0],
+            center: [0.0; 3],
+            linvel: [0.0; 3],
+            angvel: [0.0; 3],
+            mass: 1.0,
+        });
         phys.world.update_queries();
     }
     app
@@ -128,22 +142,37 @@ fn reticle_target_limb_reads_exact_part_range_and_clears_on_non_actor_or_sky() {
     app.update();
     assert_eq!(query_limb(&mut app, "GetReticleTargetLimb"), 14.0, "Weapon part");
 
-    // Turn north (+Y) toward NPC_REF (single whole-body capsule, no posed parts) -> -1.
+    // Turn north (+Y) toward NPC_REF (single whole-body capsule, no posed parts) -> 0 (Torso)
+    // within maxRange, and -1 beyond maxRange [design].
     {
         let mut p = app.world_mut().resource_mut::<Player>();
         p.heading = 0.0;
         p.pitch = 0.0;
     }
     app.update();
-    assert_eq!(query_limb(&mut app, "GetReticleTargetLimb"), -1.0);
+    assert_eq!(query_limb(&mut app, "GetReticleTargetLimb"), 0.0, "WHOLE fallback reads Torso (0)");
+    assert_eq!(query_limb(&mut app, "GetReticleTargetLimb 100"), 0.0, "WHOLE within maxRange");
+    assert_eq!(query_limb(&mut app, "GetReticleTargetLimb 40"), -1.0, "WHOLE beyond maxRange");
 
     // Turn south (-Y) toward the non-actor chest -> -1.
     app.world_mut().resource_mut::<Player>().heading = std::f32::consts::PI;
     app.update();
     assert_eq!(query_limb(&mut app, "GetReticleTargetLimb"), -1.0);
 
-    // Turn west (-X) toward open sky (no hit) -> -1.
+    // Turn west (-X) level toward open sky (no hit) -> -1.
     app.world_mut().resource_mut::<Player>().heading = -std::f32::consts::FRAC_PI_2;
     app.update();
     assert_eq!(query_limb(&mut app, "GetReticleTargetLimb"), -1.0);
+
+    // Pitch down west toward the detached gore piece (`GORE_PART`) at (-80, 0, 50) -> hit is
+    // recorded on NPC_REF's gore collider, but GetReticleTargetLimb still returns -1.
+    app.world_mut().resource_mut::<Player>().pitch = (-50.0f32).atan2(80.0);
+    app.update();
+    {
+        let script = app.world().resource::<ScriptState>();
+        let rt = script.rt.as_ref().unwrap();
+        assert!(rt.game.senses.reticle.and_then(|r| r.hit).is_some(), "ray must actually hit the gore collider");
+        assert_eq!(rt.game.senses.crosshair_far, Some(FormId(NPC_REF)));
+    }
+    assert_eq!(query_limb(&mut app, "GetReticleTargetLimb"), -1.0, "GORE_PART returns -1");
 }

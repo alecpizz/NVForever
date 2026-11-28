@@ -31,11 +31,11 @@ GetAngularVelocity]; mass in kilograms [documented: GetCollisionObjProperty].
 | Function | NVForever |
 |---|---|
 | GetAngularVelocity, SetAngularVelocity `node axis [v]` | the node's moving body, world axes [hypothesis: the page names no axes for these] |
-| GetAngularVelocityAlt, SetAngularVelocityEx `node x y z [global]` | local axes unless the flag [documented]; 0 and the variables left without a moving body [documented] |
-| GetLinearVelocityAlt, SetLinearVelocity `node x y z [local]` | world axes unless the flag [documented] |
+| GetAngularVelocityAlt, SetAngularVelocityEx `node x y z [global]` | local axes unless the flag [documented]; returns 0 and leaves the output variables unchanged without a moving body or on a missing node [documented; observed: 2026-11-24, FNV 1.4.0.525 + xNVSE 6.4.9 + JIP LN 57.30, `GSDocMitchellHouse` (`0x00103DF9`), `DocMitchellRef` (`0x00104C0F`), committed probe `w6_t1_05_velocities_jip` (`tools/capture/nvse/catalogs/wave6_t1_jip_velocities.json`): `ang=0(111.0,222.0,333.0)\|angM=0(111,222,333)`] |
+| GetLinearVelocityAlt, SetLinearVelocity `node x y z [local]` | world axes unless the flag; returns 0 and leaves output variables unchanged without a moving body or on a missing node [documented; observed: same `w6_t1_05_velocities_jip` probe: `lin=0(111.0,222.0,333.0)\|linM=0(111,222,333)`] |
 | GetObjectVelocity `[axis]` | game units a second on the axis, or the speed (the page's "product" read as the vector's length [hypothesis]); a moving body's, else the measured movement GetActorVelocity uses [hypothesis] |
 | SetActorVelocity `axis v` | for a frame [documented], as the console's SetVel: up or down, or a short push along the ground |
-| GetRigidBodyMass | 0 for an actor [documented]; the heaviest moving body's mass up to 100, 100 for a body that does not move [hypothesis: the page's "100 translates as no movement"], 0 without collision |
+| GetRigidBodyMass | 0 for an actor [documented]; the heaviest moving (dynamic) body's mass up to 100, and 0 for static (non-dynamic) bodies or references without collision [observed: Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 + JIP LN 57.30, 2026-11-24, `GSDocMitchellHouse` (`0x00103DF9`), 10 official base masters, `w4c_b4_06_jip13_physics_queries` (`tools/capture/nvse/catalogs/wave4c_extenders.json`, #3679): `velP=0.00\|mass(P=0.0,D=0.0,Dr=0.0,Dyn=0.00)\|gmat(P=5,Dr=-1)\|grab(P=0,D=0,Dr=0,Dyn=0)` — static door `0x103E61` returned `0.0`; no DLL or source consulted] |
 | Get/SetCollisionObjLayerType `node [layer]` | the body's layer, 1-42, "*" every body [documented]; a set layer changes what queries and layer filters see [hypothesis: the solver's contacts stay] |
 | Get/SetCollisionObjProperty `node id [v]` | 0 friction, 1 restitution, 2 linear and 3 angular damping, 4-6 inertia, 7 mass [documented]; the inertia is read but not set [decision: rapier derives it from the shapes and the mass] |
 

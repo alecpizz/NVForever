@@ -6,6 +6,12 @@
 //! Everything is in game space (Z up), under a holder far from the world; lengths are game
 //! units [design: sized as a real table, about 2.3 × 1.2, at one unit a centimetre's
 //! worth — the scene is alone, so only its proportions matter].
+//!
+//! At a poker table in the world (`Session::table_ref`) the oval
+//! lies on that table instead: scaled to its length, turned so the player's seat is on the
+//! player's side, on its top; the world's table stays as its base. It is drawn with the
+//! world, seen by the game's own camera (`roulette_view::TableCamera`), a lamp over it;
+//! the stools and people at the table are hidden meanwhile, as at roulette [design].
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
@@ -66,7 +72,9 @@ const FLOOR_TEXTURE: &str = "textures\\clutter\\rugs\\nvtopscasinorug_d.dds";
 /// The rail picture's bands, as fractions of its height, and the part across its width
 /// that has no chip tray [observed: the picture, docs/design/poker.md §5].
 const RAIL_PAD: (f32, f32) = (185.0 / 512.0, 345.0 / 512.0);
-const RAIL_TRIM: (f32, f32) = (30.0 / 512.0, 110.0 / 512.0);
+/// The trim band starts under the strip's "IRG CARDS" badges [observed: the picture, rows
+/// to about 60; drawn on the band they were coloured specks].
+const RAIL_TRIM: (f32, f32) = (64.0 / 512.0, 116.0 / 512.0);
 const RAIL_U: f32 = 1400.0 / 2048.0;
 /// The chips picture: six columns; a chip's face in the top 84 of 256, its stripes below
 /// [observed: the picture].
@@ -175,16 +183,21 @@ fn felt_mesh() -> Mesh {
 /// chip tray at the picture's right end is never used.
 fn rail_mesh() -> Mesh {
     // The profile across the rail: (out from the edge, height, the picture's v).
-    let mut profile: Vec<(f32, f32, f32)> = Vec::new();
-    let pad = 12;
+    // It starts a little under the felt, so no slit opens between the felt's edge and the
+    // cushion's lip.
+    let mut profile: Vec<(f32, f32, f32)> = vec![(0.0, -0.5, RAIL_PAD.0)];
+    // The cushion rolls from the felt over the rail's outer edge, and the wooden trim band
+    // hangs straight down from under its lip: no dip between them (a dip there read as a
+    // gap through to the floor).
+    let pad = 16;
     for i in 0..=pad {
-        let t = i as f32 / pad as f32;
-        let h = 1.0 + 4.0 * (PI * t).sin().powf(0.7);
-        profile.push((t * (RAIL - 2.0), h, RAIL_PAD.0 + (RAIL_PAD.1 - RAIL_PAD.0) * t));
+        let a = PI * i as f32 / pad as f32;
+        let (out, h) = (RAIL / 2.0 * (1.0 - a.cos()), 1.0 + 4.0 * a.sin().powf(0.7));
+        profile.push((out, h, RAIL_PAD.0 + (RAIL_PAD.1 - RAIL_PAD.0) * i as f32 / pad as f32));
     }
-    profile.push((RAIL - 1.0, 2.6, RAIL_TRIM.0));
-    profile.push((RAIL, 1.6, RAIL_TRIM.0 + (RAIL_TRIM.1 - RAIL_TRIM.0) * 0.4));
-    profile.push((RAIL, -8.0, RAIL_TRIM.1));
+    // The band starts its own picture where the cushion ends (a zero-height step).
+    profile.push((RAIL, 1.0, RAIL_TRIM.0));
+    profile.push((RAIL, UNDER, RAIL_TRIM.1));
     let mut g = Geo::default();
     let edge = oval(192, 0.0);
     let length = edge.last().map_or(1.0, |e| e.2);
@@ -198,6 +211,11 @@ fn rail_mesh() -> Mesh {
         for k in profile.windows(2) {
             let (p0, p1) = (k[0], k[1]);
             let across = Vec2::new(p1.0 - p0.0, p1.1 - p0.1);
+            // A step that only changes the picture has no surface (and no normal: lit, it
+            // speckles).
+            if across.length() < 1e-3 {
+                continue;
+            }
             // The profile's normal (outward and up, in the plane across the rail).
             let nrm = |e: (Vec2, Vec2, f32)| (e.1 * -across.y).extend(across.x);
             let at = |e: (Vec2, Vec2, f32), q: (f32, f32, f32)| (e.0 + e.1 * q.0).extend(q.1);
@@ -208,6 +226,24 @@ fn rail_mesh() -> Mesh {
                 (at(b, p0), nrm(b), Vec2::new(ub, p0.2)),
             ]);
         }
+    }
+    g.mesh()
+}
+
+/// The table's underside: the oval out to the rail's edge, at the trim's foot, facing
+/// down, so the top is closed seen from below.
+const UNDER: f32 = -8.0;
+fn under_mesh() -> Mesh {
+    let mut g = Geo::default();
+    // One plain spot of the padding: the whole picture would put the chip tray under there.
+    let uv = |_: Vec2| Vec2::new(0.25, (RAIL_PAD.0 + RAIL_PAD.1) / 2.0);
+    let c = g.vertex(Vec3::new(0.0, 0.0, UNDER), -Vec3::Z, Vec2::ZERO);
+    // A little inside the band, so its edge never shows past it.
+    let edge = oval(160, RAIL - 0.5);
+    for w in edge.windows(2) {
+        let a = g.vertex(w[0].0.extend(UNDER), -Vec3::Z, uv(w[0].0));
+        let b = g.vertex(w[1].0.extend(UNDER), -Vec3::Z, uv(w[1].0));
+        g.idx.extend([c, b, a]);
     }
     g.mesh()
 }
@@ -224,24 +260,10 @@ fn quad_mesh(size: Vec2, uv_scale: Vec2) -> Mesh {
     g.mesh()
 }
 
-/// A card: its face up (+Z), its back down; a hair apart.
+/// A card: its face up (+Z), its back down; a hair apart. Each is the card's rounded
+/// outline (`crate::card_shape`): the pictures' own corners are opaque.
 fn card_meshes() -> (Mesh, Mesh) {
-    let (w, h) = (CARD.x / 2.0, CARD.y / 2.0);
-    let mut front = Geo::default();
-    front.quad([
-        (Vec3::new(-w, -h, 0.02), Vec3::Z, Vec2::new(0.0, 1.0)),
-        (Vec3::new(w, -h, 0.02), Vec3::Z, Vec2::new(1.0, 1.0)),
-        (Vec3::new(w, h, 0.02), Vec3::Z, Vec2::new(1.0, 0.0)),
-        (Vec3::new(-w, h, 0.02), Vec3::Z, Vec2::ZERO),
-    ]);
-    let mut back = Geo::default();
-    back.quad([
-        (Vec3::new(-w, h, 0.0), -Vec3::Z, Vec2::new(1.0, 0.0)),
-        (Vec3::new(w, h, 0.0), -Vec3::Z, Vec2::ZERO),
-        (Vec3::new(w, -h, 0.0), -Vec3::Z, Vec2::new(0.0, 1.0)),
-        (Vec3::new(-w, -h, 0.0), -Vec3::Z, Vec2::new(1.0, 1.0)),
-    ]);
-    (front.mesh(), back.mesh())
+    (crate::card_shape::card_mesh(CARD, 0.02, true), crate::card_shape::card_mesh(CARD, 0.0, false))
 }
 
 /// A stack of `count` chips of one colour (the picture's `column`), each a little off the
@@ -422,10 +444,26 @@ fn anchor(i: usize) -> Vec3 {
     }
 }
 
+/// What the table in the world needs (as `blackjack_view`'s), and the game's camera.
+type InWorld<'w, 's> = (
+    Option<Res<'w, nvf_play::sim::SimState>>,
+    Option<Res<'w, nvf_play::PlayWorld>>,
+    Query<'w, 's, Entity, With<crate::world::WorldRoot>>,
+    Query<'w, 's, (Entity, &'static nvf_play::RefVisual)>,
+    Query<'w, 's, &'static mut Visibility>,
+    ResMut<'w, crate::roulette_view::TableCamera>,
+    Query<'w, 's, Entity, With<nvf_play::PlayerCamera>>,
+);
+
 struct Built {
     entities: Vec<Entity>,
     space: Entity,
     camera: Entity,
+    /// At a table in the world: the table's space into game space, and the game camera's
+    /// place (Bevy space); what was hidden.
+    world: Option<(bevy::math::Affine3A, Transform)>,
+    hidden: Vec<(Entity, Visibility)>,
+    layer: RenderLayers,
     casino: Casino,
     card_front: Handle<Mesh>,
     card_back: Handle<Mesh>,
@@ -461,37 +499,58 @@ fn show(
     time: AidTime,
     mut transforms: Query<&mut Transform>,
     mut drawn: Local<Drawn>,
+    (sim, play, world_root, refs, mut visibility, mut table_camera, player_camera): InWorld,
 ) {
     let Some(s) = screen.0.as_ref() else {
-        if let Some(b) = drawn.built.take() {
+        if let Some(mut b) = drawn.built.take() {
             for e in b.entities {
                 commands.entity(e).despawn();
+            }
+            crate::roulette_view::unhide(&mut b.hidden, &mut visibility);
+            if b.world.is_some() {
+                table_camera.set_if_neq(crate::roulette_view::TableCamera(None));
             }
             commands.remove_resource::<PokerView>();
         }
         return;
     };
     if drawn.built.as_ref().is_some_and(|b| b.casino != s.casino) {
-        if let Some(b) = drawn.built.take() {
+        if let Some(mut b) = drawn.built.take() {
             for e in b.entities {
                 commands.entity(e).despawn();
             }
+            crate::roulette_view::unhide(&mut b.hidden, &mut visibility);
         }
     }
     if drawn.built.is_none() {
-        let Some(b) = build(&mut commands, &mut models, s.casino, window.single().ok()) else {
+        // At a poker table in the world: the oval on it.
+        let world = s.table_ref.zip(sim.as_deref()).zip(play.as_deref()).zip(world_root.single().ok()).and_then(|(((t, sim), play), root)| {
+            let a = table_place(sim, play, &mut models, t)?;
+            let staff = crate::roulette_view::in_the_way(sim, play, &mut models, t);
+            info!("poker view: at the world's table {t}: the table scaled {:.3}; {} things at the table hidden", a.matrix3.x_axis.length(), staff.len());
+            Some((root, a, staff))
+        });
+        let Some(b) = build(&mut commands, &mut models, s.casino, window.single().ok(), world.as_ref().map(|w| (w.0, w.1)), player_camera.single().ok()) else {
             if !drawn.warned {
                 warn!("poker view: the table's pictures are not in the archives; the table is drawn without them");
                 drawn.warned = true;
             }
             return;
         };
+        let mut b = b;
+        for r in world.map(|w| w.2).unwrap_or_default() {
+            let more = crate::roulette_view::hide_ref(r.0, &refs, &mut visibility);
+            b.hidden.extend(more);
+        }
         drawn.built = Some(b);
         return;
     }
     let Some(b) = drawn.built.as_mut() else { return };
+    if let Some((_, at)) = b.world {
+        table_camera.set_if_neq(crate::roulette_view::TableCamera(Some((at, FOV_DEG))));
+    }
     let now = time.elapsed_secs();
-    let layer = RenderLayers::layer(POKER_LAYER);
+    let layer = b.layer.clone();
     let (cards, chips, button, open_slots) = layout(s);
     // Cards: kept by their place's key, slid in from the deck and turned over.
     let mut seen: Vec<String> = Vec::new();
@@ -564,7 +623,10 @@ fn show(
     if let (Some(mut v), Ok((cam, gt))) = (view, cameras.get(b.camera)) {
         let anchors: Vec<Vec2> = (0..SEATS.len())
             .map(|i| {
-                let p = PLACE + nvf_play::space::to_bevy(anchor(i).to_array());
+                let p = match b.world {
+                    Some((a, _)) => nvf_play::space::to_bevy(a.transform_point3(anchor(i)).to_array()),
+                    None => PLACE + nvf_play::space::to_bevy(anchor(i).to_array()),
+                };
                 cam.world_to_ndc(gt, p).map_or(Vec2::splat(-1.0), |n| Vec2::new((n.x + 1.0) / 2.0, (1.0 - n.y) / 2.0))
             })
             .collect();
@@ -576,44 +638,98 @@ fn show(
 
 /// A piece of the table under `space`; `shadow`: it casts one.
 #[allow(clippy::too_many_arguments)]
-fn part(commands: &mut Commands, models: &mut ModelCtx, space: Entity, mesh: Mesh, m: Handle<NifMaterial>, tr: Transform, shadow: bool) -> Entity {
+fn part(commands: &mut Commands, models: &mut ModelCtx, (space, layer): (Entity, &RenderLayers), mesh: Mesh, m: Handle<NifMaterial>, tr: Transform, shadow: bool) -> Entity {
     let h = models.meshes.add(mesh);
-    let mut e = commands.spawn((Mesh3d(h), MeshMaterial3d(m), tr, RenderLayers::layer(POKER_LAYER), ChildOf(space)));
+    let mut e = commands.spawn((Mesh3d(h), MeshMaterial3d(m), tr, layer.clone(), ChildOf(space)));
     if !shadow {
         e.insert(NotShadowCaster);
     }
     e.id()
 }
 
-fn build(commands: &mut Commands, models: &mut ModelCtx, casino: Casino, window: Option<&Window>) -> Option<Built> {
-    let layer = RenderLayers::layer(POKER_LAYER);
-    let felt = material(models, casino.felt(), Color::WHITE, AlphaMode::Opaque)?;
-    let rail = material(models, RAIL_TEXTURE, Color::WHITE, AlphaMode::Opaque)?;
-    let chips_material = material(models, CHIPS_TEXTURE, Color::WHITE, AlphaMode::Opaque)?;
-    let back = material(models, &casino.back_texture(), Color::WHITE, AlphaMode::Mask(0.5))?;
+/// The pedestal under the top: a column and a foot, of the rail's wood, down to the floor
+/// [design: the casinos' card tables stand on one or two such columns].
+const COLUMN_R: f32 = 9.0;
+const FOOT_R: f32 = 26.0;
+const FOOT_H: f32 = 3.0;
+
+/// The table itself: felt, rail, the casino's name and the ring on the felt, the pedestal.
+fn body(commands: &mut Commands, models: &mut ModelCtx, sp: (Entity, &RenderLayers), casino: Casino, felt: Handle<NifMaterial>, rail: Handle<NifMaterial>, ink: Handle<NifMaterial>) {
+    // The rail's wood and padding are drawn from both sides: seen from standing height,
+    // the band under the cushion was culled away in places and the floor showed through.
+    if let Some(mut m) = models.materials.get_mut(&rail) {
+        m.base.cull_mode = None;
+        m.base.double_sided = true;
+    }
+    part(commands, models, sp, felt_mesh(), felt, Transform::IDENTITY, false);
+    part(commands, models, sp, rail_mesh(), rail.clone(), Transform::IDENTITY, true);
+    part(commands, models, sp, under_mesh(), rail.clone(), Transform::IDENTITY, true);
+    // The casino's name printed faintly in the felt: its picture is light on black, added.
+    if let Some(l) = casino.logo().and_then(|p| material(models, p, Color::srgb(0.42, 0.42, 0.42), AlphaMode::Add)) {
+        part(commands, models, sp, quad_mesh(Vec2::new(52.0, 26.0), Vec2::ONE), l, Transform::from_xyz(0.0, 24.0, 0.04), false);
+    }
+    part(commands, models, sp, ring(-13.0, 0.6, 0.03).mesh(), ink, Transform::IDENTITY, false);
+    // Bevy's cylinders stand on Y; the table's space is Z up.
+    let upright = Quat::from_rotation_x(PI / 2.0);
+    let column = -FLOOR - FOOT_H;
+    part(commands, models, sp, Mesh::from(Cylinder::new(COLUMN_R, column)), rail.clone(), Transform::from_xyz(0.0, 0.0, FLOOR + FOOT_H + column / 2.0).with_rotation(upright), true);
+    part(commands, models, sp, Mesh::from(Cylinder::new(FOOT_R, FOOT_H)), rail, Transform::from_xyz(0.0, 0.0, FLOOR + FOOT_H / 2.0).with_rotation(upright), true);
+}
+
+/// The table's space into game space at a world table `t`: the oval's long side along the
+/// table's, as long; the seat nearest the camera on the player's side; its foot on the floor
+/// and its top as high as the world table's (`roulette_view::fit`, then the height).
+pub fn table_place(sim: &nvf_play::sim::SimState, play: &nvf_play::PlayWorld, models: &mut ModelCtx, t: fnv_sim::FormId) -> Option<bevy::math::Affine3A> {
+    let place = crate::roulette_view::ref_place(sim, t)?;
+    let base = sim.world.peek(t).map(|r| r.base).or_else(|| sim.base_of(t.0))?;
+    let path = nvf_play::dropped::model_path(&play.0, base, 0)?;
+    let (wlo, whi) = models.model(&format!("meshes\\{}", path.trim_start_matches("meshes\\").trim_start_matches("Meshes\\")))?.bounds?;
+    // The player's side: where they stand now, else the table's front.
+    let player = sim.world.peek(fnv_sim::FormId::PLAYER_REF).map(|p| Vec3::from(p.pos)).filter(|p| p.distance(place.translation.into()) < 600.0).unwrap_or(place.transform_point3(Vec3::new(0.0, -200.0, 0.0)));
+    let (long, short) = (HALF + RADIUS + RAIL, RADIUS + RAIL);
+    let f = crate::roulette_view::fit((Vec3::new(-long, -short, FLOOR), Vec3::new(long, short, 0.0)), (wlo, whi), EYE, place.inverse().transform_point3(player));
+    let k = f.matrix3.x_axis.length().max(1e-3);
+    let c = (whi.z - wlo.z) / (-FLOOR * k);
+    let height = bevy::math::Affine3A::from_translation(Vec3::Z * FLOOR) * bevy::math::Affine3A::from_scale(Vec3::new(1.0, 1.0, c)) * bevy::math::Affine3A::from_translation(Vec3::Z * -FLOOR);
+    Some(place * f * height)
+}
+
+fn build(commands: &mut Commands, models: &mut ModelCtx, casino: Casino, window: Option<&Window>, world: Option<(Entity, bevy::math::Affine3A)>, player_camera: Option<Entity>) -> Option<Built> {
+    let world = world.zip(player_camera);
+    let layer = if world.is_some() { RenderLayers::layer(0) } else { RenderLayers::layer(POKER_LAYER) };
+    // A picture that does not load leaves its part a plain colour, never the whole table
+    // undrawn (a refused chips picture once left Gomorrah's screen black) [design].
+    let mut or_plain = |path: &str, alpha: AlphaMode, plain: Color| {
+        material(models, path, Color::WHITE, alpha).unwrap_or_else(|| {
+            warn!("poker view: no picture {path}; that part is drawn plain");
+            models.materials.add(nif_material(StandardMaterial { base_color: plain, perceptual_roughness: 0.85, alpha_mode: alpha, ..default() }))
+        })
+    };
+    let felt = or_plain(casino.felt(), AlphaMode::Opaque, Color::srgb(0.12, 0.3, 0.16));
+    let rail = or_plain(RAIL_TEXTURE, AlphaMode::Opaque, Color::srgb(0.25, 0.16, 0.1));
+    let chips_material = or_plain(CHIPS_TEXTURE, AlphaMode::Opaque, Color::srgb(0.7, 0.15, 0.12));
+    let back = or_plain(&casino.back_texture(), AlphaMode::Opaque, Color::srgb(0.6, 0.1, 0.1));
     let floor = material(models, FLOOR_TEXTURE, Color::srgb(0.35, 0.35, 0.35), AlphaMode::Opaque);
     let platinum = material(models, BUTTON_TEXTURE, Color::WHITE, AlphaMode::Opaque);
-    // The casino's name printed faintly in the felt: its picture is light on black, added.
-    let logo = casino.logo().and_then(|p| material(models, p, Color::srgb(0.42, 0.42, 0.42), AlphaMode::Add));
     let ink = models.materials.add(nif_material(StandardMaterial { base_color: Color::srgba(0.93, 0.85, 0.55, 0.35), unlit: true, alpha_mode: AlphaMode::Blend, ..default() }));
 
-    let size = window.map(|w| Extent3d { width: w.physical_width().max(1), height: w.physical_height().max(1), depth_or_array_layers: 1 }).unwrap_or(Extent3d { width: 1280, height: 720, depth_or_array_layers: 1 });
-    let mut image = Image::new_fill(size, TextureDimension::D2, &[0, 0, 0, 255], TextureFormat::Bgra8UnormSrgb, RenderAssetUsages::default());
-    image.texture_descriptor.usage = TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::RENDER_ATTACHMENT;
-    let image = models.images.add(image);
-
-    let holder = commands.spawn((Name::new("Poker table"), Transform::from_translation(PLACE), Visibility::Inherited)).id();
-    // Game space (Z up) into Bevy's (Y up), as the world root does.
-    let space = commands.spawn((Transform::from_rotation(Quat::from_rotation_x(-PI / 2.0)), Visibility::Inherited, ChildOf(holder))).id();
-    part(commands, models, space, felt_mesh(), felt, Transform::IDENTITY, false);
-    part(commands, models, space, rail_mesh(), rail, Transform::IDENTITY, true);
-    if let Some(f) = floor {
-        part(commands, models, space, quad_mesh(Vec2::splat(900.0), Vec2::splat(900.0 / 160.0)), f, Transform::from_xyz(0.0, 0.0, FLOOR), false);
+    let (holder, space) = match world {
+        // Under the world root, in the world table's place (the root turns game space).
+        Some(((root, a), _)) => {
+            let h = commands.spawn((Name::new("Poker table (at the world's)"), Transform::from_matrix(Mat4::from(a)), Visibility::Inherited, ChildOf(root))).id();
+            (h, commands.spawn((Transform::IDENTITY, Visibility::Inherited, ChildOf(h))).id())
+        }
+        None => {
+            let h = commands.spawn((Name::new("Poker table"), Transform::from_translation(PLACE), Visibility::Inherited)).id();
+            // Game space (Z up) into Bevy's (Y up), as the world root does.
+            (h, commands.spawn((Transform::from_rotation(Quat::from_rotation_x(-PI / 2.0)), Visibility::Inherited, ChildOf(h))).id())
+        }
+    };
+    let sp = (space, &layer);
+    body(commands, models, sp, casino, felt, rail.clone(), ink.clone());
+    if let Some(f) = floor.filter(|_| world.is_none()) {
+        part(commands, models, sp, quad_mesh(Vec2::splat(900.0), Vec2::splat(900.0 / 160.0)), f, Transform::from_xyz(0.0, 0.0, FLOOR), false);
     }
-    if let Some(l) = logo {
-        part(commands, models, space, quad_mesh(Vec2::new(52.0, 26.0), Vec2::ONE), l, Transform::from_xyz(0.0, 24.0, 0.04), false);
-    }
-    part(commands, models, space, ring(-13.0, 0.6, 0.03).mesh(), ink.clone(), Transform::IDENTITY, false);
     // Outlines of the board's places.
     let mut slots = Vec::new();
     for k in 0..5 {
@@ -624,7 +740,7 @@ fn build(commands: &mut Commands, models: &mut ModelCtx, casino: Casino, window:
             let n = Vec2::new(-d.y, d.x) * t;
             g.quad([((a - n).extend(0.03), Vec3::Z, Vec2::ZERO), ((b - n).extend(0.03), Vec3::Z, Vec2::ZERO), ((b + n).extend(0.03), Vec3::Z, Vec2::ZERO), ((a + n).extend(0.03), Vec3::Z, Vec2::ZERO)]);
         }
-        let e = part(commands, models, space, g.mesh(), ink.clone(), Transform::from_translation((BOARD + Vec2::new(BOARD_GAP * k as f32, 0.0)).extend(0.0)), false);
+        let e = part(commands, models, sp, g.mesh(), ink.clone(), Transform::from_translation((BOARD + Vec2::new(BOARD_GAP * k as f32, 0.0)).extend(0.0)), false);
         commands.entity(e).insert(Visibility::Hidden);
         slots.push(e);
     }
@@ -646,7 +762,7 @@ fn build(commands: &mut Commands, models: &mut ModelCtx, casino: Casino, window:
                     (Vec3::new(3.0 * a0.cos(), 3.0 * a0.sin(), 0.4), Vec3::new(a0.cos(), a0.sin(), 0.0), uv(a0)),
                 ]);
             }
-            part(commands, models, space, g.mesh(), m, Transform::IDENTITY, true)
+            part(commands, models, sp, g.mesh(), m, Transform::IDENTITY, true)
         }
         None => commands.spawn((Transform::IDENTITY, Visibility::Hidden, ChildOf(space))).id(),
     };
@@ -654,6 +770,36 @@ fn build(commands: &mut Commands, models: &mut ModelCtx, casino: Casino, window:
     let card_front = models.meshes.add(front);
     let card_back = models.meshes.add(back_mesh);
 
+    if let Some(((_, a), camera)) = world {
+        let to = |p: Vec3| nvf_play::space::to_bevy(a.transform_point3(p).to_array());
+        let at = Transform::from_translation(to(EYE)).looking_at(to(AIM), Vec3::Y);
+        let lamp = crate::roulette_view::table_lamp(commands, to(Vec3::new(0.0, -6.0, 0.0)));
+        commands.insert_resource(PokerView { image: None, anchors: Vec::new() });
+        info!("poker view: the table built at the world's for {} (felt {}, deck {})", casino.title(), casino.felt(), casino.back_texture());
+        return Some(Built {
+            entities: vec![holder, lamp],
+            space,
+            camera,
+            world: Some((a, at)),
+            hidden: Vec::new(),
+            layer,
+            casino,
+            card_front,
+            card_back,
+            chips_material,
+            button,
+            cards: HashMap::new(),
+            textures: HashMap::new(),
+            back,
+            stacks: Vec::new(),
+            stack_entities: Vec::new(),
+            slots,
+        });
+    }
+    let size = window.map(|w| Extent3d { width: w.physical_width().max(1), height: w.physical_height().max(1), depth_or_array_layers: 1 }).unwrap_or(Extent3d { width: 1280, height: 720, depth_or_array_layers: 1 });
+    let mut image = Image::new_fill(size, TextureDimension::D2, &[0, 0, 0, 255], TextureFormat::Bgra8UnormSrgb, RenderAssetUsages::default());
+    image.texture_descriptor.usage = TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::RENDER_ATTACHMENT;
+    let image = models.images.add(image);
     let to = |p: Vec3| PLACE + nvf_play::space::to_bevy(p.to_array());
     let camera = commands
         .spawn((
@@ -678,12 +824,15 @@ fn build(commands: &mut Commands, models: &mut ModelCtx, casino: Casino, window:
             layer.clone(),
         ))
         .id();
-    commands.insert_resource(PokerView { image, anchors: Vec::new() });
+    commands.insert_resource(PokerView { image: Some(image), anchors: Vec::new() });
     info!("poker view: the table built for {} (felt {}, deck {})", casino.title(), casino.felt(), casino.back_texture());
     Some(Built {
         entities: vec![holder, camera, lamp],
         space,
         camera,
+        world: None,
+        hidden: Vec::new(),
+        layer,
         casino,
         card_front,
         card_back,

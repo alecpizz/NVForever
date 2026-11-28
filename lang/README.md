@@ -48,10 +48,16 @@ When two folders have the same id, the first one wins. The language is chosen on
 settings page (Display, Interface: Language) and acts at once. It is kept as `language=<id>` in
 `NVForever.ini`.
 
-Until one is chosen there, the start picks the language of the game's text when its code
-page tells it and a file of it was found: Windows-1251 (a Russian install) chooses `ru`
-(#1948). The start's log says so. Windows-1250 and 1252 are each several languages, so
-they choose none and English stays.
+Until one is chosen there, the start picks the language Steam installed the game in, read
+from Steam's manifest beside the game's folder (`appmanifest_22380.acf`, `UserConfig`
+`language`; #1443): German, French, Italian, Spanish and Russian choose `de`, `fr`, `it`,
+`es` and `ru` when that file was found and the game's text is read in that language's code
+page. Outside a Steam library it picks the language of the game's text when its code page
+tells it: Windows-1251 (a Russian install) chooses `ru` (#1948). Windows-1250 and 1252 are
+each several languages, so the text alone chooses none and English stays. The start's log
+says what it chose. The code page itself comes from `[Text] CodePage` when set, else from
+the plugins' text (Cyrillic), else from Steam's language (1250 for Polish, Czech and
+Hungarian), else 1252.
 
 ## Checked
 
@@ -67,7 +73,9 @@ Back, Defaults, the quit and keep questions), the settings page (its tabs, rows,
 ON / OFF and the names of the choices in its lists and on its choice meters: Off, Auto,
 Amber, Very Hard …), the hacking log and the terminal refusals (#2095), lockpicking and the casino games
 (blackjack, roulette, slots: their buttons, rows, refusals and results, #3146; the
-chips' and casinos' names are the install's), and the Quick Loot list (its keys' words, column heads and `Empty`; the items' and containers' names are the install's), and the corner and banner notices NVForever words itself (`Quest added`, `Quest completed`, `Quest failed`, `You have discovered`, `COMPLETED: …`, `Discovered: …`, `… added`, `Map marker added`, #3399; the quests', places' and items' names are the install's). A choice's
+chips' and casinos' names are the install's), Caravan (its buttons, rows, refusals and
+results), the key and mouse button names in the help boxes, the poison, VATS, death,
+pickpocket and save notices (#3146), and the Quick Loot list (its keys' words, column heads and `Empty`; the items' and containers' names are the install's), and the corner and banner notices NVForever words itself (`Quest added`, `Quest completed`, `Quest failed`, `You have discovered`, `COMPLETED: …`, `Discovered: …`, `… added`, `Map marker added`, #3399; the quests', places' and items' names are the install's). A choice's
 name with no line (a resolution, a display's name, a language's own name) shows as it
 is. A note that names a choice names it as the page shows it, so a translated choice
 name is translated in the notes too.

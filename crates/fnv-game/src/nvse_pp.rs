@@ -186,7 +186,7 @@ impl Game<'_> {
     /// A new instance of `parent`, with the editor ID "Inst" and a count [observed: pp
     /// probe inst, "Inst1" for the first; the page puts the base's editor ID first]. The
     /// count rises with every instance made in the game and is never reused, so no two
-    /// share an editor ID [hypothesis: the page's "InstanceCount"; PR #1291 review]. `None`
+    /// share an editor ID (see docs/spec-notes/ext-pp.md §2). `None`
     /// when the clone IDs are used up (they end where the compiled scripts' begin).
     fn pp_new_instance(&mut self, parent: FormId, key: String) -> Option<FormId> {
         if crate::nvse_data::CLONE_BASE + self.clone_seq + 1 >= crate::game::COMPILED_BASE {
@@ -401,9 +401,9 @@ fn ax_call(g: &mut Game, name: &str, args: &[XVal]) -> Option<XVal> {
     let zero = XVal::Num(0.0);
     let v = match name {
         // `value key [index] [form]`: the value at the index (0 when omitted), the list
-        // grown with nulls to reach it [hypothesis]; an array is held as it is, not
-        // copied [documented: AX Set, "Arrays are not flattened"; hypothesis: shared].
-        // Returns the value [hypothesis: the page's return type "variable"].
+        // grown with nulls to reach it; an array is held as it is, not copied
+        // [documented: AX Set, "Arrays are not flattened"]. Returns the value
+        // (see docs/spec-notes/ext-pp.md §1).
         "ax_set" => {
             let value = args.first().cloned().unwrap_or(XVal::Num(0.0));
             let key = text(args, 1);
@@ -420,7 +420,7 @@ fn ax_call(g: &mut Game, name: &str, args: &[XVal]) -> Option<XVal> {
             g.ax_drop(old);
             value
         }
-        // `key [index] form`: the value; 0 for none [hypothesis].
+        // `key [index] form`: the value; 0 for none (see docs/spec-notes/ext-pp.md §1).
         "ax_get" => {
             let key = text(args, 0);
             let (index, f) = index_and_form(args, 1);
@@ -433,7 +433,7 @@ fn ax_call(g: &mut Game, name: &str, args: &[XVal]) -> Option<XVal> {
             let i = usize::try_from(index.unwrap_or(0)).ok();
             XVal::Num(type_code(g.ax_entries(&key, f).and_then(|l| i.and_then(|i| l.get(i)))))
         }
-        // [documented: AX Size, "the size"]; 0 for no such aux [hypothesis].
+        // [documented: AX Size, "the size"]; 0 for no such aux (see docs/spec-notes/ext-pp.md §1).
         "ax_size" => {
             let (_, f) = index_and_form(args, 1);
             XVal::Num(g.ax_entries(&text(args, 0), f).map_or(0.0, |l| l.len() as f64))
@@ -480,7 +480,7 @@ fn ax_call(g: &mut Game, name: &str, args: &[XVal]) -> Option<XVal> {
             }
         }
         // `key [form]`: the entries to the console [documented: AX Dump]; 1 when the key
-        // exists [hypothesis].
+        // exists (see docs/spec-notes/ext-pp.md §1).
         "ax_dump" => {
             let key = text(args, 0);
             let (_, f) = index_and_form(args, 1);
@@ -561,11 +561,11 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
         // ---- item mods ----
         // `object slot [itemMod]`: slots "1"–"3" are the vanilla ones, on (an inventory
         // item's own flags, else the base form's or instance's) [documented: AttachMod's
-        // first example "will enable slot 2"; hypothesis: an item mod given must be the
-        // slot's WMI]; any other slot name is an extended slot: the mod attached, or with
-        // none the one there removed [documented: AttachMod's notes], firing the detach
-        // and attach handlers [documented: OnAttachItemMod]. Returns 1 when something was
-        // done [hypothesis: the page gives no return value].
+        // first example "will enable slot 2"; an item mod given must be the slot's WMI];
+        // any other slot name is an extended slot: the mod attached, or with none the one
+        // there removed [documented: AttachMod's notes], firing the detach and attach
+        // handlers [documented: OnAttachItemMod]. Returns 1 when something was done
+        // (see docs/spec-notes/ext-pp.md §3).
         "attachmod" => {
             let Some(object) = form(args, 0) else { return Some(Ok(zero)) };
             let slot = text(args, 1);
@@ -619,7 +619,7 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
         }
         // `weapon "slot"` (the page GetAttachedMod, whose template the catalogue names
         // GetAllAttachedWeaponMods): the item mod in the slot [documented: its examples];
-        // no slot, none [hypothesis].
+        // no slot, none (see docs/spec-notes/ext-pp.md §3).
         "getallattachedweaponmods" | "getattachedmod" => {
             let Some(object) = form(args, 0) else { return Some(Ok(XVal::Ref(0))) };
             let slot = text(args, 1).to_lowercase();
@@ -629,7 +629,7 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
         // `object [slot]` (the page GetAllSlotMods): the mods that can go in the slot, as
         // a string map of slot to item mod; without a slot every slot's [documented].
         // Without Devkit's slot lists a vanilla slot can take its WMI and an extended slot
-        // the mod attached there [hypothesis].
+        // the mod attached there (see docs/spec-notes/ext-pp.md §3).
         "getallmodsinslot" | "getallslotmods" => {
             let Some(object) = form(args, 0) else { return Some(Ok(slot_map(g, Vec::new()))) };
             let want = text(args, 1).to_lowercase();
@@ -707,7 +707,7 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
         // `weapon [ammo]` on an actor: the first ammo of the weapon's list the actor carries;
         // given an ammo, the next one after it that it carries, going round to it last
         // [documented: FindWeaponAmmo's example]; none carried: no form. An ammo not in the
-        // list starts from the top [hypothesis].
+        // list starts from the top (see docs/spec-notes/ext-pp.md §4).
         "findweaponammo" => {
             let (Some(actor), Some(w)) = (subject, form(args, 0)) else { return Some(Ok(XVal::Ref(0))) };
             let list = g.weapon_ammo(g.pp_base(w));
@@ -727,7 +727,7 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
         // On an inventory reference: the item replaced by another base form, keeping
         // whether it is worn [documented: ReplaceItemInInventory, "works on equipped
         // items"]; with `copy` its condition and mods kept too, `count` how many (all of
-        // them when omitted) [hypothesis: the arguments' meaning].
+        // them when omitted; see docs/spec-notes/ext-pp.md §4).
         "replaceitemininventory" => {
             let (Some(r), Some(new)) = (subject, form(args, 0)) else { return Some(Ok(zero)) };
             let Some((c, item)) = g.temp_item(r) else { return Some(Ok(zero)) };
@@ -775,12 +775,12 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
         // Doc Mitchell's lines with a 27-character prompt the game gave the 26 characters
         // of its topic's name, and for a line with no prompt the 19 of its topic's
         // [observed: pp probes prompt, prompt.none; the page says "prompt"]. "" without a
-        // topic or a name [hypothesis].
+        // topic or a name (see docs/spec-notes/ext-pp.md §4).
         "gettopicprompt" => XVal::Str(form(args, 0).and_then(|i| g.data.infos.get(&i)).and_then(|i| i.topic).and_then(|t| g.data.full_names.get(&t).cloned()).unwrap_or_default()),
         // `delay udf args…` on a reference (the player when none): the function called
         // every `delay` seconds, −1 removing it [documented: CallLoop]. The first call
         // after one delay, and the same function on the same reference registered again
-        // replaces it [hypothesis]. Not kept across a load [documented: the page's
+        // replaces it (see docs/spec-notes/ext-pp.md §4). Not kept across a load [documented: the page's
         // example, "auto-removed when loading a game"].
         "callloop" => {
             let Some(func) = args.get(1).cloned() else { return Some(Ok(zero)) };
@@ -802,7 +802,7 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
             zero
         }
         // `"condition"`: 1 when the text holds as an `if` condition [documented:
-        // EvaluateString]; a text that does not compile is false [hypothesis].
+        // EvaluateString]; a text that does not compile is false (see docs/spec-notes/ext-pp.md §4).
         "evaluatestring" => {
             let t = text(args, 0);
             match g.evaluate_string(&t) {

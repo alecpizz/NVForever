@@ -499,27 +499,52 @@ fn given_for(world: &World, settings: &Settings, key: &str) -> bool {
     settings.list()[i].switches.split(',').map(str::trim).filter(|s| !s.is_empty()).any(|s| given.given.iter().any(|g| g == s))
 }
 
-/// Whether the INI at `path` holds settings already (a `[Settings]` heading). The first
-/// start writes the game folder (`[Game] Path=`, fnv-install) before any setting, as
-/// `fnvtool setup` and the launcher do, so an INI with no settings in it is still a first
-/// start [design, #3909].
-fn has_settings(path: &Path) -> bool {
-    std::fs::read_to_string(path).is_ok_and(|t| t.lines().any(|l| l.trim().eq_ignore_ascii_case("[Settings]")))
+/// Whether this start is the first with the INI at `path`: there is none yet, or it is
+/// marked as not started with (`fnv_install::FIRST_START_KEY`: the first start, `fnvtool
+/// setup` and the launcher mark the INI they make). An INI without the mark was made
+/// before it, by a player who has started the game [design, #3909: a player who never
+/// changed a setting keeps an INI with no settings in it, and an update must not change
+/// their rows]. The second: the INI is there and marked.
+fn first_start(path: &Path) -> (bool, bool) {
+    match std::fs::read_to_string(path) {
+        Ok(t) => (fnv_install::first_start_pending(&t), fnv_install::first_start_pending(&t)),
+        Err(e) => (e.kind() == std::io::ErrorKind::NotFound, false),
+    }
 }
 
-/// A Steam Deck's first start (no settings in `NVForever.ini` yet, [`steam_deck`]): the Steam Deck
-/// preset and [`STEAM_DECK_AA`], each taken as a pick on the page would (so written to the
-/// INI, and the next start reads them as the player's). After the INI is applied and before
-/// the run's smooth terrain is fixed, so it takes effect in this run [design, #3909]. A row
+/// The INI at `path` marked as started with (`fnv_install::FIRST_START_KEY`), on every
+/// machine, so only the first start counts.
+fn mark_started(path: &Path) {
+    let done = std::fs::read_to_string(path)
+        .map_err(|e| e.to_string())
+        .and_then(|t| fnv_install::guard_write(path, None).map(|_| t).map_err(|e| e.to_string()))
+        .and_then(|t| fnv_install::write_whole(path, fnv_install::after_first_start(&t).as_bytes()).map_err(|e| e.to_string()));
+    if let Err(e) = done {
+        warn!("first start: {} not marked as started with: {e}", path.display());
+    }
+}
+
+/// A Steam Deck's first start ([`first_start`], [`steam_deck`]): the Steam Deck preset and
+/// [`STEAM_DECK_AA`], each taken as a pick on the page would (so written to the INI, and
+/// the next start reads them as the player's). After the INI is applied and before the
+/// run's smooth terrain is fixed, so it takes effect in this run [design, #3909]. A row
 /// whose switch the command line gives keeps the command line's value, and a command line
-/// that names any row the preset sets leaves the preset untaken.
+/// that names any row the preset sets leaves the preset untaken. On every machine the INI's
+/// first-start mark is cleared afterwards.
 pub fn deck_first_start(world: &mut World) {
     let Some(path) = world.get_resource::<settings::SettingsFile>().and_then(|f| f.0.clone()) else { return };
     let deck = world.get_resource::<SteamDeck>().copied().unwrap_or_default();
-    let kept = has_settings(&path);
-    if !deck.0 || (kept && !deck.1) {
-        return;
+    let (first, marked) = first_start(&path);
+    if deck.0 && (first || deck.1) {
+        take_deck_settings(world, &path, first, marked);
     }
+    if marked {
+        mark_started(&path);
+    }
+}
+
+/// [`deck_first_start`]'s picks, once it is a Deck's first start.
+fn take_deck_settings(world: &mut World, path: &Path, first: bool, marked: bool) {
     let Some(settings) = world.get_resource::<Settings>() else { return };
     let preset = world.get_resource::<QualityPresets>().and_then(|p| p.presets.iter().find(|p| p.label == STEAM_DECK).cloned());
     let named: Vec<&str> = preset.iter().flat_map(|p| p.rows.iter().map(|(k, _)| *k).chain(p.choices.iter().map(|(k, _)| *k))).filter(|k| given_for(world, settings, k)).collect();
@@ -538,7 +563,11 @@ pub fn deck_first_start(world: &mut World) {
             took.push(format!("anti-aliasing {STEAM_DECK_AA}"));
         }
     }
-    let why = if kept { format!("the test aid's, {} kept", path.display()) } else { format!("no settings in {} yet", path.display()) };
+    let why = match (first, marked) {
+        (false, _) => format!("the test aid's, {} kept", path.display()),
+        (true, true) => format!("{} not started with yet", path.display()),
+        (true, false) => format!("no {} yet", path.display()),
+    };
     info!("steam deck: first start ({why}): {}", if took.is_empty() { "nothing taken".to_string() } else { took.join(" and ") });
 }
 
@@ -608,7 +637,7 @@ pub fn register(app: &mut App, group: &'static str) {
             key: QUALITY_KEY,
             group,
             label: "Quality preset",
-            note: "Sets the rows the original's presets cover from low.ini to VeryHigh.ini, and Smooth terrain. Steam Deck: High without sun shadows or smooth terrain. Custom: none match.",
+            note: "Sets the rows the quality presets cover to the game folder's low.ini to VeryHigh.ini, and Smooth terrain (Off at Low and Medium). Steam Deck: High, no sun shadows or smoothing. Custom: none match.",
             switches: "",
             get: |_| false,
             set: |_, _| {},
@@ -884,15 +913,24 @@ mod tests {
         assert!(!low_only.world_mut().resource::<QualityPresets>().presets.iter().any(|p| p.label == STEAM_DECK));
     }
 
-    /// #3909: a Steam Deck's first start (no settings in the INI) takes the preset and
-    /// writes it; a start with settings kept, or on another machine, takes nothing.
+    /// #3909: a Steam Deck's first start (no INI yet, or one marked as not started with)
+    /// takes the preset and writes it; an INI from before the mark (a player who never
+    /// changed a setting), a start with settings kept, or another machine takes nothing.
+    /// Every machine clears the mark.
     #[test]
     fn a_steam_decks_first_start_takes_the_preset_once() {
         let dir = std::env::temp_dir().join(format!("nvf-quality-deck-{}", std::process::id()));
         let path = dir.join("NVForever.ini");
-        // (Deck, the INI's text before the start, taken): an INI with only the game folder,
-        // as the first start and `fnvtool setup` write it, is still a first start.
-        for (deck, ini, taken) in [(true, None, true), (false, None, false), (true, Some("[Settings]\nquality=High\n"), false), (true, Some("[Game]\nPath=/games/FNV\n"), true)] {
+        let marked = "[Game]\nPath=/games/FNV\nFirstStart=1\n";
+        // (Deck, the INI's text before the start, taken)
+        for (deck, ini, taken) in [
+            (true, None, true),
+            (false, None, false),
+            (true, Some("[Settings]\nquality=High\n"), false),
+            (true, Some("[Game]\nPath=/games/FNV\n"), false),
+            (true, Some(marked), true),
+            (false, Some(marked), false),
+        ] {
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).unwrap();
             if let Some(text) = ini {
@@ -906,6 +944,13 @@ mod tests {
             assert_eq!(quality_reading(w) == STEAM_DECK, taken, "deck {deck}, INI {ini:?}");
             let text = std::fs::read_to_string(&path).unwrap_or_default();
             assert_eq!(text.contains("quality=Steam Deck"), taken, "{text}");
+            assert!(!fnv_install::first_start_pending(&text), "the mark is cleared: {text}");
+            if ini == Some(marked) {
+                assert!(text.contains("Path=/games/FNV"), "the rest of the INI is kept: {text}");
+                // The next start is not a first start.
+                deck_first_start(app.world_mut());
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), text, "deck {deck}: nothing more");
+            }
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -44,7 +44,7 @@ pub mod read;
 mod input_tests;
 
 use super::frame::{self, Align, Card, Ctx, Kit, DIMMED, FADE, FILL, LINE, THICK};
-use super::labels::label;
+use super::labels::{built_in_label, label};
 use super::{Page, PageBody, PipBoy, PipBoyScreen};
 use crate::interface::{pipboy_amber as amber, at};
 use bevy::ecs::system::SystemParam;
@@ -248,13 +248,16 @@ pub struct StatsView {
     /// the others; the file gives its list the area's height, 542 from 100 down, which would
     /// reach the tab line].
     rows_shown: [usize; 5],
+    /// Optional explicit max scroll step per tab (from `list::counts` when variable-height
+    /// wrapped rows scroll on the tiled page); `None` uses `lens - rows_shown` [design].
+    scroll_most: [Option<usize>; 5],
     /// How many of the status page's buttons the view that draws it has.
     status_pages: usize,
 }
 
 impl Default for StatsView {
     fn default() -> StatsView {
-        StatsView { status: 0, selected: [0; 5], top: [0; 5], desc: 0, reputation: true, hover: None, limb: None, highlight: false, drawn_at: None, cycled: false, keep_limb: false, lens: [0; 5], desc_max: 0, rows_shown: [VISIBLE; 5], status_pages: 3 }
+        StatsView { status: 0, selected: [0; 5], top: [0; 5], desc: 0, reputation: true, hover: None, limb: None, highlight: false, drawn_at: None, cycled: false, keep_limb: false, lens: [0; 5], desc_max: 0, rows_shown: [VISIBLE; 5], scroll_most: [None; 5], status_pages: 3 }
     }
 }
 
@@ -283,15 +286,24 @@ impl StatsView {
         self.top[tab] = (self.top[tab] as i32 + by).clamp(0, most as i32) as usize;
     }
 
-    /// The furthest a tab's list scrolls: the first row shown when the last row is.
+    /// The furthest a tab's list scrolls: the first row shown when the last row is,
+    /// or the tiled scrollbar's `list::counts` maximum for variable-height lists [design].
     pub fn list_most(&self, tab: usize) -> usize {
-        self.lens[tab].saturating_sub(self.rows_shown[tab])
+        self.scroll_most[tab].unwrap_or_else(|| self.lens[tab].saturating_sub(self.rows_shown[tab]))
     }
+    pub fn list_page(&self, tab: usize) -> usize { self.rows_shown.get(tab).copied().unwrap_or(1) }
 
     /// How many rows the view that draws a tab's list shows at once: each view gives its own, as
     /// with the description's bound, and what is scrolled stays within it.
     pub fn set_rows_shown(&mut self, tab: usize, rows: usize) {
         self.rows_shown[tab] = rows.max(1);
+        self.top[tab] = self.top[tab].min(self.list_most(tab));
+    }
+
+    /// Explicit scroll bound for a tab's tiled list (when variable-height wrapped rows make
+    /// the scrollbar's step count differ from `lens - rows_shown`) [design].
+    pub fn set_scroll_most(&mut self, tab: usize, most: Option<usize>) {
+        self.scroll_most[tab] = most;
         self.top[tab] = self.top[tab].min(self.list_most(tab));
     }
 
@@ -389,6 +401,8 @@ pub struct Sources<'w> {
 pub struct Input<'w, 's> {
     keys: crate::pad::ActionButtons<'w, KeyCode>,
     wheel: MessageReader<'w, 's, MouseWheel>,
+    touch_wheel: Option<Res<'w,super::touch_scroll::WheelFrame>>,
+    physical:Option<Res<'w,super::touch_scroll::PhysicalPriority>>,
     time: crate::pause::AidTime<'w>,
     asks: MessageWriter<'w, UseHint>,
     tiles: Option<Res<'w, crate::tiles::stats_menu::StatsTiles>>,
@@ -505,7 +519,10 @@ pub fn prepare(
         if let Some(a) = ask {
             input.asks.write(a);
         }
-        let pointer = screen.as_ref().and_then(|s| s.pointer);
+        let touch_lines=if input.physical.as_ref().is_some_and(|p|p.active) {0.0} else {input.touch_wheel.as_ref().map_or(0.0,|w|w.lines(&pip))};
+        let pointer = input.touch_wheel.as_ref().filter(|_|touch_lines!=0.0).and_then(|w|w.at)
+            .or_else(||screen.as_ref().and_then(|s|s.pointer));
+        mem.wheel+=touch_lines;
         for w in input.wheel.read() {
             mem.wheel += match w.unit {
                 MouseScrollUnit::Line => w.y,
@@ -616,10 +633,10 @@ pub fn draw(
     commands.entity(body).despawn_children().with_children(|p| {
         let value = figures;
         let cards = [
-            Card::new(LVL.0, LVL.1, label("sStatsLVLAbbrev", "LVL"), snap.level.map_or("--".into(), |l| l.to_string())),
-            Card::new(HP.0, HP.1, label("sStatsHP", "HP"), value(snap.hp)),
-            Card::new(AP.0, AP.1, label("sStatsAP", "AP"), value(snap.ap)),
-            Card::new(XP.0, XP.1, label("sStatsXP", "XP"), snap.xp_percent.map_or_else(|| value(snap.xp), |p| format!("{p:.0}%"))),
+            Card::new(LVL.0, LVL.1, built_in_label("sStatsLVLAbbrev"), snap.level.map_or("--".into(), |l| l.to_string())),
+            Card::new(HP.0, HP.1, built_in_label("sStatsHP"), value(snap.hp)),
+            Card::new(AP.0, AP.1, built_in_label("sStatsAP"), value(snap.ap)),
+            Card::new(XP.0, XP.1, built_in_label("sStatsXP"), snap.xp_percent.map_or_else(|| value(snap.xp), |p| format!("{p:.0}%"))),
         ];
         frame::heading(p, &mut c, Page::Stats.title(), &cards);
         match tab {
@@ -830,7 +847,7 @@ fn status(p: &mut ChildSpawnerCommands, c: &mut Ctx, v: &mut StatsView, s: &Snap
     let o = STATUS.min;
     let h = c.line_height(2) + SUB_VERBUF;
     let mut spots = Vec::new();
-    let names = [label("sStatsCNDAbbrev", "CND"), label("sStatsRADAbbrev", "RAD"), label("sStatsEFFAbbrev", "EFF")];
+    let names = [built_in_label("sStatsCNDAbbrev"), built_in_label("sStatsRADAbbrev"), built_in_label("sStatsEFFAbbrev")];
     for (i, name) in names.iter().enumerate() {
         let r = Rect::new(o.x, o.y + h * i as f32, o.x + SUB_WIDTH, o.y + h * (i as f32 + 1.0));
         let selected = v.status == i;
@@ -1073,6 +1090,9 @@ fn list(p: &mut ChildSpawnerCommands, c: &mut Ctx, v: &StatsView, tab: usize, ro
         }
         spots.push((up, Spot::ListUp));
         spots.push((down, Spot::ListDown));
+        super::scrollbar::hits(p, Page::Stats, tab, Rect::from_corners(up.min, down.max),
+            Rect::new(r.min.x,up.max.y,r.min.x+ARROW.x,down.min.y),
+            Rect::new(r.min.x,my,r.min.x+ARROW.x,my+mh),Vec2::ZERO);
     }
 }
 
@@ -1148,7 +1168,7 @@ fn general(p: &mut ChildSpawnerCommands, c: &mut Ctx, v: &mut StatsView, s: &Sna
         if let Some(st) = s.standings.get(v.selected[4]) {
             // The block: the picture 80 above it, 350 high; the title 20 under the
             // picture, the reputation's name 50 lower [observed: the owner's screenshots,
-            // "Liked" over "Goodsprings"; the file leaves it to the code].
+            // the title over "Goodsprings"; the file leaves it to the code].
             let h = 290.0 + th;
             let top = r.min.y + (GENERAL_HEIGHT - h) / 2.0;
             if let Some(icon) = &st.icon {
@@ -1177,7 +1197,7 @@ fn general(p: &mut ChildSpawnerCommands, c: &mut Ctx, v: &mut StatsView, s: &Sna
     }
     if !s.hide_reputation {
         // The switch: the other list's name [hypothesis], its key after it.
-        let name = if v.reputation { label("sStatsGeneral", "General") } else { "Reputation" };
+        let name = if v.reputation { built_in_label("sStatsGeneral") } else { "Reputation" };
         let size = text_box(c, name, HINT_HORBUF, HINT_VERBUF);
         let right = GENERAL.x + GENERAL_SWITCH.x;
         let top = GENERAL.y + GENERAL_SWITCH.y;
@@ -1288,7 +1308,9 @@ pub fn use_hints(
             if !allowed {
                 info!("pipboy stats: {name} not used: activation prevented by script");
                 if let Some(m) = active.0.as_mut().filter(|m| m.mode == crate::menu::model::Mode::Inventory) {
-                    let _ = m.refresh(&mut sim.world);
+                    if m.refresh(&mut sim.world).is_ok() {
+                        crate::menu::sync_ysi_model(m, &mut rt.game);
+                    }
                 }
                 continue;
             }
@@ -1305,6 +1327,8 @@ pub fn use_hints(
         if let Some(m) = active.0.as_mut().filter(|m| m.mode == crate::menu::model::Mode::Inventory) {
             if let Err(e) = m.refresh(&mut sim.world) {
                 warn!("pipboy stats: the inventory's lists: {e}");
+            } else if let Some(rt) = script.as_mut().and_then(|s| s.rt.as_mut()) {
+                crate::menu::sync_ysi_model(m, &mut rt.game);
             }
         }
     }

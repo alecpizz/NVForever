@@ -1,0 +1,10 @@
+[package]
+name = "nvf-skinning-cpu-probe"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "GPL-3.0-or-later"
+[workspace]
+[dependencies]
+wesl = { version = "=0.6.0", features = ["naga-ext"] }
+naga = { version = "=30.0.1", features = ["wgsl-in", "spv-out"] }

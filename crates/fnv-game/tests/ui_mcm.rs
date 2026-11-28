@@ -411,3 +411,164 @@ End
     assert_eq!(g.ui_tree.get_string("StartMenu/MCM/MCM_Options/Option3/value/text/string").as_deref(), Some("E"));
     assert_eq!(g.ui_tree.get_string("StartMenu/MCM/MCM_Info/string").as_deref(), Some("Info text"));
 }
+
+/// Regression for #3916 (Mods page reopen path): unloading `StartMenu` before
+/// `OnMenuClose 1013` lets `StartMenu\visible == -999` fire, resets `MCMModList`,
+/// and lets UIO rebuild a fresh single `MCM` subtree on each subsequent Pause visit.
+#[test]
+fn mcm_reopens_cleanly_across_multiple_pause_visits_with_uio() {
+    const MCM_QUEST: u32 = 0x0100_0810;
+    const MCM_SCRIPT: u32 = 0x0100_0811;
+    const MCM_LIST_QUEST: u32 = 0x0100_0812;
+    const OPENS_GLOB: u32 = 0x0100_0813;
+
+    const MCM_SOURCE: &str = r#"scn McmRepeatTestScript
+short iMenu
+
+Begin MenuMode 1013
+  if iMenu == 0 && GetUIFloat "StartMenu/MCM/MCM_Trigger/_clicked" == 1
+    set iMenu to 1
+    SetUIFloat "StartMenu/MCM/_Menu" 1
+    StartQuest MCMModList
+  elseif iMenu == 1 && GetUIFloat "StartMenu/MCM/MCM_Trigger/_clicked" == 1
+    set iMenu to 0
+    SetUIFloat "StartMenu/MCM/_Menu" 0
+    ResetQuest MCMModList
+  endif
+End
+"#;
+
+    let bytes = script(&[(0, None, st(0x7FFF, &le16(0)))]);
+    let mut subs = unit(1, &bytes, &[(1, "iMenu", 1)], &[]);
+    subs.push(sub(b"SCTX", MCM_SOURCE.as_bytes().to_vec()));
+    let scpt = record(b"SCPT", 0, MCM_SCRIPT & 0xFF_FFFF, &[vec![sub(b"EDID", z("McmRepeatTestScript"))], subs].concat());
+    let mcm_q = record(
+        b"QUST",
+        0,
+        MCM_QUEST & 0xFF_FFFF,
+        &[
+            sub(b"EDID", z("MCM")),
+            sub(b"SCRI", (MCM_SCRIPT & 0xFF_FFFF).to_le_bytes().to_vec()),
+            sub(b"DATA", [vec![0x19u8, 0, 0, 0], 0.01f32.to_le_bytes().to_vec()].concat()),
+        ],
+    );
+    let list_q = record(
+        b"QUST",
+        0,
+        MCM_LIST_QUEST & 0xFF_FFFF,
+        &[
+            sub(b"EDID", z("MCMModList")),
+            sub(b"DATA", [vec![0x08u8, 0, 0, 0], 0.01f32.to_le_bytes().to_vec()].concat()),
+        ],
+    );
+    let glob = record(
+        b"GLOB",
+        0,
+        OPENS_GLOB & 0xFF_FFFF,
+        &[sub(b"EDID", z("TestMcmOpens")), sub(b"FNAM", vec![b's']), sub(b"FLTV", 0f32.to_le_bytes().to_vec())],
+    );
+    let plugin = [tes4(), top(b"GLOB", &glob), top(b"SCPT", &scpt), top(b"QUST", &[mcm_q, list_q].concat())].concat();
+    let plugins = vec![Plugin::parse(&tes4(), "Base.esm".into()).unwrap(), Plugin::parse(&plugin, "MCMRepeat.esp".into()).unwrap()];
+    let lo = LoadOrder::new(&plugins).unwrap();
+    let schema = Schema::load_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../../schemas/fnv")).unwrap();
+    let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schemas/script/functions.json");
+    let j: Json = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+    let forms = FormStore::build(&lo, &schema);
+    let refs = RefTable::build(&lo, &schema);
+    let gdata = GameData::build(&lo, &schema, FunctionTable::load(&p).unwrap(), &j, &refs);
+
+    let src = MemSource::default()
+        .with(r"menus\options\start_menu.xml", r#"<menu name="StartMenu"><class>&StartMenu;</class><_MCMExt+Init>0</_MCMExt+Init></menu>"#)
+        .with_loose(
+            r"menus\prefabs\MCM\MCM.xml",
+            r#"<rect name="MCM"><_Menu>0</_Menu><hotrect name="MCM_Trigger"><_clicked>0</_clicked></hotrect></rect>"#,
+        )
+        .with("uio/public/mcm_repeat.txt", "MCM\\MCM.xml::StartMenu\n?MCMRepeat.esp");
+    let paths = src.files.keys().cloned().collect::<Vec<_>>();
+
+    let mut g = Game::new(&gdata, World::new(&forms, &refs, SimConfig::default()), GameConfig::default());
+    g.new_game();
+    ui_loading::load(&mut g, Box::new(src), paths);
+
+    g.run_query(
+        r#"Begin Function { }
+SetOnMenuOpenEventHandler (begin function {int iMenu}
+  if eval GetUIFloat "StartMenu/_MCMExt+Init" == 0
+    SetUIFloat "StartMenu/_MCMExt+Init" 1
+    set TestMcmOpens to TestMcmOpens + 1
+  endif
+end) 1 1013
+SetOnMenuCloseEventHandler (begin function {int iMenu}
+  if eval GetUIFloatAlt "StartMenu\visible" != -999
+    return
+  endif
+  ResetQuest MCMModList
+end) 1 1013
+End
+"#,
+        Default::default(),
+    )
+    .unwrap();
+
+    let count_start_tiles = |g: &Game| -> (usize, usize) {
+        let root = g.ui_tree.menu("StartMenu").expect("StartMenu loaded");
+        let mcm_children = g
+            .ui_tree
+            .tile(root)
+            .children
+            .iter()
+            .filter(|&&c| g.ui_tree.is_live(c) && g.ui_tree.tile(c).name.eq_ignore_ascii_case("MCM"))
+            .count();
+        let mut total = 0;
+        let mut stack = vec![root];
+        while let Some(id) = stack.pop() {
+            if !g.ui_tree.is_live(id) {
+                continue;
+            }
+            total += 1;
+            stack.extend(g.ui_tree.tile(id).children.iter().copied());
+        }
+        (total, mcm_children)
+    };
+
+    let mcm_id = FormId(MCM_QUEST);
+    let list_id = FormId(MCM_LIST_QUEST);
+    let opens_id = FormId(OPENS_GLOB);
+    let mut expected_tiles = None;
+
+    for visit in 1..=3 {
+        ui_loading::sync(&mut g, true, false);
+        let (total_tiles, mcm_children) = count_start_tiles(&g);
+        assert_eq!(mcm_children, 1, "visit {visit}: UIO must inject MCM exactly once (no duplicate tiles)");
+        if let Some(prev) = expected_tiles {
+            assert_eq!(total_tiles, prev, "visit {visit}: StartMenu tile count must stay constant");
+        } else {
+            expected_tiles = Some(total_tiles);
+        }
+        assert_eq!(g.ui_tree.get_float("StartMenu/_MCMExt+Init"), Some(0.0), "visit {visit}: fresh StartMenu tree");
+
+        // Enter Mods page: OnMenuOpen 1013 fires, click trigger, MCM opens.
+        assert_eq!(g.page_menu_event(menus::START, true), 1);
+        assert_eq!(g.world.global(opens_id).unwrap(), visit as f32, "visit {visit}: OnMenuOpen 1013 ran");
+        assert!(g.ui_tree.set_float("StartMenu/MCM/MCM_Trigger/_clicked", 1.0));
+        g.page_tick(menus::START);
+        assert_eq!(g.ui_tree.get_float("StartMenu/MCM/_Menu"), Some(1.0), "visit {visit}: MCM opened");
+        assert!(g.quest_state(mcm_id).running, "visit {visit}: MCM quest running");
+        assert!(g.quest_state(list_id).running, "visit {visit}: MCMModList started");
+
+        // Second click closes MCM via its script; unload StartMenu, then fire OnMenuClose 1013.
+        g.page_tick(menus::START);
+        assert_eq!(g.ui_tree.get_float("StartMenu/MCM/_Menu"), Some(0.0), "visit {visit}: MCM closed");
+        assert!(g.ui_tree.set_float("StartMenu/MCM/MCM_Trigger/_clicked", 0.0));
+        let root = g.ui_tree.menu("StartMenu").unwrap();
+        g.ui_tree.unload_tile(root);
+        assert_eq!(g.page_menu_event(menus::START, false), 1);
+        assert!(!g.quest_state(list_id).running, "visit {visit}: MCMModList stopped by ResetQuest");
+
+        if visit == 2 {
+            ui_loading::sync(&mut g, false, false);
+            assert!(g.ui_tree.menu("StartMenu").is_none());
+            g.frames(5);
+        }
+    }
+}

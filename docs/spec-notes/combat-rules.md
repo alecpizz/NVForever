@@ -325,8 +325,11 @@ between them in the original [observed: owner playtest, #2739].
   [documented: GECK wiki Weapons].
   - The sentry bot's launcher now fires every 0.967 s (its `a:R`), not 0.63 s. That is
     still no barrage-length pause: by the player's rule the clip's end (2.0 s) is not
-    waited for. Whether the original waits for the end, switches to its gun between
-    missiles, or has another pause is observer check 221 [hypothesis].
+    waited for. The original switches to its gun after each missile [observed
+    2026-11-25, observer check 221]: the Hardened Sentry Bot fires one missile per
+    launcher turn of about 4.6 s, then about 5.7 s of gatling bursts, a missile every
+    9.9-10.4 s at 1,100-1,250 units; the Army one's minigun turns last 6-18 s; neither
+    spends the missiles in its inventory.
   - The wiki also says Semi-Automatic Fire Delay Max "determines semi-auto weapon's fire
     rate when used by actors" [documented: GECK wiki Weapons]; NVForever waits that delay
     after each shot besides the cycle's interval (npc_combat module notes).
@@ -426,31 +429,53 @@ between them in the original [observed: owner playtest, #2739].
     roll, launcher rounds go off where they first land). At a contact the speed into the
     surface keeps `fGrenadeRestitution` of itself, out of it (0.01 in FalloutNV.esm
     [observed]; its meaning [hypothesis: from its name]), the speed along it keeps
-    `grenade_roll_keep` (0.9) at the first landing, and the grenade goes on along the
-    surface; on ground (a normal at least 0.7 up) it rolls, its speed falling as
-    e^(−0.66 × t) (`grenade_roll_damping`), until it is slower than 40 units/s or its fuse
-    ends. Both shares are fitted to the original's frag grenade [observed: o26_gl frag0,
-    distances from where it left the hand: it touched down 513 units out after 0.58 s,
-    bounced under 15 units, rolled off at about 636 units/s and slowed at 0.66 a second
-    (rms 2.6 units), to 1,206 units by 2.47 s, still moving when the record ended; the
-    0.9 is its speed just after over just before]. Ours does the same since PR #1788
-    (smoke `frag-grenade-roll`). `fGrenadeFriction` (5.0 in FalloutNV.esm) is
+    `grenade_roll_keep` (0.6) at the first landing, and the grenade goes on along the
+    surface; on ground (a normal at least 0.7 up) it rolls, losing 140 units/s every
+    second (`grenade_roll_friction`), until it is slower than 40 units/s or its fuse
+    ends. Both are fitted to the original's frag grenade [observed: o32_throw,
+    2026-11-25/26, nine throws on the runway, FireWeapon taps and holds of 5-120 loops,
+    positions every game loop; observer follow-up 2026-11-28 on #1785]:
+    - the share of the ground speed kept at touchdown differs by throw, 0.33-0.36 for the
+      FireWeapon taps, about 0.6 for 5-10 loops, 0.48 and 0.71 for two 30-loop throws,
+      0.8-1.0 at 60-120 loops (median 0.61); after it one hop of 13-69 units, then 1-3
+      small ones [hypothesis: the share depends on how the grenade hits, not only on its
+      speed];
+    - the slow rolls come to a full stop (the taps at 502 and 588 units from the hand);
+      one constant friction fits each roll within a few units, 117-178 units/s² below
+      600 units/s of roll and 279-418 above 850;
+    - every grenade goes off 2.46-2.48 s after it leaves the hand, where it has got to:
+      5 loops 745 units out, 10 loops 969, 30 loops 1,267-1,313, 60 loops 1,844, 120
+      loops 1,705, 30 with Heave Ho! 1,921.
+
+    With 0.6 and 140 the distances at 1.0, 1.5 and 2.0 s and at the fuse come within
+    about 50 units of the 5-, 10-, 30- and 120-loop throws and Heave Ho!'s [observed: a
+    fit over the nine throws' figures, rms 124 units against 157 for the 0.9 and e^(−0.66 t)
+    fitted before to o26 frag0, whose speeds were misread]; the taps, which kept only a
+    third, roll about 150 units too far, and the 60-loop throw, which skimmed on at its
+    full speed, about 400 short (smoke `frag-grenade-roll`, `frag-grenade-tap`). `fGrenadeFriction` (5.0 in FalloutNV.esm) is
     not used [hypothesis: a Havok friction; our grenade is no rigid body]. The grenade
     model's own body (`GrenadeFrag.NIF` bhkRigidBody: mass 5, friction 0.5, restitution
     0.4, linear damping 0.1, angular damping 0.05) is not used either [observed values].
-  - **Throw speed, open** (issue #1785). Ours throws at the PROJ speed (1,200 for
-    `GrenadeFragProjectile`) times the throwing perks. The original's left at about 950
-    units/s across the ground (949-955 over its first 0.35 s, aimed level), slowed to
-    about 650-770 in the last 0.2 s before touchdown, and touched down 513 units from where
-    it left (about 563 from the player) after 0.58 s; its height over that flight fits a
-    fall under about 570 units/s² from a slight downward start (a rough fit, less than the
-    686.7 rule) [observed: o26_gl frag0; times from the floor clock, floor(GameDaysPassed)
-    × 24 + GameHour, on which JIP's projectile lifetime reaches 1 at 1.00 s and the 40 mm
-    round flies at 1,746-1,754 units/s; the 534 units after 0.61 s and the 490 units/s²
-    first written from the same run are replaced by these, read again from its samples].
-    Nothing in the data gives 950 (no throw setting in the
-    masters but `fGrenadeFriction` and `fGrenadeRestitution`; the weapon's Animation
-    Multiplier and Attack Multiplier are 1.0), so ours keeps the PROJ speed.
+  - **Throw speed: by how long attack is held** (issue #1785). In the original a thrown
+    grenade leaves faster the longer attack is held, up to its PROJ speed [observed:
+    o32_throw, 2026-11-25/26, the Searchlight Airport runway, aimed level, the game window
+    focused, `HoldControl 4` for N game loops then `ReleaseControl 4`; frag grenade (PROJ
+    1,200): 5 loops 627 units/s across the ground, 10 loops 715, 30 loops 912-952, 60 loops
+    about 1,180-1,200, 120 loops about 1,170; a `FireWeapon` throw with no hold 554-601;
+    the Nuka-grenade at 60 loops 1,239]. No throw slows in the air, and every one falls
+    under the full gravity (690-700 units/s² where the fit is clean). Heave Ho! multiplies
+    the speed by 1.5 on top (1,430 against 952 at 30 loops). o26 frag0's figures written
+    here before (about 950 slowing to 650-770, a fall of about 570) were misread from the
+    floor clock: the same 30-loop throw now holds 912-952 to touchdown at 513-514 units.
+    Ours: the player's grenade (a `Grenade Throw (1 Hand)` weapon whose projectile
+    explodes) leaves at its PROJ speed × (0.5 + 0.5 × the share of its wind-up, attack
+    pressed to the clip's `Hit` key, that attack was held), the whole speed when attack is
+    still held as it leaves, then times the throwing perks (`combat::throw_hold_share`)
+    [hypothesis: the share over our clip's 0.87 s wind-up fits the figures (0.55, 0.60,
+    0.79 and 1.0 at 5, 10, 30 and 60 loops, against 0.52, 0.60, 0.78 and 0.99) as well as
+    a rise over 1 s; that mines, thrown weapons and NPCs' throws keep their PROJ speed; that
+    VATS mode's throws do]. Smoke `frag-grenade-roll` (held 0.5 s: 940 units/s, down at
+    553 units after 0.59 s) and `frag-grenade-tap` (0.1 s: 668 units/s).
   - Detonating projectiles wait for `detonate()` (C-4).
   - Anything else ends after 60 s [design].
 - **Melee swing.** A fan of `melee_rays` rays over ±`melee_arc_deg` at the eye, as
@@ -971,6 +996,11 @@ Examples [observed, seed 1, skill 50, 100 HP target]:
     rates are untested; irregular frames were not tested separately.
 - **Blocking.** `damage::blocked` takes `block` (60 %) off a melee hit taken while
   blocking [design]. Nothing attacks the player yet; NPC melee (Layer 6 AI) will use it.
+  While the player holds Block with fists or a melee weapon (`MeleeInput::blocking`),
+  tapping or holding Attack starts no swing, sound, or hit unless the opt-in
+  `Power Attack From a Block` tweak (`bPowerAttackIfBlocking`, `instant_power`) is on
+  [observed: player report in #3753; design: mid-block input suppression and post-block
+  Scribe Counter timing pending an original-game capture].
 - **The body.** A power attack plays `{prefix}attackpower.kf` (`1hmattackpower.kf`,
   `h2hattackpower.kf`). Normal swings use the weapon's attack animation, falling back to
   its `_a` variant (`1hmattackright_a.kf`).

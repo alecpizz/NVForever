@@ -63,6 +63,25 @@ pub const AMBER_RGB: [u8; 3] = [255, 182, 66];
 static HUD_RGB: AtomicU32 = AtomicU32::new(pack(AMBER_RGB));
 static PIPBOY_RGB: AtomicU32 = AtomicU32::new(pack(AMBER_RGB));
 
+#[cfg(test)]
+std::thread_local! {
+    static TEST_COLOURS: std::cell::Cell<Option<([u8; 3], [u8; 3])>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Isolate authored palette changes from other test apps.
+/// Systems that consume the override must run on this thread.
+#[cfg(test)]
+pub(crate) fn colours_at(hud: [u8; 3], pipboy: [u8; 3]) -> impl Drop {
+    struct Restore(Option<([u8; 3], [u8; 3])>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TEST_COLOURS.set(self.0);
+        }
+    }
+    Restore(TEST_COLOURS.replace(Some((hud, pipboy))))
+}
+
 const fn pack([r, g, b]: [u8; 3]) -> u32 {
     (r as u32) << 16 | (g as u32) << 8 | b as u32
 }
@@ -73,19 +92,37 @@ fn unpack(v: u32) -> [u8; 3] {
 
 /// The HUD's and the menus' colour.
 pub fn hud_rgb() -> [u8; 3] {
+    #[cfg(test)]
+    if let Some((hud, _)) = TEST_COLOURS.get() {
+        return hud;
+    }
     unpack(HUD_RGB.load(Ordering::Relaxed))
 }
 
 pub fn set_hud_rgb(rgb: [u8; 3]) {
+    #[cfg(test)]
+    if let Some((_, pipboy)) = TEST_COLOURS.get() {
+        TEST_COLOURS.set(Some((rgb, pipboy)));
+        return;
+    }
     HUD_RGB.store(pack(rgb), Ordering::Relaxed);
 }
 
 /// The Pip-Boy screens' colour.
 pub fn pipboy_rgb() -> [u8; 3] {
+    #[cfg(test)]
+    if let Some((_, pipboy)) = TEST_COLOURS.get() {
+        return pipboy;
+    }
     unpack(PIPBOY_RGB.load(Ordering::Relaxed))
 }
 
 pub fn set_pipboy_rgb(rgb: [u8; 3]) {
+    #[cfg(test)]
+    if let Some((hud, _)) = TEST_COLOURS.get() {
+        TEST_COLOURS.set(Some((hud, rgb)));
+        return;
+    }
     PIPBOY_RGB.store(pack(rgb), Ordering::Relaxed);
 }
 
@@ -106,8 +143,9 @@ pub fn pipboy_amber(brightness: f32) -> Color {
     tint(pipboy_rgb(), brightness)
 }
 
-/// The UI scale the settings page shows and `NVForever.ini` keeps (`ui-scale`), as a
-/// factor (1 the original's size). It takes effect at the next start ([`ui_scale`]).
+/// The HUD scale the settings page shows and `NVForever.ini` keeps (`hud-scale-v2`),
+/// as a factor (1 the original's size). Legacy `ui-scale` is migrated separately.
+/// It takes effect at the next start ([`ui_scale`]).
 /// Stored as the bits of an `f32`.
 static UI_SCALE_SETTING: AtomicU32 = AtomicU32::new(0x3f80_0000);
 /// The UI scale this run draws with, fixed once the INI is read ([`fix_ui_scale`]).
@@ -169,6 +207,55 @@ fn take_ui_scale(text: &str) -> bool {
 pub fn ui_scale_part(s: f32) -> f32 {
     let (lo, hi) = UI_SCALE_RANGE;
     (((fit_ui_scale(s) - lo) / (hi - lo)) * 1000.0).round() / 1000.0
+}
+
+/// Expanded HUD slider has its own key so earlier 50..150% saved parts keep their size.
+pub const HUD_SCALE_KEY: &str = "hud-scale-v2";
+#[cfg(any(target_os = "android", test))]
+const HUD_SCALE_CHOICES: usize = 46;
+
+fn fit_hud_scale(scale: f32) -> f32 {
+    if !scale.is_finite() { return 1.0; }
+    (scale.clamp(0.25, 2.5) * 100.0).round() / 100.0
+}
+fn hud_scale_part(scale: f32) -> f32 {
+    (((fit_hud_scale(scale) - 0.25) / 2.25) * 1000.0).round() / 1000.0
+}
+#[cfg(any(target_os = "android", test))]
+fn hud_scale_of_part(part: f32) -> f32 {
+    if !part.is_finite() { return 1.0; }
+    fit_hud_scale(0.25 + part.clamp(0.0, 1.0) * 2.25)
+}
+
+pub fn register_hud_scale(app: &mut App, group: &'static str) {
+    #[cfg(target_os = "android")]
+    register_android_hud_scale(app, group);
+    #[cfg(not(target_os = "android"))]
+    {
+        let (legacy, choices) = ui_scale_row(group);
+        crate::settings::add_choice_list(app, legacy, choices);
+        crate::settings::set_older_split(app, "ui-scale", crate::menu_scale::legacy_menu);
+    }
+}
+
+#[cfg(any(target_os = "android", test))]
+pub(crate) fn register_android_hud_scale(app: &mut App, group: &'static str) {
+    use crate::settings::{self, Setting, Slider};
+    let (legacy, choices) = ui_scale_row(group);
+    settings::add_choice_list(app, legacy, choices);
+    // The wider HUD control represents the retained legacy key on the page.
+    settings::set_shown_when(app, "ui-scale", HUD_SCALE_KEY, |_| false);
+    settings::add_setting(app, Setting::slider(HUD_SCALE_KEY, group, "HUD scale",
+        "Size of the in-game HUD, from 25% to 250%. Menus have separate sizes. Takes effect at the next start.",
+        Slider::choice(HUD_SCALE_CHOICES, |_| hud_scale_part(ui_scale_setting()),
+            |_, part| UI_SCALE_SETTING.store(hud_scale_of_part(part).to_bits(), Ordering::Relaxed),
+            |part| format!("{:.0}%", hud_scale_of_part(part) * 100.0))));
+    settings::set_older_key(app, HUD_SCALE_KEY, "ui-scale");
+    settings::set_older_split(app, "ui-scale", crate::menu_scale::legacy_menu);
+}
+
+pub(crate) fn legacy_hud_scale(value: f32) -> String {
+    format!("{:.3}", hud_scale_part(ui_scale_of_part(value)))
 }
 
 /// The UI scale a slider's part stands for ([`ui_scale_part`]'s inverse).
@@ -332,8 +419,34 @@ pub fn menu_frame(anchor: Vec2) -> Option<Node> {
 /// [`menu_frame`].
 pub const MENU_SPREAD: f32 = 0.5;
 
-/// The share of the view a spread frame takes (module notes of [`MENU_SPREAD`]).
+std::thread_local! {
+    /// A scope asked for the whole view ([`whole_view`]).
+    static WHOLE_VIEW: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// While alive, a spread frame on this thread takes the whole view whatever the scale
+/// ([`spread_share`] 1), so a page drawn smaller to fit a narrow view gets all of its room
+/// (the settings page in a portrait view, #3334); dropped, it goes back.
+#[must_use]
+pub struct WholeView(bool);
+
+impl Drop for WholeView {
+    fn drop(&mut self) {
+        WHOLE_VIEW.with(|c| c.set(self.0));
+    }
+}
+
+/// [`WholeView`] from now until it is dropped.
+pub fn whole_view() -> WholeView {
+    WholeView(WHOLE_VIEW.with(|c| c.replace(true)))
+}
+
+/// The share of the view a spread frame takes (module notes of [`MENU_SPREAD`]); all of it
+/// inside a [`whole_view`] scope.
 fn spread_share() -> f32 {
+    if WHOLE_VIEW.with(|c| c.get()) {
+        return 1.0;
+    }
     let s = unit_scale();
     (s * (1.0 + MENU_SPREAD * (1.0 - s))).min(1.0)
 }
@@ -438,6 +551,37 @@ pub fn to_menu_frame(point: Vec2, view: Vec2, anchor: Vec2) -> Vec2 {
         return point;
     }
     anchor * view * (1.0 - s) + point * s
+}
+
+/// [design: docs/design/android.md] Effective draw scale and safe-area padding for a
+/// centred fixed-dimension menu box (`content_w × content_h` interface units) when
+/// `menu_scale > 1.0` (Android up to 200%) or platform safe-area insets are non-zero.
+/// At `menu_scale <= 1.0` with zero safe insets (all desktop runs), returns `None` so
+/// callers retain their exact desktop layout untouched.
+pub fn fit_centered_box(
+    menu_scale: f32,
+    view_px: Vec2,
+    safe: crate::touch_safe_area::SafeInsets,
+    content_w: f32,
+    content_h: f32,
+) -> Option<(f32, UiRect)> {
+    let scale = if menu_scale.is_finite() && menu_scale > 0.0 { menu_scale } else { 1.0 };
+    let view_w = if view_px.x.is_finite() && view_px.x > 1.0 { view_px.x } else { 1280.0 };
+    let view_h = if view_px.y.is_finite() && view_px.y > 1.0 { view_px.y } else { 720.0 };
+    let clean = |v: f32, cap: f32| if v.is_finite() { v.clamp(0.0, cap) } else { 0.0 };
+    let (l, r) = (clean(safe.left, view_w * 0.45), clean(safe.right, view_w * 0.45));
+    let (t, b) = (clean(safe.top, view_h * 0.45), clean(safe.bottom, view_h * 0.45));
+    let has_safe = l > 0.5 || t > 0.5 || r > 0.5 || b > 0.5;
+    if scale <= 1.0 && !has_safe {
+        return None;
+    }
+    let px_per_u1 = view_h / 960.0;
+    let safe_w_u1 = (view_w - l - r).max(1.0) / px_per_u1;
+    let safe_h_u1 = (view_h - t - b).max(1.0) / px_per_u1;
+    let max_scale = (safe_w_u1 / content_w.max(1.0)).min(safe_h_u1 / content_h.max(1.0));
+    let draw_scale = scale.min(max_scale).max(0.1);
+    let pad = UiRect { left: Val::Px(l), right: Val::Px(r), top: Val::Px(t), bottom: Val::Px(b) };
+    Some((draw_scale, pad))
 }
 
 pub fn at(left: f32, top: f32, width: f32, height: f32) -> Node {
@@ -1248,6 +1392,18 @@ fn own_texture(path: &str) -> String {
     format!("textures\\{}", path.trim().trim_start_matches(['\\', '/']).to_ascii_lowercase())
 }
 
+/// `face` drawn `k` times its size: every glyph's box and spacing scaled (the game's
+/// fonts come in few sizes).
+pub fn scaled_face(face: &Face, k: f32) -> Face {
+    let mut font = face.font.clone();
+    font.size *= k;
+    for g in &mut font.glyphs {
+        (g.width, g.height, g.before, g.after, g.ascent) = (g.width * k, g.height * k, g.before * k, g.after * k, g.ascent * k);
+    }
+    let vector = face.vector.clone().map(|v| VectorFace { em: v.em * k, base: v.base * k, ..v });
+    Face { font, image: face.image.clone(), vector }
+}
+
 #[cfg(test)]
 #[path = "interface_layout_tests.rs"]
 mod layout_tests;
@@ -1530,6 +1686,27 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn fit_centered_box_preserves_desktop_and_clamps_high_scale_within_safe_area() {
+        use crate::touch_safe_area::SafeInsets;
+        let desktop = Vec2::new(1600.0, 900.0);
+        assert_eq!(fit_centered_box(1.0, desktop, SafeInsets::default(), 1088.0, 840.0), None);
+        assert_eq!(fit_centered_box(0.8, desktop, SafeInsets::default(), 1088.0, 840.0), None);
+
+        let safe = SafeInsets { left: 48.0, top: 12.0, right: 48.0, bottom: 24.0 };
+        for view in [Vec2::new(1280.0, 720.0), Vec2::new(2400.0, 1080.0), Vec2::new(960.0, 540.0), Vec2::new(800.0, 600.0)] {
+            for scale in [1.25f32, 1.5, 2.0] {
+                let (draw_scale, pad) = fit_centered_box(scale, view, safe, 1088.0, 840.0).expect("clamped");
+                assert!(draw_scale <= scale && draw_scale > 0.1);
+                let px_per_u = (view.y / 960.0) * draw_scale;
+                assert!(1088.0 * px_per_u <= view.x - safe.left - safe.right + 0.5, "{view:?} @ {scale}");
+                assert!(840.0 * px_per_u <= view.y - safe.top - safe.bottom + 0.5, "{view:?} @ {scale}");
+                assert_eq!(pad.left, Val::Px(safe.left));
+                assert_eq!(pad.bottom, Val::Px(safe.bottom));
+            }
+        }
+    }
+
+    #[test]
     fn xfonts_parse_and_slot_paths_preserve_vanilla_slots_and_normalize_paths() {
         let mut extra = BTreeMap::new();
         parse_xfonts(
@@ -1560,3 +1737,7 @@ pub(crate) mod tests {
         assert_eq!(slot_font_path(42, &extra), None);
     }
 }
+
+#[cfg(test)]
+#[path = "interface/hud_scale_extended_tests.rs"]
+mod hud_scale_extended_tests;

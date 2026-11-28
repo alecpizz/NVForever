@@ -178,20 +178,23 @@ rounding]. A loss (`RewardXP` with a negative number) is not changed [hypothesis
   conversations).
 - **Sounds** [owner: a sound for each gain, one for a level up, a music-like one on the
   level-up screen; observed: the records and their files' lengths]: each gain
-  `UIPopUpExperienceUp` (`ui_popup_experienceup.wav`, 3.6 s); LEVEL UP (the bar filled)
-  `UILevelUpText` (`ui_leveluptext.wav`, 4.9 s); the level-up menu opening `MUSSuccess`
-  (`fx\mus\mus_success.wav`, the archives' `.ogg`; SOUN 0x00078594) [owner, 2026-10-24:
-  "when the xp bar is filled it should play the ui_leveluptext.wav", and mus_success on
-  the level-up screen; observed: the records]. With a second level earned at once, its
-  sound plays (and the 5 s wait starts) when the first menu closes [design]. The short
-  `UILevelUp` (`ui_levelup.wav`, 0.9 s) is not played.
-- [design: owner 2026-10-24; maintainer's choice T12b B/M4; needs an issue] Keep
-  `LEVEL_UP_DELAY = 5 s` after the sound, and the sound at the filled pointer (now about
-  4 s into the meter), independently of the later visual notice. [observed: private
-  job hud_xp_limbs2, x9_level_up_long] The original's menu opened at 9.35 s, about 2 s
-  after LEVEL UP appeared; the sound's moment was not read. Draft issue: decide whether
-  to replace the owner's sound-to-menu delay after capturing the original's sound.
-  [design] The retained menu rule can interrupt the end of the fitted notice fade.
+  `UIPopUpExperienceUp` (`ui_popup_experienceup.wav`, 3.6 s); LEVEL UP (the bar filled,
+  `FADE + SLIDE` = 4.0 s after the gain) `UILevelUpText` (`ui_leveluptext.wav`, 4.9 s);
+  the level-up menu opening `MUSSuccess` (`fx\mus\mus_success.wav`, the archives' `.ogg`;
+  SOUN 0x00078594) [owner, 2026-10-24: "when the xp bar is filled it should play the
+  ui_leveluptext.wav", and mus_success on the level-up screen; observed: the records].
+  With a second level earned at once (or when no bar is shown, e.g. loading a save already
+  due), its sound plays and the wait starts once the meter is idle (after the first menu
+  closes) [design]. When `No XP Meter in Combat` defers showing gains in combat, the
+  level-up sound waits for combat to end with the meter [design]. The short `UILevelUp`
+  (`ui_levelup.wav`, 0.9 s) is not played.
+- [owner, 2026-10-24; observed: private job hud_xp_limbs2, x9_level_up_long; design: #3438]
+  Keep `UILevelUpText` at the filled pointer (4.0 s into the meter) and set
+  `LEVEL_UP_DELAY = 5.35 s` after the sound (previously 5.0 s), so the level-up menu opens
+  at `9.35 s` after the gain — matching the original's measured `9.35 s` menu opening
+  (`x9_level_up_long`, about 2 s after `LEVEL UP` appears; the original's audio moment was
+  not read) and letting both `ui_leveluptext.wav` (ending at 8.9 s) and the `LEVEL UP`
+  notice fade (ending at 9.18 s) finish cleanly without interruption.
 - Without the game's pictures the bracket and pointer are plain blocks.
 - Log: `xp: level cap <n> (<k> story add-ons)`; `xp meter: +<n> XP (<xp> in all): level
   <l>, <p> % to <l+1>[, next level earned]`; `xp meter: sound <SOUN>`; `xp meter: LEVEL UP

@@ -758,6 +758,17 @@ pub const DLSSG_MODE_ON: u32 = 1;
 
 /// `sl::DLSSGFlags::eRetainResourcesWhenOff`, a `uint32_t` bit [documented: `sl_dlss_g.h:43-53`].
 pub const DLSSG_FLAG_RETAIN_RESOURCES_WHEN_OFF: u32 = 1 << 3;
+/// `sl::DLSSGQueueParallelismMode`, an `enum class : uint32_t` with no explicit values:
+/// `eBlockPresentingClientQueue` (0, the default: "client's presenting queue is blocked until
+/// DLSSG workload execution completes") and `eBlockNoClientQueues` (1: "only supported on Vulkan
+/// presently ... helps achieve maximum performance benefit from queue-level paralleism in Vulkan
+/// during DLSS-G processing. In this mode, client must must wait on
+/// DLSSGState::inputsProcessingCompletionFence and associated value, before it can modify or
+/// destroy the tagged resources input to DLSS-G ... for the corresponding previously presented
+/// frame on any client queue") [documented: Streamline v2.14.16 `include/sl_dlss_g.h:55-66`; the
+/// options' `queueParallelismMode` at `:110-112`; `docs/spec-notes/streamline.md`].
+pub const DLSSG_QUEUE_BLOCK_PRESENTING_CLIENT_QUEUE: u32 = 0;
+pub const DLSSG_QUEUE_BLOCK_NO_CLIENT_QUEUES: u32 = 1;
 
 /// `sl::DLSSGStatus` bits (`enum class : uint32_t`, `eOk = 0`) with their header names
 /// [documented: `sl_dlss_g.h:125-143`].

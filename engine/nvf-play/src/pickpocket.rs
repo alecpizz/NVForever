@@ -27,6 +27,7 @@
 //! pocket: it dies` (or `: it lives, the explosion does not hurt its kind`), and at exit
 //! `pickpocket summary: …`.
 
+use fnv_util::words::trf;
 use crate::activate::HudMessage;
 use crate::combat::{Combat, DESTRUCTION_BLAST_HEIGHT};
 use crate::script::ScriptState;
@@ -173,11 +174,11 @@ impl Plugin for PickpocketPlugin {
 /// The text after a victim's name when it caught the player before: `sNoPickPocketAgain`
 /// ("has already caught you." [observed: FalloutNV.esm]).
 pub fn caught_before_line(sim: &SimState, name: &str) -> String {
-    let tail = match sim.forms.settings.get("snopickpocketagain") {
-        Some(fnv_sim::settings::Setting::Str(s)) if !s.trim().is_empty() => s.trim().to_string(),
-        _ => "has already caught you.".into(),
-    };
-    format!("{name} {tail}")
+    match sim.forms.settings.get("snopickpocketagain") {
+        Some(fnv_sim::settings::Setting::Str(s)) if !s.trim().is_empty() => format!("{name} {}", s.trim()),
+        // Without the setting, our own words as one text (#3146).
+        _ => trf("{name} has already caught you.", &[("name", &name)]),
+    }
 }
 
 /// Whether `item` is a live explosive once placed in a pocket: a weapon whose projectile
@@ -226,7 +227,7 @@ fn results(mut done: MessageReader<Pickpocketed>, mut sim: ResMut<SimState>, mut
             let turned = crate::script::with_world(rt, &mut sim, |rt| rt.game.pickpocket_caught(victim));
             info!("pickpocket: caught by {name} {victim} with {}{}", item_name(&sim, item), if turned { ": it turns on the player" } else { "" });
             if let Some(h) = hud.as_deref_mut() {
-                h.show(format!("{name} caught you"));
+                h.show(trf("{name} caught you", &[("name", &name)]));
             }
         }
     }

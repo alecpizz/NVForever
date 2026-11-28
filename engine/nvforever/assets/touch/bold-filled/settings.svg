@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Original NVForever geometry; Bold filled family. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="currentColor" stroke="none" color="#ffffff" fill-rule="evenodd" stroke-width="0" stroke-linecap="round" stroke-linejoin="round">
+  <title>Settings</title>
+  <path d="M 27.0 16.0 L 29.731 18.731 L 28.934 21.358 L 25.146 22.111 L 23.778 23.778 L 23.778 27.641 L 21.358 28.934 L 18.146 26.789 L 16.0 27.0 L 13.269 29.731 L 10.642 28.934 L 9.889 25.146 L 8.222 23.778 L 4.359 23.778 L 3.066 21.358 L 5.211 18.146 L 5.0 16.0 L 2.269 13.269 L 3.066 10.642 L 6.854 9.889 L 8.222 8.222 L 8.222 4.359 L 10.642 3.066 L 13.854 5.211 L 16.0 5.0 L 18.731 2.269 L 21.358 3.066 L 22.111 6.854 L 23.778 8.222 L 27.641 8.222 L 28.934 10.642 L 26.789 13.854 Z M 20.5 16 C 20.5 18.4853 18.4853 20.5 16 20.5 C 13.5147 20.5 11.5 18.4853 11.5 16 C 11.5 13.5147 13.5147 11.5 16 11.5 C 18.4853 11.5 20.5 13.5147 20.5 16 Z"/>
+</svg>

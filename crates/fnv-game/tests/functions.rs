@@ -2348,6 +2348,10 @@ fn a_load_clears_every_actors_furniture_use() {
     assert_eq!(call(&mut h, 0x109F, Some(ADULT_REF), &[]), 0.0, "GetSitting after the load");
     assert!(!h.furniture_used_by_other(FormId::PLAYER_REF, chair), "the chair is free");
     assert!(h.extra[&npc].ai_off, "the actor's other saved state stays");
+    // #3991: the NPC's seat is kept for the engine to put it back on at once; the
+    // player's is not (#1573), nor a seat being got on or off.
+    assert_eq!(h.take_saved_seats().into_iter().collect::<Vec<_>>(), vec![(npc, chair)]);
+    assert!(h.take_saved_seats().is_empty(), "taken once");
     // The engine seats it again and says so: GetSitting follows.
     h.set_furniture_use(npc, Some(seated));
     assert_eq!(call(&mut h, 0x109F, Some(ADULT_REF), &[]), 3.0);
@@ -2745,6 +2749,74 @@ fn is_actor_detected_keeps_get_detected_level_and_los_neighbors() {
         assert_eq!(call(&mut g, 0x10B4, Some(CHILD_REF), &[r(ADULT_REF)]), level);
         assert_eq!(call(&mut g, 0x101B, Some(CHILD_REF), &[r(ADULT_REF)]), 1.0, "line of sight is not the detection band");
     }
+}
+
+#[test]
+fn kill_actor_drops_dead_detector_same_tick_and_is_actor_detected_invalid_receivers_continue() {
+    use fnv_game::game::RunCtx;
+    use fnv_script::vm::XVal;
+    let f = fixture();
+    let mut g = game(&f);
+    // Two living actors detect Player. CHILD_REF also detects ADULT_REF
+    // and is itself seen by CREA_REF.
+    actor_detected_seen(&mut g, CHILD_REF, PLAYER);
+    actor_detected_seen(&mut g, CREA_REF, PLAYER);
+    actor_detected_seen(&mut g, CHILD_REF, ADULT_REF);
+    actor_detected_seen(&mut g, CREA_REF, CHILD_REF);
+    assert_eq!(g.detecting_actors(FormId::PLAYER_REF).len(), 2);
+    assert_eq!(call(&mut g, 0x102D, Some(CHILD_REF), &[r(PLAYER)]), 1.0);
+    assert_eq!(call(&mut g, 0x102D, Some(CHILD_REF), &[r(ADULT_REF)]), 1.0);
+    assert_actor_detected_query(&mut g, ADULT_REF, 1.0);
+    // Player.IsActorDetected always returns 0 even while detected by 2 actors.
+    assert_actor_detected_query(&mut g, PLAYER, 0.0);
+
+    // Same-tick KillActor on CHILD_REF immediately removes it from GetDetectingActors,
+    // GetDetected, and IsActorDetected without waiting for deferred cache expiry.
+    let same_tick = g.run_query(
+        &format!(
+            "ref rChild\nref rAdult\narray_var a\nint n\nint gdP\nint gdA\nint detA\nint detP\nBegin Function {{}}\n\
+             let rChild := {CHILD_REF}\n\
+             let rAdult := {ADULT_REF}\n\
+             rChild.KillActor player\n\
+             let a := player.GetDetectingActors\n\
+             let n := ar_Size a\n\
+             let gdP := rChild.GetDetected player\n\
+             let gdA := rChild.GetDetected rAdult\n\
+             let detA := rAdult.IsActorDetected\n\
+             let detP := player.IsActorDetected\n\
+             SetFunctionValue (n * 10000 + gdP * 1000 + gdA * 100 + detA * 10 + detP)\n\
+             End\n"
+        ),
+        RunCtx { self_ref: Some(FormId(ADULT_REF)), ..Default::default() },
+    );
+    assert_eq!(same_tick, Ok(XVal::Num(10000.0)), "same-tick: nDet=1, gdP=0, gdA=0, detA=0, detP=0");
+    assert_eq!(g.detecting_actors(FormId::PLAYER_REF), vec![FormId(CREA_REF)]);
+    assert!(g.detection.get(FormId(CHILD_REF), FormId(PLAYER)).is_none());
+    assert!(g.detection.get(FormId(CHILD_REF), FormId(ADULT_REF)).is_none());
+    assert!(
+        g.detection.get(FormId(CREA_REF), FormId(CHILD_REF)).is_some_and(|d| d.seen),
+        "the living observer's sight of the dead actor survives",
+    );
+    assert_eq!(call(&mut g, 0x102D, Some(CREA_REF), &[r(CHILD_REF)]), 1.0);
+
+    // Re-establish a live detection on ADULT_REF so we prove invalid/null receivers do
+    // not fall back to self_ref (ADULT_REF) and always return 0 while continuing.
+    actor_detected_seen(&mut g, CREA_REF, ADULT_REF);
+    assert_actor_detected_query(&mut g, ADULT_REF, 1.0);
+    let ctx = RunCtx { self_ref: Some(FormId(ADULT_REF)), ..Default::default() };
+    // Non-actor object receiver returns 0 and continues.
+    assert_eq!(
+        g.run_query(
+            &format!("ref rObj\nint v\nBegin Function {{}}\nlet rObj := {ACTI_REF}\nlet v := rObj.IsActorDetected\nSetFunctionValue (v + 10)\nEnd\n"),
+            ctx,
+        ),
+        Ok(XVal::Num(10.0)),
+    );
+    // Explicit null receiver returns 0 without falling back to self_ref and continues.
+    assert_eq!(
+        g.run_query("ref rNull\nint v\nBegin Function {}\nlet rNull := 0\nlet v := rNull.IsActorDetected\nSetFunctionValue (v + 20)\nEnd\n", ctx),
+        Ok(XVal::Num(20.0)),
+    );
 }
 
 #[test]

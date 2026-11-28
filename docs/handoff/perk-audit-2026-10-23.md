@@ -261,7 +261,7 @@ nothing to act on (perk-entry-points.md §12).
 | Pyromaniac | FalloutNV | perk | entry points 0 Weapon Damage | works |
 | Quick Draw | FalloutNV | perk | entry points 38 Equip Speed | built by 2026-10-25 (38) |
 | Rad Absorption | FalloutNV | perk | ability DLC03RadAbsorb | works |
-| Rad Child | FalloutNV | perk | conditions in SPEL; scripts VCG04ActivatorScript | works through scripts / conditions |
+| Rad Child | FalloutNV | perk | conditions in SPEL; scripts VCG04ActivatorScript | works through scripts / conditions (regeneration by the second since #3471, 2026-11-23) |
 | Rad Resistance | FalloutNV | perk | ability IncreaseRadiationResistance | works |
 | Rapid Reload | FalloutNV | perk | entry points 37 Reload Speed | built by 2026-10-25 (37) |
 | Retention | FalloutNV | perk | conditions in ALCH; scripts VCG04ActivatorScript | works through scripts / conditions |

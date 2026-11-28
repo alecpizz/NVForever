@@ -237,21 +237,26 @@ pub fn update_spot_light_bounding_spheres(
 /// Updates the frusta for all visible shadow mapped [`SpotLight`]s.
 pub fn update_spot_light_frusta(
     mut views: Query<
-        (&GlobalTransform, &SpotLight, &mut Frustum, &ViewVisibility),
+        (Entity, &GlobalTransform, &SpotLight, &mut Frustum, &ViewVisibility),
         Or<(
             Changed<GlobalTransform>,
             Changed<SpotLight>,
             Changed<ViewVisibility>,
         )>,
     >,
+    // NVForever shown shadow lights (lib.rs `NvfShadowLightsShown`, engine/vendor/README.md).
+    nvf_shown: Option<Res<crate::NvfShadowLightsShown>>,
 ) {
-    for (transform, spot_light, mut frustum, view_visibility) in &mut views {
+    for (entity, transform, spot_light, mut frustum, view_visibility) in &mut views {
         // The frusta are used for culling meshes to the light for shadow mapping
         // so if shadow mapping is disabled for this light, then the frusta are
         // not needed.
         // Also, if the light is not relevant for any cluster, it will not be in the
         // global lights set and so there is no need to update its frusta.
-        if !spot_light.shadow_maps_enabled || !view_visibility.get() {
+        // NVForever shown shadow lights: as `update_point_light_frusta` (a shown light no
+        // camera ever saw kept the default frustum, which culls every caster).
+        let nvf_shown = nvf_shown.as_deref().is_some_and(|shown| shown.lights.contains(&entity));
+        if !spot_light.shadow_maps_enabled || !(view_visibility.get() || nvf_shown) {
             continue;
         }
 

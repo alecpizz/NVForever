@@ -1190,6 +1190,7 @@ pub(crate) fn write_system(
     mut state: ResMut<DialogTiles>,
     shared: Res<SharedWritten>,
     hint: Res<GoodbyeHint>,
+    touch: Option<Res<crate::dialogue_touch::TouchDialogue>>,
 ) {
     if !switch.dialog {
         return;
@@ -1202,6 +1203,11 @@ pub(crate) fn write_system(
         return;
     };
     let game = &mut rt.game;
+    if touch.is_some_and(|t| t.enabled) {
+        written.fall_back(&mut game.ui_tree);
+        state.set_if_neq(DialogTiles::default());
+        return;
+    }
     if game.dialogue.is_none() || game.ui_files.is_none() {
         written.forget(Some(&mut game.ui_tree));
         state.set_if_neq(DialogTiles::default());

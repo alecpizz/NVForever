@@ -64,6 +64,6 @@ fn current_explicit_profile_source_values_match_actual_critical_rules_without_re
             &mut rt,
             "SetFunctionValue (GetPluginVersion \"lStewieAl's Tweaks\")"
         ),
-        XVal::Num(945.0)
+        XVal::Num(960.0)
     );
 }

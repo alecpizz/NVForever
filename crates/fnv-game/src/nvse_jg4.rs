@@ -127,7 +127,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
                     // A negative timer is kept [observed: jg4 idlm.settrait.hunter.2.neg
                     // read -1]; one that is not finite after the cast is refused: an
                     // endless one would stop the marker's idles for the session (#1333
-                    // review) [hypothesis: the game keeps a float].
+                    // review; see docs/spec-notes/ext-jg4.md).
                     Some(2) if (v as f32).is_finite() => c.timer = v as f32,
                     _ => {}
                 }
@@ -140,7 +140,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         // `marker index idle`: the entry at the index replaced [documented:
         // SetIdleMarkerAnimation], by any form, an idle or not [observed: jg4
         // idlm.setanim.hunter.notidle, a race listed]; an index past the list changes
-        // nothing [hypothesis: those rows did not compile in the game].
+        // nothing (see docs/spec-notes/ext-jg4.md).
         "setidlemarkeranimation" => {
             let idle = form(args, 2);
             let at = index(args, 1).and_then(|i| usize::try_from(i).ok());
@@ -155,7 +155,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         }
         // `marker array`: the idles become the array's, in its order; the count follows
         // [documented: SetIdleMarkerAnimations and the note on the count]. Entries that
-        // are not idles are left out [hypothesis].
+        // are not idles are left out (see docs/spec-notes/ext-jg4.md).
         "setidlemarkeranimations" => {
             let id = match args.get(1) {
                 Some(XVal::Array(id)) => Some(*id),
@@ -254,7 +254,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         }
         // `race flag on`: 0 playable, 2 child (RACE DATA flags), read by GetRaceFlag
         // [documented: SetRaceFlag's table]; the other bits are set as well [observed: jg4
-        // race.set.testqa.1.1 and .3.1]; bits 0-31 [hypothesis: the flags are 32 bits].
+        // race.set.testqa.1.1 and .3.1]; bits 0-31 (see docs/spec-notes/ext-jg4.md).
         "setraceflag" => {
             let (Some(race), Some(bit @ 0..=31)) = (of_sig(g, form(args, 0), b"RACE"), index(args, 1)) else { return Some(Ok(zero)) };
             let flags = match crate::nvse::record_value(g, race, "DATA", "flags") {

@@ -194,17 +194,30 @@ fn markers_moves_and_told_values() {
     g.other.jg9.grenade_hold = 0.75;
     g.other.jg9.compass_hostile = [Some(2), None];
     let mut sky = [[0.0; 3]; 10];
-    sky[4] = [255.0, 227.0, 170.0];
+    sky[4] = [255.0, 204.0, 51.0];
     g.other.jg9.sky_colors = Some(sky);
     assert_eq!(n(&mut g, "player.GetRunSpeed"), 344.0);
     assert_eq!(n(&mut g, "player.GetCalculatedSpread"), 1.25);
     assert_eq!(n(&mut g, "GetGrenadeHoldTime"), 0.75);
     assert_eq!(n(&mut g, "GetNearestCompassHostileDirection"), 2.0);
     assert_eq!(n(&mut g, "GetNearestCompassHostileDirection 1"), -1.0, "none that is not invisible");
-    assert_eq!(q(&mut g, "int r\nint gr\nint b\nGetCurrentSkyColor 4 r gr b\nSetFunctionValue (r * 1000000 + gr * 1000 + b)"), XVal::Num(255_227_170.0));
+    // Normalized 0..1 float channels; out-of-range type returns 0 and leaves variables
+    // unchanged [observed: w6_t1_09_jg_sky_color_interior].
+    assert_eq!(
+        q(&mut g, "float r = 111\nfloat gr = 222\nfloat b = 333\nint ok = GetCurrentSkyColor 4 r gr b\nSetFunctionValue (sv_Construct \"%g %.1f %.1f %.1f\" ok r gr b)"),
+        XVal::Str("1 1.0 0.8 0.2".into())
+    );
+    assert_eq!(
+        q(&mut g, "float r = 111\nfloat gr = 222\nfloat b = 333\nint ok = GetCurrentSkyColor 10 r gr b\nSetFunctionValue (sv_Construct \"%g %.0f %.0f %.0f\" ok r gr b)"),
+        XVal::Str("0 111 222 333".into())
+    );
     g.other.jg9.sky_colors = None;
-    assert_eq!(n(&mut g, "GetCurrentSkyColor 4 0 0 0"), 0.0, "no sky indoors");
-    // FOV: the INI's defaults without a SetCameraFOV [hypothesis there: 75 and 55].
+    assert_eq!(
+        q(&mut g, "float r = 111\nfloat gr = 222\nfloat b = 333\nint ok = GetCurrentSkyColor 4 r gr b\nSetFunctionValue (sv_Construct \"%g %.0f %.0f %.0f\" ok r gr b)"),
+        XVal::Str("0 111 222 333".into()),
+        "headless with no sky preserves variables"
+    );
+    // FOV: the INI's defaults without a SetCameraFOV (75 and 55; see docs/spec-notes/ext-jg9.md).
     assert_eq!(n(&mut g, "player.GetPlayerCamFOV 0"), 75.0);
     assert_eq!(n(&mut g, "player.GetPlayerCamFOV 1"), 55.0);
     assert_eq!(n(&mut g, "player.GetPlayerCamFOV 2"), 55.0, "first person until the engine tells");
@@ -229,9 +242,10 @@ fn markers_moves_and_told_values() {
     assert_eq!(n(&mut g, "player.GetPlayerCamFOV 0"), 80.0, "back to the setting");
     assert_eq!(n(&mut g, "GetCameraFOV 1"), 45.0);
     g.ui.camera.settings_fov = (None, None);
-    // Karma: neutral at 0 between the globals; the level 1 neutral title.
+    // Karma: neutral at 0 between the globals; with no title setting in the fixture,
+    // the title is the alignment word.
     assert_eq!(s(&mut g, "GetPlayerKarmaTitle 1"), "Neutral");
-    assert_eq!(s(&mut g, "GetPlayerKarmaTitle 0"), "Drifter");
+    assert_eq!(s(&mut g, "GetPlayerKarmaTitle 0"), "Neutral");
 }
 
 #[test]
@@ -239,17 +253,17 @@ fn ttw_ini_karma_titles_override_levels_1_through_50() {
     let f = fixture();
     let mut g = game(&f);
 
-    // Without TTW.ini: vanilla titles unchanged (levels above 30 clamp to 30).
+    // Without TTW.ini: the plugins' settings, none in the fixture, so the alignment word.
     g.player.level = Some(1);
-    assert_eq!(s(&mut g, "GetPlayerKarmaTitle 0"), "Drifter");
+    assert_eq!(s(&mut g, "GetPlayerKarmaTitle 0"), "Neutral");
     g.player.level = Some(45);
     fnv_game::functions::set_actor_value_current(&mut g, FormId::PLAYER_REF, fnv_game::actor_values::KARMA, -500.0).unwrap();
     assert_eq!(s(&mut g, "GetPlayerKarmaTitle 1"), "Evil");
-    assert_eq!(s(&mut g, "GetPlayerKarmaTitle 0"), "Devil");
+    assert_eq!(s(&mut g, "GetPlayerKarmaTitle 0"), "Evil");
     g.player.level = Some(50);
     fnv_game::functions::set_actor_value_current(&mut g, FormId::PLAYER_REF, fnv_game::actor_values::KARMA, 800.0).unwrap();
     assert_eq!(s(&mut g, "GetPlayerKarmaTitle 1"), "Very Good");
-    assert_eq!(s(&mut g, "GetPlayerKarmaTitle 0"), "Messiah");
+    assert_eq!(s(&mut g, "GetPlayerKarmaTitle 0"), "Very Good");
 
     // Synthetic TTW.ini providing custom level 1..=50 karma titles.
     let mut ini = String::from("[Karma Titles]\n");

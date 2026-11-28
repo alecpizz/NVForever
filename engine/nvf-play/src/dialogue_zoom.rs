@@ -275,6 +275,12 @@ impl DialogueZoom {
         Applied { write, back: None }
     }
 
+    /// [`Self::step`], for other modules' tests.
+    #[cfg(test)]
+    pub(crate) fn test_step(&mut self, want: Option<f32>, dt: f32) {
+        self.step(want, dt, false);
+    }
+
     /// Advance the ease by `dt` towards `want` (none: out). `instant` completes it at once.
     fn step(&mut self, want: Option<f32>, dt: f32, instant: bool) {
         self.want = want;

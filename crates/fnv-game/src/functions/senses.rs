@@ -182,12 +182,20 @@ impl Game<'_> {
 
     /// The engine tells whether the camera is in first person. Fires
     /// `ShowOff:OnPOVChange` only on actual perspective transitions (`1` = first person,
-    /// `0` = third person) [documented: GECK wiki ShowOff:OnPOVChange].
+    /// `0` = third person), with calling reference `Player`; on 1P->3P `IsPC1stPerson`
+    /// still reads `1` inside the callback and `0` afterward, while on 3P->1P it reads
+    /// `1` inside and after [documented: GECK wiki ShowOff:OnPOVChange; observed
+    /// 2026-11-24: `w6t2p2_03_showoff_on_pov_change_toggle`].
     pub fn set_first_person(&mut self, on: bool) {
-        let changed = self.senses.first_person != on;
-        self.senses.first_person = on;
-        if changed {
-            self.showoff_on_pov_change(on);
+        if self.senses.first_person == on {
+            return;
+        }
+        if on {
+            self.senses.first_person = true;
+            self.showoff_on_pov_change(true);
+        } else {
+            self.showoff_on_pov_change(false);
+            self.senses.first_person = false;
         }
     }
 

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Original NVForever geometry; Bold filled family. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="currentColor" stroke="none" color="#ffffff" fill-rule="evenodd" stroke-width="0" stroke-linecap="round" stroke-linejoin="round">
+  <title>Quickwheel</title>
+  <path d="M 29.399 17.645 C 28.644 23.797 23.797 28.644 17.645 29.399 L 16.914 23.444 C 20.332 23.024 23.024 20.332 23.444 16.914 Z M 14.355 29.399 C 8.203 28.644 3.356 23.797 2.601 17.645 L 8.556 16.914 C 8.976 20.332 11.668 23.024 15.086 23.444 Z M 2.601 14.355 C 3.356 8.203 8.203 3.356 14.355 2.601 L 15.086 8.556 C 11.668 8.976 8.976 11.668 8.556 15.086 Z M 17.645 2.601 C 23.797 3.356 28.644 8.203 29.399 14.355 L 23.444 15.086 C 23.024 11.668 20.332 8.976 16.914 8.556 Z"/>
+</svg>

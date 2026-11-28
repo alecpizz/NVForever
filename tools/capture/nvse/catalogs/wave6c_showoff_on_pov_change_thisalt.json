@@ -1,0 +1,115 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6c_showoff_on_pov_change_thisalt",
+  "description": "Wave 6C strictly read-only console-only probe verifying ShowOff:OnPOVChange calling reference (Player) and IsPC1stPerson callback timing on ToggleFirstPerson 0 -> 1.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)",
+    "ShowOffNVSE Plugin": "184"
+  },
+  "batches": [
+    {
+      "id": "w6c_showoff_on_pov_change_thisalt",
+      "title": "Wave 6C - ShowOff:OnPOVChange Calling Ref and Timing",
+      "extender": "ShowOff 184 + JIP LN 57.30",
+      "required_plugins": [
+        "jip_nvse.dll",
+        "ShowOffNVSE.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6t2p2_03_showoff_on_pov_change_toggle",
+          "bucket": "B",
+          "extender": "ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-showoff.md",
+          "spec_line": 307,
+          "functions_tested": [
+            "ShowOff:OnPOVChange",
+            "ToggleFirstPerson",
+            "IsPC1stPerson"
+          ],
+          "claim": "Verify ShowOff:OnPOVChange via ToggleFirstPerson 0 -> 1: arg (0=3P, 1=1P), GetSelfAlt (Player), and IsPC1stPerson PRE vs POST inside callback.",
+          "expected": "init=1|to3p(n=1,arg=0,inCb=1,aft=0,s0=0,sP=1)|to1p(n=2,arg=1,inCb=1,aft=1)",
+          "script_lines": [
+            "ref cb = CompileScript \"nvseprobe_s_p2_03_cb.gek\"",
+            "Player.AuxVarSetRef \"*p2_03_cb\" cb",
+            "Player.AuxVarSetFlt \"*p2_03_n\" 0",
+            "Player.AuxVarSetFlt \"*p2_03_init\" (IsPC1stPerson)",
+            "SetEventHandler \"ShowOff:OnPOVChange\" cb",
+            "ToggleFirstPerson 0"
+          ],
+          "wait_ticks_after": 2,
+          "helper_scripts": {
+            "nvseprobe_s_p2_03_cb.gek": [
+              "begin Function { int i1st }",
+              "ref rS = GetSelfAlt",
+              "int cur = IsPC1stPerson",
+              "Player.AuxVarSetFlt \"*p2_03_n\" ((Player.AuxVarGetFlt \"*p2_03_n\") + 1)",
+              "Player.AuxVarSetFlt \"*p2_03_arg\" i1st",
+              "Player.AuxVarSetFlt \"*p2_03_cur\" cur",
+              "Player.AuxVarSetFlt \"*p2_03_s0\" (rS == 0)",
+              "Player.AuxVarSetFlt \"*p2_03_sP\" (rS == Player)"
+            ]
+          },
+          "extra_steps": [
+            {
+              "suffix": "to1p",
+              "wait_ticks": 2,
+              "script_lines": [
+                "Player.AuxVarSetFlt \"*p2_03_n1\" (Player.AuxVarGetFlt \"*p2_03_n\")",
+                "Player.AuxVarSetFlt \"*p2_03_a1\" (Player.AuxVarGetFlt \"*p2_03_arg\")",
+                "Player.AuxVarSetFlt \"*p2_03_c1\" (Player.AuxVarGetFlt \"*p2_03_cur\")",
+                "Player.AuxVarSetFlt \"*p2_03_aft1\" (IsPC1stPerson)",
+                "Player.AuxVarSetFlt \"*p2_03_s01\" (Player.AuxVarGetFlt \"*p2_03_s0\")",
+                "Player.AuxVarSetFlt \"*p2_03_sP1\" (Player.AuxVarGetFlt \"*p2_03_sP\")",
+                "ToggleFirstPerson 1"
+              ]
+            },
+            {
+              "suffix": "read",
+              "wait_ticks": 0,
+              "script_lines": [
+                "int init = Player.AuxVarGetFlt \"*p2_03_init\"",
+                "int n1 = Player.AuxVarGetFlt \"*p2_03_n1\"",
+                "int a1 = Player.AuxVarGetFlt \"*p2_03_a1\"",
+                "int c1 = Player.AuxVarGetFlt \"*p2_03_c1\"",
+                "int aft1 = Player.AuxVarGetFlt \"*p2_03_aft1\"",
+                "int s01 = Player.AuxVarGetFlt \"*p2_03_s01\"",
+                "int sP1 = Player.AuxVarGetFlt \"*p2_03_sP1\"",
+                "int n2 = Player.AuxVarGetFlt \"*p2_03_n\"",
+                "int a2 = Player.AuxVarGetFlt \"*p2_03_arg\"",
+                "int c2 = Player.AuxVarGetFlt \"*p2_03_cur\"",
+                "int aft2 = IsPC1stPerson",
+                "ref cb = Player.AuxVarGetRef \"*p2_03_cb\"",
+                "RemoveEventHandler \"ShowOff:OnPOVChange\" cb",
+                "PrintToConsole \"PROBE|w6t2p2_03_showoff_on_pov_change_toggle|init=%g|to3p(n=%g,arg=%g,inCb=%g,aft=%g,s0=%g,sP=%g)|to1p(n=%g,arg=%g,inCb=%g,aft=%g)\" init n1 a1 c1 aft1 s01 sP1 n2 a2 c2 aft2"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

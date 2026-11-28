@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 /// not consulted].
 ///
 /// Empty when `TTW.ini` is absent or contains no `[Karma Titles]` entries, leaving
-/// vanilla karma titles completely unchanged.
+/// the plugins' karma titles unchanged.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TtwKarmaTitles {
     /// Overrides by [`karma_column`] (`0` Good, `1` Neutral, `2` Evil) and 1-based level.
@@ -71,12 +71,12 @@ impl TtwKarmaTitles {
     /// Resolve an override title for `level` and `alignment` (`"Good"`, `"Very Good"`,
     /// `"Neutral"`, `"Evil"`, `"Very Evil"`).
     ///
-    /// Returns `None` when no override applies (so callers fall back cleanly to vanilla
-    /// GMSTs and [`KARMA_TITLES`]).
+    /// Returns `None` when no override applies (so callers fall back to the plugins'
+    /// settings, [`karma_title`]).
     ///
     /// [design: levels below `1` clamp to `1`; levels above `30` with no exact key clamp
     /// to the highest defined `TTW.ini` level for that alignment when that maximum is at
-    /// least `30`, preserving vanilla fallback for sparse overrides below `30`].
+    /// least `30`, leaving sparse overrides below `30` to the plugins' settings].
     pub fn resolve(&self, level: i64, alignment: &str) -> Option<&str> {
         let map = &self.columns[karma_column(alignment)];
         if map.is_empty() {
@@ -133,44 +133,6 @@ pub fn karma_alignment(karma: f64, very_evil: f64, evil: f64, good: f64, very_go
     }
 }
 
-/// The karma titles by level (1 to 30, 30 standing for 30 and over) and karma (good,
-/// neutral, evil), as the owner's table gives them (`todo 5.txt`, 2026-10-16) [observed:
-/// the owner's list]. Only a fallback: FalloutNV.esm holds most of them as the game
-/// settings `sKarmicTitle<Good|Neutral|Evil><level>` [observed: 50 of the 90; the others
-/// are presumably the executable's defaults], which win where present.
-pub const KARMA_TITLES: [[&str; 3]; 30] = [
-    ["Samaritan", "Drifter", "Grifter"],
-    ["Martyr", "Renegade", "Outlaw"],
-    ["Sentinel", "Seeker", "Opportunist"],
-    ["Defender", "Wanderer", "Plunderer"],
-    ["Dignitary", "Citizen", "Fat Cat"],
-    ["Peacekeeper", "Adventurer", "Marauder"],
-    ["Ranger of the Wastes", "Vagabond of the Wastes", "Pirate of the Wastes"],
-    ["Protector", "Mercenary", "Betrayer"],
-    ["Desert Avenger", "Desert Scavenger", "Desert Terror"],
-    ["Exemplar", "Observer", "Ne'er-do-well"],
-    ["Vegas Crusader", "Vegas Councilor", "Vegas Crime lord"],
-    ["Paladin", "Keeper", "Defiler"],
-    ["Mojave Legend", "Mojave Myth", "Mojave Boogeyman"],
-    ["Shield of Hope", "Pinnacle of Survival", "Sword of Despair"],
-    ["Vegas Legend", "Vegas Myth", "Vegas Boogeyman"],
-    ["Hero of the Wastes", "Strider of the Wastes", "Villain of the Wastes"],
-    ["Paragon", "Beholder", "Fiend"],
-    ["Wasteland Savior", "Wasteland Watcher", "Wasteland Destroyer"],
-    ["Saint", "Super-Human", "Evil Incarnate"],
-    ["Guardian of the Wastes", "Renegade of the Wastes", "Scourge of the Wastes"],
-    ["Restorer of Faith", "Soldier of Fortune", "Architect of Doom"],
-    ["Model of Selflessness", "Profiteer", "Bringer of Sorrow"],
-    ["Shepherd", "Egocentric", "Deceiver"],
-    ["Friend of the People", "Loner", "Consort of Discord"],
-    ["Champion of Justice", "Hero for Hire", "Stuff of Nightmares"],
-    ["Symbol of Order", "Model of Apathy", "Agent of Chaos"],
-    ["Herald of Tranquility", "Person of Refinement", "Instrument of Ruin"],
-    ["Last, Best Hope of Humanity", "Moneygrubber", "Soultaker"],
-    ["Savior of the Damned", "Gray Stranger", "Demon's Spawn"],
-    ["Messiah", "True Mortal", "Devil"],
-];
-
 /// The karma title's column for an alignment ([`karma_alignment`]'s word): good for Good
 /// and Very Good, evil for Evil and Very Evil [hypothesis: three columns over five
 /// alignments].
@@ -182,14 +144,32 @@ pub fn karma_column(alignment: &str) -> usize {
     }
 }
 
-/// The karma title at a level for an alignment: the game setting
-/// `sKarmicTitle<Good|Neutral|Evil><level>` where the plugins hold it (`setting`), else
-/// [`KARMA_TITLES`]. Levels above 30 take 30's title, below 1 level 1's.
-pub fn karma_title(level: i64, alignment: &str, setting: impl Fn(&str) -> Option<String>) -> String {
+/// The game setting holding the karma title at a level (1 to 30) for an alignment, under
+/// either spelling: FalloutNV.esm writes levels below 10 with two digits
+/// (`sKarmicTitleNeutral01`) [observed: `fnvtool esm inventory`]; one digit is accepted too.
+fn karma_title_at(level: usize, column: usize, setting: &impl Fn(&str) -> Option<String>) -> Option<String> {
+    let column = ["Good", "Neutral", "Evil"][column];
+    [format!("sKarmicTitle{column}{level:02}"), format!("sKarmicTitle{column}{level}")].iter().find_map(|name| setting(name).filter(|s| !s.is_empty()))
+}
+
+/// The karma title the plugins' settings give at a level for an alignment: the setting
+/// `sKarmicTitle<Good|Neutral|Evil><level>` (levels above 30 take 30's, below 1 level
+/// 1's). FalloutNV.esm holds 53 of the 90 (levels 1, 2, 9, 11, 13, 15 and 20-30 in every
+/// column, with 8, 14 and 28 in some) [observed: `fnvtool esm inventory`, docs/spec-notes/
+/// pipboy-stats.md]; a level without one takes the nearest level below that has one in
+/// the same column, else the nearest above [design: the original's built-in titles for
+/// the missing levels are not in the data and are not transcribed, LEGAL.md]. `None` when
+/// the plugins hold no title in the column.
+pub fn karma_title_setting(level: i64, alignment: &str, setting: impl Fn(&str) -> Option<String>) -> Option<String> {
     let level = level.clamp(1, 30) as usize;
     let column = karma_column(alignment);
-    let name = format!("sKarmicTitle{}{level}", ["Good", "Neutral", "Evil"][column]);
-    setting(&name).filter(|s| !s.is_empty()).unwrap_or_else(|| KARMA_TITLES[level - 1][column].to_string())
+    (1..=level).rev().chain(level + 1..=30).find_map(|l| karma_title_at(l, column, &setting))
+}
+
+/// The karma title at a level for an alignment ([`karma_title_setting`]); with no setting
+/// in the column (a load order without the titles), the alignment word itself [design].
+pub fn karma_title(level: i64, alignment: &str, setting: impl Fn(&str) -> Option<String>) -> String {
+    karma_title_setting(level, alignment, setting).unwrap_or_else(|| alignment.to_string())
 }
 
 /// [`karma_title`] with optional `Data\NVSE\Plugins\TTW.ini` `[Karma Titles]` overrides
@@ -229,14 +209,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn empty_ttw_ini_preserves_vanilla_karma_titles() {
+    fn empty_ttw_ini_leaves_the_settings() {
         let empty = TtwKarmaTitles::default();
         assert!(empty.is_empty());
-        assert_eq!(karma_title_with_ttw(1, "Good", &empty, |_| None), "Samaritan");
-        assert_eq!(karma_title_with_ttw(1, "Neutral", &empty, |_| None), "Drifter");
-        assert_eq!(karma_title_with_ttw(1, "Evil", &empty, |_| None), "Grifter");
-        assert_eq!(karma_title_with_ttw(45, "Very Evil", &empty, |_| None), "Devil");
-        assert_eq!(karma_title_with_ttw(50, "Very Good", &empty, |_| None), "Messiah");
+        let esm = |n: &str| (n == "sKarmicTitleGood01").then(|| "PluginGood1".to_string());
+        assert_eq!(karma_title_with_ttw(1, "Good", &empty, esm), "PluginGood1");
+        assert_eq!(karma_title_with_ttw(1, "Neutral", &empty, esm), "Neutral");
+        assert_eq!(karma_title_with_ttw(45, "Very Evil", &empty, |_| None), "Very Evil");
     }
 
     #[test]
@@ -261,15 +240,35 @@ mod tests {
     }
 
     #[test]
-    fn sparse_ttw_overrides_fall_back_to_gmst_and_vanilla() {
+    fn sparse_ttw_overrides_fall_back_to_the_settings() {
         let ini = "[karma titles]\nsKarmicTitleGood01=\"Custom First\"\nsKarmicTitleEvil42=CustomFortyTwo\nsKarmicTitleNeutral2=\n";
         let ttw = TtwKarmaTitles::parse(ini);
         let esm = |n: &str| (n == "sKarmicTitleNeutral2").then(|| "PluginRankTwo".to_string());
         assert_eq!(karma_title_with_ttw(1, "Good", &ttw, esm), "Custom First");
         assert_eq!(karma_title_with_ttw(2, "Neutral", &ttw, esm), "PluginRankTwo");
-        assert_eq!(karma_title_with_ttw(10, "Good", &ttw, esm), "Exemplar");
+        assert_eq!(karma_title_with_ttw(10, "Good", &ttw, esm), "Good");
         assert_eq!(karma_title_with_ttw(42, "Evil", &ttw, esm), "CustomFortyTwo");
         assert_eq!(karma_title_with_ttw(50, "Evil", &ttw, esm), "CustomFortyTwo");
-        assert_eq!(karma_title_with_ttw(45, "Good", &ttw, esm), "Messiah");
+        assert_eq!(karma_title_with_ttw(45, "Good", &ttw, esm), "Good");
+    }
+
+    #[test]
+    fn a_level_without_a_setting_takes_the_nearest_one_in_its_column() {
+        let esm = |n: &str| match n {
+            "sKarmicTitleGood02" => Some("Two".to_string()),
+            "sKarmicTitleGood09" => Some("Nine".to_string()),
+            "sKarmicTitleEvil30" => Some("Thirty".to_string()),
+            "sKarmicTitleNeutral1" => Some("One digit".to_string()),
+            _ => None,
+        };
+        assert_eq!(karma_title(2, "Good", esm), "Two");
+        assert_eq!(karma_title(5, "Very Good", esm), "Two", "the nearest below");
+        assert_eq!(karma_title(1, "Good", esm), "Two", "none below: the nearest above");
+        assert_eq!(karma_title(12, "Good", esm), "Nine");
+        assert_eq!(karma_title(3, "Evil", esm), "Thirty");
+        assert_eq!(karma_title(64, "Evil", esm), "Thirty");
+        assert_eq!(karma_title(4, "Neutral", esm), "One digit");
+        assert_eq!(karma_title_setting(4, "Neutral", |_| None), None);
+        assert_eq!(karma_title(4, "Neutral", |_| None), "Neutral");
     }
 }

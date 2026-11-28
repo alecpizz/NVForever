@@ -69,8 +69,9 @@ pub enum CombatRequest {
     /// (docs/spec-notes/dismemberment.md §5).
     Dismember { actor: FormId, location: i32, by: Option<FormId>, explode: Option<bool> },
     /// Set off an explosion placed by a script (PlaceAtMe of an EXPL) where it was placed,
-    /// nobody's.
-    Explode { explosion: FormId, at: [f32; 3] },
+    /// carrying the script caller as `source` for explosion-ref queries and
+    /// `ShowOff:OnExplosionHit` without fabricating a weapon `Cause`.
+    Explode { explosion: FormId, at: [f32; 3], source: Option<FormId> },
 }
 
 /// What damage did to a destructible reference (step C7).
@@ -449,11 +450,34 @@ impl Game<'_> {
         if self.is_dead(r) {
             return false;
         }
-        // Karma and murder are judged while the victim still lives (`crate::crime`).
+        // A co-op guest's kill is the player's, as a companion's is: GetKiller, IsKiller
+        // player, OnDeath's killer, kill counts and karma all see the player, so the host's
+        // quests move on exactly as for its own kill [design].
+        let raw_killer = killer;
+        let killer = killer.map(|k| self.as_player(k));
+        // Karma and murder are judged while the victim still lives (`crate::crime`). A
+        // guest's karma, kill count and kill challenges are its own character's, queued
+        // for it rather than given to the host's player (`crate::coop_kills`; coop-shared-progress.md §4.2) [design].
         if killer == Some(FormId::PLAYER_REF) && r != FormId::PLAYER_REF {
-            self.player_kills(r);
-            self.count_kill(r);
-            self.challenge_kill(r);
+            match raw_killer.filter(|&k| self.is_coop_actor(k)) {
+                Some(guest) => {
+                    let from = self.crimes.notes.len();
+                    let karma = self.player_kills_karma(r, false);
+                    let infamy = self.crimes.notes[from.min(self.crimes.notes.len())..]
+                        .iter()
+                        .filter_map(|n| match n {
+                            crate::crime::Note::Infamy { reputation, before, after } if after != before => Some((*reputation, after - before)),
+                            _ => None,
+                        })
+                        .collect();
+                    self.coop_guest_killed(r, guest, karma, infamy);
+                }
+                None => {
+                    self.player_kills(r);
+                    self.count_kill(r);
+                    self.challenge_kill(r);
+                }
+            }
         }
         // A body already lying knocked out is a ragdoll already [hypothesis].
         let lying = self.knockout(r).is_some_and(|k| k.lying());
@@ -463,6 +487,9 @@ impl Game<'_> {
         e.died_day = day;
         e.killer = killer;
         e.killing_hit = fatal;
+        // A dead actor immediately stops detecting on the same tick
+        // [observed: w4g_05_isactordetected_and_setclass_invalid].
+        self.detection.forget_detector(r);
         // JIP's ragdoll handlers: any actor ragdolled on death [documented:
         // SetOnRagdollEventHandler].
         if !lying {
@@ -589,7 +616,10 @@ impl Game<'_> {
         let amount = amount * self.damage_mult(caster, target);
         let dealt = amount.max(0.0).min((before - floor).max(0.0));
         actor::add_damage(self, target, HEALTH, dealt);
-        let players_side = caster.is_some_and(|c| self.kill_earns_xp(c));
+        let players_side = caster.is_some_and(|c| self.kill_earns_xp(c) || self.is_coop_actor(c));
+        if let Some(c) = caster {
+            self.note_player_hit(target, c, dealt);
+        }
         {
             let e = self.extra.entry(target).or_default();
             if players_side {
@@ -600,9 +630,8 @@ impl Game<'_> {
         if before - dealt <= floor {
             if essential {
                 self.knock_out(target, crate::unconscious::Cause::Essential, caster);
-            } else if self.kill(target, caster) && caster.is_some_and(|c| self.kill_earns_xp(c)) {
-                let xp = self.kill_xp(target);
-                crate::experience::award(self, crate::experience::Source::Kill, xp);
+            } else if self.kill(target, caster) {
+                self.kill_credit(target, caster);
             }
         }
     }
@@ -705,7 +734,10 @@ impl Game<'_> {
         self.jip.hits.insert(target, rec);
         self.jip_event("hit", Some(target), Vec::new());
         actor::add_damage(self, target, HEALTH, dealt);
-        let players_side = info.attacker.is_some_and(|a| self.kill_earns_xp(a));
+        let players_side = info.attacker.is_some_and(|a| self.kill_earns_xp(a) || self.is_coop_actor(a));
+        if let Some(a) = info.attacker {
+            self.note_player_hit(target, a, dealt);
+        }
         let this_hit = crate::game::LastHit { attacker: info.attacker, weapon: info.weapon, location: info.location, critical: info.critical };
         {
             let e = self.extra.entry(target).or_default();
@@ -752,6 +784,10 @@ impl Game<'_> {
         if info.attacker == Some(FormId::PLAYER_REF) {
             let part = crate::challenges::body_part(info.limb.map(|l| l.condition), info.location);
             self.challenge_hit(target, info.weapon, part, dealt, info.critical, out.crippled);
+        } else if let Some(guest) = info.attacker.filter(|&a| self.is_coop_actor(a)) {
+            // A guest's hit counts towards its own character's challenges (`crate::coop_kills`).
+            let part = crate::challenges::body_part(info.limb.map(|l| l.condition), info.location);
+            self.coop_kills.hits_out.push(crate::coop_kills::HitCredit { player: guest, target, weapon: info.weapon, part, dealt, critical: info.critical, crippled: out.crippled });
         }
         // Immortal mode 1 holds the player at 1 HP: no death, no knockout.
         if health <= floor && !self.is_dead(target) && immortal == 0 {
@@ -765,9 +801,8 @@ impl Game<'_> {
                 if out.died {
                     out.overkill = (damage - dealt).max(0.0);
                 }
-                if out.died && info.attacker.is_some_and(|a| self.kill_earns_xp(a)) {
-                    let xp = self.kill_xp(target);
-                    out.xp = crate::experience::award(self, crate::experience::Source::Kill, xp);
+                if out.died {
+                    out.xp = self.kill_credit(target, info.attacker);
                 }
                 // The player's tweak: a kill gives Action Points back [design: docs/design/tweaks.md].
                 if out.died && info.attacker == Some(FormId::PLAYER_REF) && self.tweaks.kill_reward_ap > 0.0 {
@@ -801,11 +836,23 @@ impl Game<'_> {
     /// parameter. Hypothesis: OnHit's subject is the attacking actor here too — that page
     /// gives a projectile reference for a ranged hit on a non-actor, and we have no
     /// projectile references.]
+    ///
+    /// A co-op guest's shot (its actor the attacker) is the player's, as a companion's
+    /// kill is: the blocks see the player as the attacker, and the player's weapon
+    /// questions answer for the guest's shot ([`Game::shot_for_player`]), so a placed
+    /// object a script counts the player's hits on counts a guest's too [design].
     pub fn hit_object(&mut self, target: FormId, info: HitInfo) -> bool {
-        let mut ran = self.ref_event(target, event::ON_HIT, info.attacker.map(|a| Value::Ref(a.0)), info.attacker);
-        if let Some(w) = info.weapon {
-            ran |= self.ref_event(target, event::ON_HIT_WITH, Some(Value::Ref(w.0)), info.attacker);
+        let guest = info.attacker.filter(|&a| self.is_coop_actor(a));
+        let attacker = info.attacker.map(|a| self.as_player(a));
+        let was = self.shot_for_player;
+        if guest.is_some() {
+            self.shot_for_player = info.weapon.or(Some(FormId(0)));
         }
+        let mut ran = self.ref_event(target, event::ON_HIT, attacker.map(|a| Value::Ref(a.0)), attacker);
+        if let Some(w) = info.weapon {
+            ran |= self.ref_event(target, event::ON_HIT_WITH, Some(Value::Ref(w.0)), attacker);
+        }
+        self.shot_for_player = was;
         ran
     }
 

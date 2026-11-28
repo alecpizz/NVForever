@@ -8,8 +8,10 @@
 // coordinate's two numbers; the coordinate itself is then the fragment's place in its
 // mesh over the repeat, which is the mesh's coordinate but for whole repeats. The surface
 // colour and the normal are the base's, blended towards each
-// layer's in the layers' order by opacity x the layer texture's alpha, as the layers'
-// own blended draws blended their lit colours over the base; then the surface is lit once.
+// layer's in the layers' order by its opacity, as the layers' own blended draws blended
+// their lit colours over the base; then the surface is lit once. A layer texture's alpha
+// has no part in it: the original draws the layers opaque whatever it is
+// (docs/spec-notes/world.md section 3 "Landscape layers", #3789).
 // What follows the lighting is nif_material.wesl's for an opaque lit shape with no emitted
 // light: Bevy's ambient specular taken out again, then fog (and tonemapping in a view
 // without HDR).
@@ -33,17 +35,17 @@
 // Without it both paths above are as they were.
 //
 // TERRAIN_PARALLAX (the Terrain parallax switch, terrain.rs "Parallax", [design, #3322];
-// only for a material that holds an authored height map, and never with TERRAIN_ANTI_TILING,
+// only for a material that holds a height map, and never with TERRAIN_ANTI_TILING,
 // whose taps the march does not share): before the surface is set up, one march over the
-// blended depth, each layer's share (ordered shares of the painted opacity x the layer
-// texture's alpha, read once at the plain coordinate) x its own set's depth x (1 - its
-// height) on one fixed step grid, the base and a layer without a height map adding no
-// depth, moves the texture coordinate; then every texture (the base's and the layers',
+// blended depth, each layer's share (ordered shares of the painted opacity) x its own
+// set's depth x (1 - its height) on one fixed step grid, the base likewise (#3846), one
+// without a height map adding no depth, moves the texture coordinate; then every texture (the
+// base's and the layers',
 // diffuse and normal map) is read at the one moved coordinate with the plain coordinate's
 // gradients (one unturned tap through the anti-tiling helpers, so filtering does not follow
 // the shift's jumps), and the layers are blended with the weights the march used: the
-// ordered shares of opacity x alpha read at the plain coordinate, or with height blending
-// its weights worked out there. Faded out with distance (the material's values), none
+// ordered shares of opacity, or with height blending its weights worked out at the plain
+// coordinate. Faded out with distance (the material's values), none
 // on a surface seen head-on. Only the main pass; without it every path above is as it was.
 
 import bevy_pbr::{
@@ -75,8 +77,8 @@ import bevy_pbr::{
 
 struct TerrainLayers {
     // x: how many layers the material holds (0 to 6); y: bit i set when layer i has a
-    // normal map (without one its normal is the surface's own), and bit 8 + i when layer i
-    // has a height map; z: 1 with the burn map;
+    // normal map (without one its normal is the surface's own), bit 8 + i when layer i
+    // has a height map, and bit 14 when the base has one; z: 1 with the burn map;
     // w: feature bits, bit 0 height blending, bit 1 anti-tiling, bit 2 parallax (the
     // pipeline's TERRAIN_HEIGHT_BLEND, TERRAIN_ANTI_TILING and TERRAIN_PARALLAX decide; this
     // records the material's state).
@@ -91,12 +93,13 @@ struct TerrainLayers {
     // with a height map, so every quadrant marches on one step grid; 0 without one), its
     // most steps, the distances its fade starts and ends at (terrain.rs PARALLAX_FADE).
     parallax: vec4<f32>,
-    // Each layer's own depth (0 without a height map): layers 0 to 3, then 4 and 5.
+    // Each layer's own depth (0 without a height map): layers 0 to 3, then 4 and 5, and the
+    // base's in depths_high.z.
     depths_low: vec4<f32>,
     depths_high: vec4<f32>,
 }
 
-// The extension's index table (indices 50-69 of TerrainLayers' bindless attribute).
+// The extension's index table (indices 50-70 of TerrainLayers' bindless attribute).
 @if(BINDLESS) struct TerrainIndices {
     layers: u32,    // 50
     diffuse0: u32,  // 51
@@ -118,6 +121,7 @@ struct TerrainLayers {
     height3: u32,   // 67
     height4: u32,   // 68
     height5: u32,   // 69
+    height_base: u32, // 70
 }
 @if(BINDLESS) @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<storage> terrain_indices: array<TerrainIndices>;
 @if(BINDLESS) @group(constants::MATERIAL_BIND_GROUP) @binding(101) var<storage> terrain_layers: array<TerrainLayers>;
@@ -141,6 +145,7 @@ struct TerrainLayers {
 @if(!BINDLESS && TERRAIN_PARALLAX) @group(constants::MATERIAL_BIND_GROUP) @binding(67) var height3: texture_2d<f32>;
 @if(!BINDLESS && TERRAIN_PARALLAX) @group(constants::MATERIAL_BIND_GROUP) @binding(68) var height4: texture_2d<f32>;
 @if(!BINDLESS && TERRAIN_PARALLAX) @group(constants::MATERIAL_BIND_GROUP) @binding(69) var height5: texture_2d<f32>;
+@if(!BINDLESS && TERRAIN_PARALLAX) @group(constants::MATERIAL_BIND_GROUP) @binding(70) var height_base: texture_2d<f32>;
 
 // Scorch (nvf_play grass_fire, docs/design/grass-fire.md): the ground under grass that
 // burns turns black and stays so until its cell unloads. The burn map holds a byte per
@@ -257,6 +262,54 @@ fn layer_normal(k: u32, instance_index: u32, uv: vec2<f32>) -> vec3<f32> {
     }
 }
 
+// Layer `k`'s diffuse texture at `uv` with explicit gradients (`dx`, `dy`: the coordinate's
+// screen derivatives scaled by the view's mip bias, [`layer_grads`]): the same mip level as
+// `layer_diffuse`, and a read that may sit in a branch some fragments of a quad skip (#2868).
+fn layer_diffuse_grad(k: u32, instance_index: u32, uv: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
+    @if(BINDLESS) {
+        let slot = material_slot(instance_index);
+        let i = terrain_indices[slot];
+        var t = i.diffuse0;
+        if k == 1u { t = i.diffuse1; }
+        if k == 2u { t = i.diffuse2; }
+        if k == 3u { t = i.diffuse3; }
+        if k == 4u { t = i.diffuse4; }
+        if k == 5u { t = i.diffuse5; }
+        return textureSampleGrad(bindless_textures_2d[t], bindless_samplers_filtering[material_indices[slot].base_color_sampler], uv, dx, dy);
+    }
+    @if(!BINDLESS) {
+        if k == 1u { return textureSampleGrad(diffuse1, pbr_bindings::base_color_sampler, uv, dx, dy); }
+        if k == 2u { return textureSampleGrad(diffuse2, pbr_bindings::base_color_sampler, uv, dx, dy); }
+        if k == 3u { return textureSampleGrad(diffuse3, pbr_bindings::base_color_sampler, uv, dx, dy); }
+        if k == 4u { return textureSampleGrad(diffuse4, pbr_bindings::base_color_sampler, uv, dx, dy); }
+        if k == 5u { return textureSampleGrad(diffuse5, pbr_bindings::base_color_sampler, uv, dx, dy); }
+        return textureSampleGrad(diffuse0, pbr_bindings::base_color_sampler, uv, dx, dy);
+    }
+}
+
+// Layer `k`'s normal map at `uv` with explicit gradients, as [`layer_diffuse_grad`].
+fn layer_normal_grad(k: u32, instance_index: u32, uv: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> vec3<f32> {
+    @if(BINDLESS) {
+        let slot = material_slot(instance_index);
+        let i = terrain_indices[slot];
+        var t = i.normal0;
+        if k == 1u { t = i.normal1; }
+        if k == 2u { t = i.normal2; }
+        if k == 3u { t = i.normal3; }
+        if k == 4u { t = i.normal4; }
+        if k == 5u { t = i.normal5; }
+        return textureSampleGrad(bindless_textures_2d[t], bindless_samplers_filtering[material_indices[slot].base_color_sampler], uv, dx, dy).rgb;
+    }
+    @if(!BINDLESS) {
+        if k == 1u { return textureSampleGrad(normal1, pbr_bindings::base_color_sampler, uv, dx, dy).rgb; }
+        if k == 2u { return textureSampleGrad(normal2, pbr_bindings::base_color_sampler, uv, dx, dy).rgb; }
+        if k == 3u { return textureSampleGrad(normal3, pbr_bindings::base_color_sampler, uv, dx, dy).rgb; }
+        if k == 4u { return textureSampleGrad(normal4, pbr_bindings::base_color_sampler, uv, dx, dy).rgb; }
+        if k == 5u { return textureSampleGrad(normal5, pbr_bindings::base_color_sampler, uv, dx, dy).rgb; }
+        return textureSampleGrad(normal0, pbr_bindings::base_color_sampler, uv, dx, dy).rgb;
+    }
+}
+
 // Height blending's reads beside the ordinary ones. The base's diffuse once more, as
 // pbr_input_from_standard_material reads it (same texture, sampler, coordinate and bias:
 // texels already in cache), for its colour before the tint, which the height is taken from.
@@ -348,14 +401,15 @@ fn layer_normal(k: u32, instance_index: u32, uv: vec2<f32>) -> vec3<f32> {
     @if(!BINDLESS) return terrain_layer_values.parallax;
 }
 
-// Each layer's depth over the march's scale (0 for a layer without a height map), so a
+// Each layer's depth over the march's scale, and the base's at index 6 (0 without a height
+// map), so a
 // layer moves the coordinate as far as its own set's depth asks; with the scale the same
 // everywhere, the same layer is marched on the same steps on both sides of a quadrant edge.
-@if(TERRAIN_PARALLAX) fn parallax_scales(instance_index: u32, depth: f32) -> array<f32, 6> {
+@if(TERRAIN_PARALLAX) fn parallax_scales(instance_index: u32, depth: f32) -> array<f32, 7> {
     @if(BINDLESS) let l = terrain_layers[terrain_indices[material_slot(instance_index)].layers];
     @if(!BINDLESS) let l = terrain_layer_values;
     let s = 1.0 / max(depth, 1e-6);
-    return array<f32, 6>(l.depths_low.x * s, l.depths_low.y * s, l.depths_low.z * s, l.depths_low.w * s, l.depths_high.x * s, l.depths_high.y * s);
+    return array<f32, 7>(l.depths_low.x * s, l.depths_low.y * s, l.depths_low.z * s, l.depths_low.w * s, l.depths_high.x * s, l.depths_high.y * s, l.depths_high.z * s);
 }
 
 @if(TERRAIN_PARALLAX) fn parallax_level(size: vec2<u32>, footprint: f32) -> f32 {
@@ -367,7 +421,7 @@ fn layer_normal(k: u32, instance_index: u32, uv: vec2<f32>) -> vec3<f32> {
     return textureSampleLevel(t, s, uv, parallax_level(textureDimensions(t, 0), footprint));
 }
 
-// Layer `k`'s height map at `uv`, read with the base texture's sampler. The caller reads
+// Layer `k`'s height map (the base's for 6) at `uv`, read with the base texture's sampler. The caller reads
 // only those its bits name.
 @if(TERRAIN_PARALLAX) fn layer_height(k: u32, instance_index: u32, uv: vec2<f32>, footprint: f32) -> f32 {
     @if(BINDLESS) {
@@ -379,6 +433,7 @@ fn layer_normal(k: u32, instance_index: u32, uv: vec2<f32>) -> vec3<f32> {
         if k == 3u { h = i.height3; }
         if k == 4u { h = i.height4; }
         if k == 5u { h = i.height5; }
+        if k == 6u { h = i.height_base; }
         let level = parallax_level(textureDimensions(bindless_textures_2d[h], 0), footprint);
         return textureSampleLevel(bindless_textures_2d[h], bindless_samplers_filtering[material_indices[slot].base_color_sampler], uv, level).r;
     }
@@ -388,17 +443,21 @@ fn layer_normal(k: u32, instance_index: u32, uv: vec2<f32>) -> vec3<f32> {
         if k == 3u { return parallax_read(height3, pbr_bindings::base_color_sampler, uv, footprint).r; }
         if k == 4u { return parallax_read(height4, pbr_bindings::base_color_sampler, uv, footprint).r; }
         if k == 5u { return parallax_read(height5, pbr_bindings::base_color_sampler, uv, footprint).r; }
+        if k == 6u { return parallax_read(height_base, pbr_bindings::base_color_sampler, uv, footprint).r; }
         return parallax_read(height0, pbr_bindings::base_color_sampler, uv, footprint).r;
     }
 }
 
 // The march's depth of the blended surface at `uv`, on the march's scale: each of the `n`
-// layers' share (index k + 1) x its scale x (1 - its height map's height). The base and a
-// layer without a height map (scale 0) add none: flat at the surface, so the shift falls to
-// nothing as the layers with height maps fade out, with no jump at their edges or at a
-// quadrant drawn without folded layers (terrain.rs "Parallax").
-@if(TERRAIN_PARALLAX) fn parallax_depth_at(instance_index: u32, uv: vec2<f32>, w: array<f32, 7>, n: u32, scale: array<f32, 6>, footprint: f32) -> f32 {
+// layers' share (index k + 1) and the base's (index 0, its scale at 6, #3846) x its scale x
+// (1 - its height map's height). One without a height map (scale 0) adds none: flat at the
+// surface, so the shift falls to nothing as those with height maps fade out, with no jump at
+// their edges (terrain.rs "Parallax").
+@if(TERRAIN_PARALLAX) fn parallax_depth_at(instance_index: u32, uv: vec2<f32>, w: array<f32, 7>, n: u32, scale: array<f32, 7>, footprint: f32) -> f32 {
     var depth = 0.0;
+    if w[0] > 0.0 && scale[6] > 0.0 {
+        depth += w[0] * scale[6] * (1.0 - layer_height(6u, instance_index, uv, footprint));
+    }
     for (var k = 0u; k < n; k += 1u) {
         if w[k + 1u] > 0.0 && scale[k] > 0.0 {
             depth += w[k + 1u] * scale[k] * (1.0 - layer_height(k, instance_index, uv, footprint));
@@ -423,7 +482,7 @@ const PARALLAX_RELIEF_STEPS: u32 = 4u;
 // interpolation between the last two layers, Tatarchuk's parallax occlusion mapping, I3D
 // 2006) placed a sharp height map's ridge between two layers' guesses, once per layer,
 // instead of at its wall: the stair-stepped, doubled bands of the round-1 pictures. None where the march has
-// nothing to move (no depth, faded out, no layer with both a share and a height map, the
+// nothing to move (no depth, faded out, nothing with both a share and a height map, the
 // plain place already at the surface) and none head-on (the view vector's tangent part is
 // 0). `w`: the base's and the layers' weights worked out at the plain coordinate
 // (fragment()), which the drawn blend uses too. The ray is the view's own (Bevy's
@@ -436,7 +495,7 @@ const PARALLAX_RELIEF_STEPS: u32 = 4u;
         return vec2(0.0);
     }
     let scale = parallax_scales(instance_index, values.x);
-    var relief = false;
+    var relief = w[0] > 0.0 && scale[6] > 0.0;
     for (var k = 0u; k < n; k += 1u) {
         if w[k + 1u] > 0.0 && scale[k] > 0.0 {
             relief = true;
@@ -614,30 +673,26 @@ fn fragment(
     // every later read take the moved place (the landscape's texture transform is the
     // identity, terrain.rs tests). Never with anti-tiling (terrain.rs
     // `TerrainLayersKey`), whose reads take their place from the world, not from `in.uv`.
-    // The weights are worked out once at the plain place (the layers' alphas read there with
-    // the drawn reads' own gradients; with height blending its weights from those texels),
-    // and both the march and the drawn blend use them: a hole in a layer stays where the march
-    // saw it, a layer the height blend leaves out does not move what is drawn, and with no
-    // shift the blend is the one without parallax [design, #3322 review].
-    @if(TERRAIN_PARALLAX) var parallax_alpha = array<f32, 6>(1.0, 1.0, 1.0, 1.0, 1.0, 1.0);
+    // The weights are worked out once at the plain place (the painted opacities; with height
+    // blending its weights from the texels there, read with the drawn reads' own gradients),
+    // and both the march and the drawn blend use them: a layer the height blend leaves out
+    // does not move what is drawn, and with no shift the blend is the one without parallax
+    // [design, #3322 review].
     @if(TERRAIN_PARALLAX) var parallax_w = array<f32, 7>(1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
     @if(TERRAIN_PARALLAX && VERTEX_UVS_A && VERTEX_TANGENTS) {
         let parallax_n = min(layer_counts(in.instance_index).x, 6u);
-        let parallax_standard = standard_material(in.instance_index);
-        let parallax_plain_uv = (parallax_standard.uv_transform * vec3(in.uv, 1.0)).xy;
-        let parallax_plain_fp = TerrainFootprint(parallax_plain_uv, parallax_ddx, parallax_ddy);
-        let parallax_plain_taps = parallax_tap(parallax_plain_uv);
-        var parallax_texels = array<vec4<f32>, 6>(vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0));
         var parallax_paint = array<f32, 6>(0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
         for (var k = 0u; k < parallax_n; k += 1u) {
-            parallax_texels[k] = layer_diffuse_antitiled(k, in.instance_index, parallax_plain_taps, parallax_plain_fp);
-            parallax_alpha[k] = parallax_texels[k].a;
-            parallax_paint[k] = saturate(opacity[k]) * parallax_alpha[k];
+            parallax_paint[k] = saturate(opacity[k]);
         }
         parallax_w = terrain_ordered_shares(parallax_paint, parallax_n);
         @if(TERRAIN_HEIGHT_BLEND && !TERRAIN_ANTI_TILING) {
             // Height blending's weights as its drawn path works them out (the same heights and
             // references), from the plain place's texels.
+            let parallax_standard = standard_material(in.instance_index);
+            let parallax_plain_uv = (parallax_standard.uv_transform * vec3(in.uv, 1.0)).xy;
+            let parallax_plain_fp = TerrainFootprint(parallax_plain_uv, parallax_ddx, parallax_ddy);
+            let parallax_plain_taps = parallax_tap(parallax_plain_uv);
             let parallax_params = height_params(in.instance_index);
             var parallax_height = array<f32, 7>(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
             if parallax_w[0] > 0.0 && (parallax_standard.flags & STANDARD_MATERIAL_FLAGS_BASE_COLOR_TEXTURE_BIT) != 0u {
@@ -646,7 +701,8 @@ fn fragment(
             }
             for (var k = 0u; k < parallax_n; k += 1u) {
                 if parallax_w[k + 1u] > 0.0 {
-                    parallax_height[k + 1u] = terrain_height(parallax_texels[k].rgb, layer_reference(k, in.instance_index, parallax_plain_uv, height_dx, height_dy, parallax_params.z), parallax_params.y);
+                    let parallax_texel = layer_diffuse_antitiled(k, in.instance_index, parallax_plain_taps, parallax_plain_fp);
+                    parallax_height[k + 1u] = terrain_height(parallax_texel.rgb, layer_reference(k, in.instance_index, parallax_plain_uv, height_dx, height_dy, parallax_params.z), parallax_params.y);
                 }
             }
             parallax_w = terrain_height_weights(parallax_w, parallax_height, parallax_params.x);
@@ -683,18 +739,37 @@ fn fragment(
         let plain = normalize(pbr_input.world_normal);
         @if(VERTEX_TANGENTS) let tbn = calculate_tbn_mikktspace(in.world_normal, in.world_tangent);
         @if(!TERRAIN_HEIGHT_BLEND && !TERRAIN_ANTI_TILING) {
+            // The coordinate's screen derivatives, taken once before the loop (#2868), with the
+            // view's mip bias folded in as a scale (a gradient read takes no bias of its own):
+            // the mip level textureSampleBias(.., view.mip_bias) picks.
+            @if(!TERRAIN_PARALLAX) let bias_scale = exp2(view.mip_bias);
+            @if(!TERRAIN_PARALLAX) let uv_dx = dpdx(uv) * bias_scale;
+            @if(!TERRAIN_PARALLAX) let uv_dy = dpdy(uv) * bias_scale;
             for (var k = 0u; k < min(counts.x, 6u); k += 1u) {
-                @if(!TERRAIN_PARALLAX) let texel = layer_diffuse(k, in.instance_index, uv);
-                @if(TERRAIN_PARALLAX) let texel = layer_diffuse_antitiled(k, in.instance_index, parallax_taps, parallax_fp);
-                @if(!TERRAIN_PARALLAX) let share = saturate(opacity[k]) * texel.a;
-                @if(TERRAIN_PARALLAX) let share = saturate(opacity[k]) * parallax_alpha[k];
-                var layer_n = plain;
-                @if(VERTEX_TANGENTS) if (counts.y & (1u << k)) != 0u {
-                    @if(!TERRAIN_PARALLAX) layer_n = apply_normal_mapping(standard.flags, tbn, false, is_front, layer_normal(k, in.instance_index, uv));
-                    @if(TERRAIN_PARALLAX) layer_n = terrain_world_normal(tbn, layer_normal_antitiled(k, in.instance_index, parallax_taps, parallax_fp, terrain_two_component(standard.flags), terrain_flip_y(standard.flags)), false);
+                @if(!TERRAIN_PARALLAX) {
+                    // A layer of opacity 0 here has a share of 0, which leaves the colour and
+                    // the normal as they are: its two reads are skipped (#2868: on an integrated
+                    // GPU they were most of the ground's cost, every held layer on every pixel).
+                    let o = saturate(opacity[k]);
+                    if o > 0.0 {
+                        let texel = layer_diffuse_grad(k, in.instance_index, uv, uv_dx, uv_dy);
+                        let share = o;
+                        var layer_n = plain;
+                        @if(VERTEX_TANGENTS) if (counts.y & (1u << k)) != 0u {
+                            layer_n = apply_normal_mapping(standard.flags, tbn, false, is_front, layer_normal_grad(k, in.instance_index, uv, uv_dx, uv_dy));
+                        }
+                        colour = mix(colour, texel.rgb * tint * standard.base_color.rgb, share);
+                        normal = mix(normal, layer_n, share);
+                    }
                 }
-                colour = mix(colour, texel.rgb * tint * standard.base_color.rgb, share);
-                normal = mix(normal, layer_n, share);
+                @if(TERRAIN_PARALLAX) let texel = layer_diffuse_antitiled(k, in.instance_index, parallax_taps, parallax_fp);
+                @if(TERRAIN_PARALLAX) let share = saturate(opacity[k]);
+                @if(TERRAIN_PARALLAX) var layer_n = plain;
+                @if(TERRAIN_PARALLAX && VERTEX_TANGENTS) if (counts.y & (1u << k)) != 0u {
+                    layer_n = terrain_world_normal(tbn, layer_normal_antitiled(k, in.instance_index, parallax_taps, parallax_fp, terrain_two_component(standard.flags), terrain_flip_y(standard.flags)), false);
+                }
+                @if(TERRAIN_PARALLAX) colour = mix(colour, texel.rgb * tint * standard.base_color.rgb, share);
+                @if(TERRAIN_PARALLAX) normal = mix(normal, layer_n, share);
             }
             pbr_input.material.base_color = vec4(colour, 1.0);
             pbr_input.N = normalize(normal);
@@ -712,7 +787,7 @@ fn fragment(
                 @if(!TERRAIN_PARALLAX) let texel = layer_diffuse(k, in.instance_index, uv);
                 @if(TERRAIN_PARALLAX) let texel = layer_diffuse_antitiled(k, in.instance_index, parallax_taps, parallax_fp);
                 texels[k] = texel;
-                paint[k] = saturate(opacity[k]) * texel.a;
+                paint[k] = saturate(opacity[k]);
                 @if(VERTEX_TANGENTS) if (counts.y & (1u << k)) != 0u {
                     @if(!TERRAIN_PARALLAX) layer_n[k] = apply_normal_mapping(standard.flags, tbn, false, is_front, layer_normal(k, in.instance_index, uv));
                     @if(TERRAIN_PARALLAX) layer_n[k] = terrain_world_normal(tbn, layer_normal_antitiled(k, in.instance_index, parallax_taps, parallax_fp, terrain_two_component(standard.flags), terrain_flip_y(standard.flags)), false);
@@ -748,7 +823,7 @@ fn fragment(
             // first: a layer's ordered share is its painted share x what the later layers
             // leave (terrain_weights.wesl `terrain_ordered_shares`, the same products), so a
             // layer of opacity 0, and everything under a fully covering layer (the base
-            // too), is not read. A diffuse read can still be needed to find an alpha of 0.
+            // too), is not read.
             let taps = terrain_taps(fp.uv);
             let n = min(counts.x, 6u);
             let flags = standard.flags;
@@ -766,9 +841,8 @@ fn fragment(
                     continue;
                 }
                 raw[k + 1u] = layer_diffuse_antitiled(k, in.instance_index, taps, fp);
-                let a = saturate(o * raw[k + 1u].a);
-                w[k + 1u] = a * remaining;
-                remaining *= 1.0 - a;
+                w[k + 1u] = o * remaining;
+                remaining *= 1.0 - o;
             }
             w[0] = remaining;
             if w[0] != 0.0 {
@@ -832,18 +906,20 @@ fn fragment(
 
     var out: FragmentOutput;
     out.color = apply_pbr_lighting(pbr_input);
-    // Bevy's ambient specular out again, as in nif_material.wesl (the game's ambient light
-    // is a flat colour; highlights come from lights).
-    let m = pbr_input.material;
-    let F0 = calculate_F0(m.base_color.rgb, m.metallic, m.reflectance);
-    let NdotV = max(dot(pbr_input.N, pbr_input.V), 0.0001);
-    let spec = EnvBRDFApprox(F0, F_AB(m.perceptual_roughness, NdotV));
-    let spec_occlusion = saturate(dot(F0, vec3(50.0 * 0.33)));
-    var ambient_spec = spec * spec_occlusion * lights.ambient_color.rgb * pbr_input.diffuse_occlusion;
-    if lights.ambient_color.a < 0.0 {
-        ambient_spec *= pow(max(lights.ambient_color.rgb * view.exposure, vec3(1e-6)), vec3(1.2));
+    // Bevy's ambient specular out again in display-value mode, as in nif_material.wesl
+    // (the game's ambient light is a flat colour; highlights come from lights).
+    @if(!NVF_PHYSICAL_PBR) {
+        let m = pbr_input.material;
+        let F0 = calculate_F0(m.base_color.rgb, m.metallic, m.reflectance);
+        let NdotV = max(dot(pbr_input.N, pbr_input.V), 0.0001);
+        let spec = EnvBRDFApprox(F0, F_AB(m.perceptual_roughness, NdotV));
+        let spec_occlusion = saturate(dot(F0, vec3(50.0 * 0.33)));
+        var ambient_spec = spec * spec_occlusion * lights.ambient_color.rgb * pbr_input.diffuse_occlusion;
+        if lights.ambient_color.a < 0.0 {
+            ambient_spec *= pow(max(lights.ambient_color.rgb * view.exposure, vec3(1e-6)), vec3(1.2));
+        }
+        out.color = vec4(max(out.color.rgb - view.exposure * ambient_spec, vec3(0.0)), out.color.a);
     }
-    out.color = vec4(max(out.color.rgb - view.exposure * ambient_spec, vec3(0.0)), out.color.a);
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
     return out;
     }

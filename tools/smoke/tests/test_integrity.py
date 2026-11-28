@@ -137,7 +137,7 @@ class ExpectFile(unittest.TestCase):
         got = {".".join(e.json_path) for e in s.expect}
         self.assertEqual(got, {"summary.stubs", "summary.by_status.assigned", "summary.by_status.implementable", "summary.by_status.needs_system",
                                "summary.by_status.no_op", "summary.stub_calls", "summary.stub_condition_uses",
-                               "summary.unhandled_used"})
+                               "summary.unhandled_used", "summary.unnamed_called"})
         self.assertTrue(all(e.has_equals for e in s.expect))
 
 

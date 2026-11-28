@@ -61,9 +61,9 @@ pub struct Cell {
     pub plugin: usize,
     /// References whose winning placement is in this cell, by FormID.
     pub refs: Vec<u32>,
-    /// The cell's LAND record. In a worldspace that uses its parent's land data a cell
-    /// with none of its own has the parent's, of the cell on the same grid square
-    /// ([`Cell::land_of_parent`] says so).
+    /// The cell's LAND record. In a worldspace that uses its parent's land data it is the
+    /// parent's, of the cell on the same grid square, where the parent has one, the
+    /// cell's own LAND or not ([`Cell::land_of_parent`] says so).
     pub land: Option<u32>,
     /// `land` is the parent worldspace's ([`WorldIndex::take_parent_data`]).
     pub land_of_parent: bool,
@@ -231,10 +231,13 @@ impl WorldIndex {
     /// equals the parent's on 10 of its 12 squares; Oasis has no LAND at all).
     ///
     /// - Use Land Data: the default heights (`DNAM`, land and water together) are the
-    ///   parent's when the child has none, and a cell without LAND takes the LAND of the
-    ///   parent's cell on the same grid square. A cell with its own LAND keeps it
-    ///   [hypothesis: which wins where both exist and differ is not known; MegatonWorld
-    ///   differs on 2 squares, GNRroofWorld on all 85].
+    ///   parent's when the child has none, and every cell takes the LAND of the parent's
+    ///   cell on the same grid square, its own LAND too; a square where the parent has
+    ///   none keeps the child's [hypothesis, #3755: drawn, ParadiseFalls's own LAND on
+    ///   (-9, 16), up to 1,550 units over the parent's, hung a ridge in the sky behind the
+    ///   entrance that players of the original do not see, and GNRroofWorld's (flat at
+    ///   about 12,280 over ground at about 10,700) would be a floor at roof height over
+    ///   the plaza; observer check 225 asks the original].
     /// - Use Water Data: the water type and default heights are the parent's when the
     ///   child has none. Per-cell water (`XCLW`, `XCWT`) is not taken [not known].
     /// - Use Climate Data: the climate is the parent's.
@@ -265,9 +268,6 @@ impl WorldIndex {
             if land {
                 let squares: Vec<((i32, i32), u32)> = self.worldspaces[&child].grid.iter().map(|(&g, &c)| (g, c)).collect();
                 for (g, cell) in squares {
-                    if self.cells.get(&cell).is_some_and(|c| c.land.is_some()) {
-                        continue;
-                    }
                     let Some(theirs) = p.grid.get(&g).and_then(|c| self.cells.get(c)).and_then(|c| c.land) else { continue };
                     if let Some(c) = self.cells.get_mut(&cell) {
                         c.land = Some(theirs);

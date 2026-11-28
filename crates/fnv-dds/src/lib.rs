@@ -217,8 +217,14 @@ impl PixelFormat {
 
     /// The format named in dds.md §2, or a description of an unknown one.
     pub fn format(&self) -> Result<Format, String> {
-        // The rows of dds.md §2 match on the whole flags value.
-        if self.flags == PF_FOURCC {
+        // The rows of dds.md §2 match on the whole flags value, except that a FourCC file
+        // may also carry the alpha-pixels bit: the FourCC names the format and the bit adds
+        // nothing [observed: Honest Hearts' `textures\nvdlc02\landscape\trees\nvdlc02treebark.dds`
+        // and Nuclear Sunset's `loading_desktop06.dds`, flags 0x5 with `DXT5`/`DXT1`, which
+        // the original draws; they were refused and drew white, log
+        // nvforever-20261125-185028-13396.log; hypothesis: the original reads the FourCC
+        // whenever its flag is set].
+        if self.flags == PF_FOURCC || self.flags == PF_FOURCC | PF_ALPHA_PIXELS {
             return match &self.fourcc {
                 b"DXT1" => Ok(Format::Dxt1),
                 b"DXT3" => Ok(Format::Dxt3),
@@ -902,6 +908,14 @@ mod tests {
         assert_eq!(t.levels[0].iter().map(|l| l.len()).collect::<Vec<_>>(), [16, 8, 8]);
         let argb = build(2, 1, 1, PF_RGB | PF_ALPHA_PIXELS, &[0; 4], 32, [0xFF0000, 0xFF00, 0xFF, 0xFF000000], 0, 11);
         assert_eq!(Dds::parse(&argb).unwrap().levels[0][0].len(), 8);
+    }
+
+    #[test]
+    fn a_fourcc_with_the_alpha_pixels_bit_reads_as_its_fourcc() {
+        for (cc, f) in [(b"DXT5", Format::Dxt5), (b"DXT1", Format::Dxt1)] {
+            let d = build(4, 4, 1, PF_FOURCC | PF_ALPHA_PIXELS, cc, 0, [0; 4], 0, if f == Format::Dxt1 { 8 } else { 16 });
+            assert_eq!(Dds::parse(&d).unwrap().header.pixel_format.format(), Ok(f));
+        }
     }
 
     #[test]

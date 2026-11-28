@@ -3,19 +3,19 @@
 //! This shader runs before mesh preprocessing in order to determine the
 //! positions of `MeshUniform`s. Unlike `MeshInputUniform`s, which are scattered
 //! throughout the buffer, `MeshUniform`s are indexed by instance ID, and so we
-//! must place instances of the same mesh together in the buffer. One dispatch
-//! call corresponds to one batch set (i.e. one multidraw operation), and one
-//! thread corresponds to one bin (a.k.a. draw, a.k.a. batch).
+//! must place instances of the same mesh together in the buffer. One thread
+//! corresponds to one bin (a.k.a. draw, a.k.a. batch) of one batch set (i.e.
+//! one multidraw operation).
 //!
-//! Essentially, the goal of this shader is to perform a prefix sum, using the
-//! "scan-then-fan" approach. It has three phases:
+//! Essentially, the goal of this shader is to perform a prefix sum within each
+//! batch set, using the "scan-then-fan" approach. It has three phases:
 //!
 //! 1. *Local scan*: Perform a [Hillis-Steele scan] on each chunk of draws, where
 //! the size of each chunk (i.e. the number of draws) is equal to the workgroup
 //! size (256). Write the total size for this chunk to the fan buffer.
 //!
-//! 2. *Global scan*: Do a Hillis-Steele scan on the fan buffer. Now we know the
-//! running total for each chunk.
+//! 2. *Global scan*: Do a Hillis-Steele scan on the batch set's part of the fan
+//! buffer. Now we know the running total for each chunk.
 //!
 //! 3. *Fan*: Copy the running total for each chunk to every element of that
 //! chunk.
@@ -23,53 +23,68 @@
 //! Note that, for batch sets (i.e. multidraw indirect calls) that have fewer
 //! than 256 batches in them, we only need step (1). This is the common case.
 //!
+//! NVForever merged scene unpacking: each step is a single dispatch for every
+//! batch set of one (view, phase, mesh indexed-ness), packed into shared
+//! buffers (bevy_render gpu_preprocessing.rs `SceneUnpackingClassBuffers`).
+//! Every workgroup is one 256-bin chunk of one batch set (`workgroup_jobs`), in
+//! all three steps; the fan buffer has one entry per workgroup. Steps 2 and 3
+//! are dispatched only when some batch set has more than one chunk.
+//!
 //! [Hillis-Steele scan]: https://en.wikipedia.org/wiki/Prefix_sum#Algorithm_1:_Shorter_span,_more_parallel
 
 import bevy_render::occlusion_culling::mesh_preprocess_types::{BinMetadata, IndirectParametersMetadata};
 
-/// Information needed to allocate `MeshUniform`s.
-struct UniformAllocationMetadata {
+/// One batch set (`GpuSceneUnpackingJob` on the CPU).
+struct SceneUnpackingJob {
+    /// Fields `unpack_bins` reads.
+    base_output_work_item_index: u32,
+    base_indirect_parameters_index: u32,
+    binned_mesh_instance_count: u32,
+    first_instance: u32,
+    /// Its first entry in `bin_metadata`.
+    first_bin_metadata: u32,
+    first_bin_index: u32,
+    first_unpacking_workgroup: u32,
     /// The index of this batch set in the `IndirectBatchSet` array.
     ///
     /// We write this into the `indirect_parameters_metadata`.
     batch_set_index: u32,
-
     /// The number of bins (a.k.a. draws, a.k.a. batches) in this batch set.
     bin_count: u32,
-
     /// The index of the first set of indirect parameters for this batch set.
     ///
     /// This is also the index of the first `IndirectParametersMetadata`, as
     /// that's a parallel array with the indirect parameters.
     first_indirect_parameters_index: u32,
-
     /// The index of the first `MeshUniform` slot for this batch set.
     first_output_mesh_uniform_index: u32,
-
-    /// Padding.
-    pad: array<vec4<f32>, 15u>,
+    /// Its first workgroup (chunk) of these dispatches.
+    first_allocation_workgroup: u32,
 };
 
 /// The number of threads in a workgroup.
 const WORKGROUP_SIZE: u32 = 256u;
 
-/// Information needed to allocate `MeshUniform`s.
-@group(0) @binding(0) var<uniform> allocate_uniforms_metadata: UniformAllocationMetadata;
+/// The batch sets.
+@group(0) @binding(0) var<storage> jobs: array<SceneUnpackingJob>;
+
+/// The batch set of each workgroup.
+@group(0) @binding(1) var<storage> workgroup_jobs: array<u32>;
 
 /// Information for each bin, including the indirect parameters offset and the
 /// instance count.
-@group(0) @binding(1) var<storage> bin_metadata: array<BinMetadata>;
+@group(0) @binding(2) var<storage> bin_metadata: array<BinMetadata>;
 
 /// The array of indirect parameters metadata that we fill out, one for each
 /// batch.
-@group(0) @binding(2) var<storage, read_write> indirect_parameters_metadata:
+@group(0) @binding(3) var<storage, read_write> indirect_parameters_metadata:
     array<IndirectParametersMetadata>;
 
 /// A temporary buffer that stores the mesh uniform index of the last instance
 /// plus one for each workgroup (i.e. for each 256-bin chunk).
 ///
 /// This is accumulated in the second stage and written out in the third.
-@group(0) @binding(3) var<storage, read_write> fan_buffer: array<u32>;
+@group(0) @binding(4) var<storage, read_write> fan_buffer: array<u32>;
 
 /// Scratch memory that stores the prefix sum for every element in our chunk.
 var<workgroup> output_offsets: array<u32, 256>;
@@ -85,27 +100,29 @@ var<workgroup> output_offsets: array<u32, 256>;
 fn allocate_local_scan(
     @builtin(local_invocation_id) local_id: vec3<u32>,
     @builtin(workgroup_id) group_id: vec3<u32>,
-    @builtin(global_invocation_id) global_id: vec3<u32>
 ) {
-    let bin_count = allocate_uniforms_metadata.bin_count;
+    let job = jobs[workgroup_jobs[group_id.x]];
+    let chunk = group_id.x - job.first_allocation_workgroup;
+    let bin_count = job.bin_count;
+    let bin = chunk * WORKGROUP_SIZE + local_id.x;
 
-    let block_start = group_id.x * WORKGROUP_SIZE;
+    let block_start = chunk * WORKGROUP_SIZE;
     let block_end = min(block_start + WORKGROUP_SIZE, bin_count);
 
-    // If this is the first workgroup, take the first output index from the
+    // If this is the first chunk, take the first output index from the
     // metadata into account. But if this is the second chunk or beyond, don't
     // do that, as the second and third phases will add it in and we don't want
     // to double-count it.
-    if (group_id.x == 0u) {
-        output_offsets[local_id.x] = allocate_uniforms_metadata.first_output_mesh_uniform_index;
+    if (chunk == 0u) {
+        output_offsets[local_id.x] = job.first_output_mesh_uniform_index;
     } else {
         output_offsets[local_id.x] = 0u;
     }
     workgroupBarrier();
 
     // We're doing an inclusive sum, so put the instance count in the *next* bin.
-    if (global_id.x < block_end && local_id.x < WORKGROUP_SIZE - 1u) {
-        output_offsets[local_id.x + 1] = bin_metadata[global_id.x].instance_count;
+    if (bin < block_end && local_id.x < WORKGROUP_SIZE - 1u) {
+        output_offsets[local_id.x + 1] = bin_metadata[job.first_bin_metadata + bin].instance_count;
     }
     workgroupBarrier();
 
@@ -116,14 +133,14 @@ fn allocate_local_scan(
     // `base_output_index` with the value of the prefix sum (which might be
     // incomplete if this isn't the first chunk). We also populate a few
     // bookkeeping fields for later rendering passes to use.
-    if (global_id.x < block_end) {
+    if (bin < block_end) {
         let indirect_parameters_offset =
-            allocate_uniforms_metadata.first_indirect_parameters_index +
-            bin_metadata[global_id.x].indirect_parameters_offset;
+            job.first_indirect_parameters_index +
+            bin_metadata[job.first_bin_metadata + bin].indirect_parameters_offset;
         indirect_parameters_metadata[indirect_parameters_offset].base_output_index =
             output_offsets[local_id.x];
         indirect_parameters_metadata[indirect_parameters_offset].batch_set_index =
-            allocate_uniforms_metadata.batch_set_index;
+            job.batch_set_index;
         // These parameters get filled in later. Initialize them to zero for now.
         // This is required in the case of the early/late instance counts
         // because the mesh preprocessing shader will atomically increment them.
@@ -134,11 +151,11 @@ fn allocate_local_scan(
 
     // If this is the last element in the workgroup, put the total number of
     // instances (plus the first output mesh uniform index if we're the first
-    // workgroup) in the fan buffer in preparation for the next phase.
+    // chunk) in the fan buffer in preparation for the next phase.
     if (local_id.x == WORKGROUP_SIZE - 1u) {
         var chunk_total = output_offsets[WORKGROUP_SIZE - 1u];
-        if (global_id.x < block_end) {
-            chunk_total += bin_metadata[global_id.x].instance_count;
+        if (bin < block_end) {
+            chunk_total += bin_metadata[job.first_bin_metadata + bin].instance_count;
         }
         fan_buffer[group_id.x] = chunk_total;
     }
@@ -150,11 +167,20 @@ fn allocate_local_scan(
 /// (i.e. the sum going out of each chunk) and performs one or more Hillis-Steele
 /// scans in order to compute the fan value going into each chunk.
 ///
-/// This step is omitted if there are 256 or fewer total draws.
+/// The first workgroup of each batch set with more than one chunk does the
+/// work; every other workgroup has nothing to do.
 @compute @workgroup_size(256, 1, 1)
-fn allocate_global_scan(@builtin(local_invocation_id) local_id: vec3<u32>) {
+fn allocate_global_scan(
+    @builtin(local_invocation_id) local_id: vec3<u32>,
+    @builtin(workgroup_id) group_id: vec3<u32>,
+) {
+    let job = jobs[workgroup_jobs[group_id.x]];
+    let chunk_count = div_ceil(job.bin_count, WORKGROUP_SIZE);
+    if (group_id.x != job.first_allocation_workgroup || chunk_count <= 1u) {
+        return;
+    }
+    let first_chunk = job.first_allocation_workgroup;
     var sum = 0u;
-    let chunk_count = div_ceil(allocate_uniforms_metadata.bin_count, WORKGROUP_SIZE);
 
     // Do a sequential loop over each block of 256 chunks. Because each
     // iteration of this loop covers 64K meshes, the fact that it's sequential
@@ -164,7 +190,9 @@ fn allocate_global_scan(@builtin(local_invocation_id) local_id: vec3<u32>) {
         let block_end = min(block_start + WORKGROUP_SIZE, chunk_count);
         let global_id = block_start + local_id.x;
         if (global_id < block_end) {
-            output_offsets[local_id.x] = fan_buffer[global_id];
+            output_offsets[local_id.x] = fan_buffer[first_chunk + global_id];
+        } else {
+            output_offsets[local_id.x] = 0u;
         }
         workgroupBarrier();
 
@@ -175,7 +203,7 @@ fn allocate_global_scan(@builtin(local_invocation_id) local_id: vec3<u32>) {
         // Note that we don't need a workgroup barrier here because
         // `hillis_steele_scan` already did one.
         if (global_id < block_end) {
-            fan_buffer[global_id] = sum + output_offsets[local_id.x];
+            fan_buffer[first_chunk + global_id] = sum + output_offsets[local_id.x];
         }
 
         // Save the sum coming out of this block for the next one.
@@ -187,25 +215,24 @@ fn allocate_global_scan(@builtin(local_invocation_id) local_id: vec3<u32>) {
 /// The third step of the prefix sum.
 ///
 /// We take the summed fan value computed in the previous step and add it in to
-/// each value of each chunk beyond the first. We dispatch one fewer workgroup
-/// here than in step (1), because there's nothing to do for the first chunk.
-///
-/// This step is omitted if there are 256 or fewer total draws.
+/// each value of each chunk beyond the first. The first chunk of each batch set
+/// has nothing to do.
 @compute @workgroup_size(256, 1, 1)
 fn allocate_fan(
+    @builtin(local_invocation_id) local_id: vec3<u32>,
     @builtin(workgroup_id) group_id: vec3<u32>,
-    @builtin(global_invocation_id) global_id: vec3<u32>
 ) {
-    let id = global_id.x + WORKGROUP_SIZE;
-    let bin_count = allocate_uniforms_metadata.bin_count;
-    if (id >= bin_count) {
+    let job = jobs[workgroup_jobs[group_id.x]];
+    let chunk = group_id.x - job.first_allocation_workgroup;
+    let id = chunk * WORKGROUP_SIZE + local_id.x;
+    if (chunk == 0u || id >= job.bin_count) {
         return;
     }
 
-    let fan_value = fan_buffer[group_id.x];
+    let fan_value = fan_buffer[group_id.x - 1u];
     let indirect_parameters_offset =
-        allocate_uniforms_metadata.first_indirect_parameters_index +
-        bin_metadata[id].indirect_parameters_offset;
+        job.first_indirect_parameters_index +
+        bin_metadata[job.first_bin_metadata + id].indirect_parameters_offset;
     indirect_parameters_metadata[indirect_parameters_offset].base_output_index += fan_value;
 }
 

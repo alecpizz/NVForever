@@ -7,6 +7,32 @@
 use crate::game::{fitted_seconds, Game};
 use fnv_sim::FormId;
 
+/// A voice file shorter than [`PLACEHOLDER_SECONDS`] and than this share of the length
+/// fitted to its text is a placeholder, not a reading of the text: the line keeps its
+/// fitted length [design, #4825: the "{no VO}" description lines (Rex's examine branch,
+/// INFO 0015BA61) ship with a 0.12 s file, gone before the text could be read; a real
+/// reading of even one short word is longer than a quarter second; `fnvtool voice
+/// coverage --lengths` counts the placeholders as `placeholder_sounds`].
+pub const PLACEHOLDER_SHARE: f64 = 0.25;
+/// See [`PLACEHOLDER_SHARE`].
+pub const PLACEHOLDER_SECONDS: f64 = 0.25;
+
+/// Whether a voice file of `sound` seconds is a placeholder for a response of `chars`
+/// characters ([`PLACEHOLDER_SHARE`]).
+pub fn is_placeholder(sound: f64, chars: usize) -> bool {
+    sound < PLACEHOLDER_SECONDS && sound < fitted_seconds(chars) * PLACEHOLDER_SHARE
+}
+
+/// How long a response with a voice file of `sound` seconds lasts: the file's length,
+/// unless it is a placeholder ([`is_placeholder`]), then the length fitted to its text.
+pub fn seconds_with_sound(sound: f64, chars: usize) -> f64 {
+    if is_placeholder(sound, chars) {
+        fitted_seconds(chars)
+    } else {
+        sound
+    }
+}
+
 /// The lengths of voice files. Implemented outside this crate (`fnv_voice::VoiceBank`),
 /// so the rules stay free of archives and sound formats.
 pub trait VoiceLengths: Send + Sync {
@@ -68,10 +94,11 @@ impl Game<'_> {
             let fixed = self.dialogue_view().info(&info).and_then(|d| d.speaker).filter(|s| Some(*s) != voice_base && Some(*s) != placed_base)?;
             voice?.response_seconds(info, response, Some(fixed))
         });
-        sound.unwrap_or_else(|| {
-            let chars = self.dialogue_view().info(&info).and_then(|d| d.response_chars.get(response)).copied().unwrap_or(0);
-            fitted_seconds(chars)
-        })
+        let chars = || self.dialogue_view().info(&info).and_then(|d| d.response_chars.get(response)).copied().unwrap_or(0);
+        match sound {
+            Some(s) => seconds_with_sound(s, chars()),
+            None => fitted_seconds(chars()),
+        }
     }
 
     /// The length of each response of a line, in record order. A line without responses
@@ -134,5 +161,26 @@ impl Game<'_> {
     pub fn response_lengths_as(&self, speaker_base: Option<FormId>, info: FormId) -> Vec<f64> {
         let n = self.dialogue_view().info(&info).map_or(0, |d| d.response_chars.len());
         (0..n.max(1)).map(|k| self.response_seconds_as(speaker_base, info, k)).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_placeholder_file_gives_way_to_the_text() {
+        // Rex's bull painting line (#4825): 89 characters, a 0.12 s file.
+        let chars = 89;
+        assert!(is_placeholder(0.12, chars));
+        assert_eq!(seconds_with_sound(0.12, chars), fitted_seconds(chars));
+        // A real reading keeps its own length, longer or shorter than the fit.
+        assert_eq!(seconds_with_sound(4.2, chars), 4.2);
+        assert_eq!(seconds_with_sound(9.0, chars), 9.0);
+        // One short word said: "Yes." in 0.3 s stays 0.3 s.
+        assert!(!is_placeholder(0.3, 4));
+        assert_eq!(seconds_with_sound(0.3, 4), 0.3);
+        // A near-empty file for an empty text is no placeholder (the fit is 1.1 s).
+        assert!(!is_placeholder(0.26, 0));
     }
 }

@@ -919,9 +919,10 @@ impl Game<'_> {
     }
 
     /// The rule of [`Game::hostile_to`], read-only: `aggression` gives an actor's
-    /// Aggression; `None` when it gives none for an actor the rule asks about.
+    /// Aggression; `None` when it gives none for an actor the rule asks about. Another
+    /// player's actor (co-op) is never hostile by this rule.
     fn hostility(&self, actor: FormId, other: FormId, aggression: &dyn Fn(FormId) -> Option<i64>) -> Option<Hostile> {
-        if actor == other || actor == FormId::PLAYER_REF || !self.world.is_enabled(actor).unwrap_or(false) {
+        if actor == other || actor == FormId::PLAYER_REF || self.is_coop_actor(actor) || !self.world.is_enabled(actor).unwrap_or(false) {
             return Some(Hostile::No);
         }
         // A fixture or combat-disabled actor never fights (issue #2431; SetCombatDisabled).
@@ -939,6 +940,11 @@ impl Game<'_> {
         }
         if self.provocations.holds(actor, other) {
             return Some(Hostile::Grudge);
+        }
+        // Another player of a co-op game is attacked whenever the player would be
+        // (`crate::coop`) [design].
+        if self.is_coop_actor(other) {
+            return self.hostility(actor, FormId::PLAYER_REF, aggression);
         }
         // The player's teammates "act and react as if in the player faction for the
         // purposes of combat. Other actors will treat the actor as if he were in the
@@ -1307,7 +1313,7 @@ impl Game<'_> {
     /// NCRFactionNV and FiendsFactionNV, name 23 and 6 others, but not each other:
     /// observed].
     pub fn kin(&self, a: FormId, b: FormId) -> bool {
-        if a == b || a == FormId::PLAYER_REF || b == FormId::PLAYER_REF {
+        if a == b || self.as_player(a) == FormId::PLAYER_REF || self.as_player(b) == FormId::PLAYER_REF {
             return false;
         }
         self.kin_with(a, b, &self.kin_facts(a), &self.kin_facts(b))
@@ -1549,9 +1555,17 @@ impl Game<'_> {
 }
 
 /// `actor.StartCombat target` ([`Game::start_combat`]).
+/// A co-op random encounter's `StartCombat player` is with the player nearest the
+/// attacker (`crate::coop`, the encounter notes).
 pub fn start_combat(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
     let r = ctx.subject()?;
-    g.start_combat(r, a.form(0)?);
+    let mut target = a.form(0)?;
+    if target == FormId::PLAYER_REF && ctx.self_ref.is_some_and(|s| g.coop_encounter(s)) {
+        if let Some((p, _)) = g.nearest_player(r) {
+            target = p;
+        }
+    }
+    g.start_combat(r, target);
     none()
 }
 

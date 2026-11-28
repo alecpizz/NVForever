@@ -244,6 +244,9 @@ struct PreparedObject {
     index: u16,
     layer: u8,
     motion: Motion,
+    /// A loose body on the Non Collidable layer, placed fixed and touching nothing
+    /// ([`rooted`]).
+    rooted: bool,
     material: Material,
     /// Body pose in the world, rapier units.
     pose: Pose,
@@ -254,6 +257,20 @@ struct PreparedObject {
     shell: f32,
     /// The node the object hangs on (`CollisionObject::node`).
     node: Option<String>,
+}
+
+/// A dynamic body on the Non Collidable layer: the pickable plants White Horse Nettle and
+/// Broc Flower carry one, a 45 kg box standing on its end (grab.md §3). In the original
+/// nothing moved them: walking into them (the players' report, #4917), shots or a frag
+/// grenade's blast beside them (observer check 278 [observed]); a nettle held with the
+/// grab key and let go was read 170 units under the ground, so its body met nothing
+/// there, terrain included. Placed as a dynamic body here it was knocked over when the
+/// player walked into it and clinked on landing (#4917). It is placed as a fixed body that
+/// has no contacts with any other (queries still see it, as they see the plants'
+/// non-collidable statics) [design: the observed stillness; the grab the original allows
+/// stays off, #3389].
+fn rooted(o: &CollisionObject) -> bool {
+    o.layer == crate::layers::NON_COLLIDABLE && o.motion == Motion::Dynamic
 }
 
 /// The surface and mass properties of a collision object.
@@ -302,10 +319,12 @@ impl PreparedRef {
             if leaves.is_empty() {
                 continue;
             }
+            let rooted = rooted(o);
             out.objects.push(PreparedObject {
                 index: i as u16,
                 layer: o.layer,
-                motion: o.motion,
+                motion: if rooted { Motion::Static } else { o.motion },
+                rooted,
                 material: Material { friction: o.friction, restitution: o.restitution, mass: o.mass, code: o.material },
                 pose: body_pose,
                 wind: o.wind,
@@ -415,8 +434,7 @@ pub struct RefreshStats {
     pub hitvol_skipped: u64,
     /// Colliders in the world, summed over the refreshes (divide by `refreshes`).
     pub colliders: u64,
-    /// Bodies added since the last step, summed over the refreshes (re-flagged after
-    /// the detection).
+    /// New bodies presented to registration refreshes (historical field name).
     pub repair_new: u64,
     /// Bodies added asleep, summed over the refreshes (put back to sleep).
     pub repair_sleep: u64,
@@ -466,7 +484,7 @@ pub struct PhysWorld {
     dirty_by: u8,
     /// Diagnostics only ([`PhysWorld::refresh_stats`]).
     refresh_stats: RefreshStats,
-    /// Bodies inserted since the last step (see [`PhysWorld::update_queries`]).
+    /// Bodies inserted since the last step or no-time registration refresh.
     pub(crate) new_bodies: Vec<RigidBodyHandle>,
     /// Bodies struck ([`PhysWorld::push_ref`], [`PhysWorld::push_dynamic`]) or moved by
     /// setting their position ([`PhysWorld::body_placed`]) since the last step (see
@@ -652,6 +670,12 @@ impl PhysWorld {
                 self.wind.entry(p.form_id).or_default().push(body);
             }
             report.colliders += self.attach(body, owner, &o.material, o.leaves, o.shell);
+            if o.rooted {
+                for c in self.w.bodies[body].colliders().to_vec() {
+                    self.w.colliders[c].set_collision_groups(crate::actors::NO_CONTACTS);
+                    self.w.colliders[c].set_solver_groups(crate::actors::NO_CONTACTS);
+                }
+            }
             if o.motion == Motion::Dynamic {
                 self.set_mass(body, o.material.mass);
                 self.heavy_unpushed(body);
@@ -1116,10 +1140,6 @@ impl PhysWorld {
                 *a += t.time_ms();
             }
         }
-        // Bodies and colliders rapier took out for NaN or infinite state (`crate::quarantine`).
-        if !self.w.quarantine().is_empty() {
-            self.handle_quarantine();
-        }
         // Diagnostics: marks the step's own detection took, with no refresh between.
         if self.dirty {
             self.refresh_stats.step_absorbed += 1;
@@ -1128,6 +1148,11 @@ impl PhysWorld {
         self.dirty = false;
         self.new_bodies.clear();
         self.struck.clear();
+        // The positive step consumed the old changes. Keep any marks/new bodies
+        // produced by quarantine remedies for the next query registration.
+        if !self.w.quarantine().is_empty() {
+            self.handle_quarantine();
+        }
         self.steps += 1;
         self.stepped_secs += f64::from(self.params.dt);
     }
@@ -1185,7 +1210,7 @@ impl PhysWorld {
                 // Zero-dt physics step: registers bodies/changes with islands and updates
                 // broad- and narrow-phase contacts without advancing time or forces.
                 let _span = tracing::info_span!("phys::refresh_detect").entered();
-                self.detect();
+                self.register_query_changes();
             }
             let _repair = tracing::info_span!("phys::refresh_repair").entered();
             // A body added asleep wakes when its first contacts are found: rapier wakes
@@ -1238,11 +1263,33 @@ impl PhysWorld {
             // Any remaining island inconsistency (`crate::islands`).
             let repaired = self.repair_islands();
             self.refresh_stats.repair_islands += repaired as u64;
-            self.dirty = false;
             if !self.w.quarantine().is_empty() {
                 self.handle_quarantine();
             }
         }
+    }
+
+    /// Register current changes and immediately retain each pipeline's quarantine
+    /// report. The selected backend's remedies need at most one republish: they
+    /// restore sanitized finite bodies or rebuild an at-rest ragdoll. Any malformed
+    /// rebuilt geometry stays disabled on the second pass (see the topic note).
+    fn register_query_changes(&mut self) {
+        for _ in 0..2 {
+            self.detect();
+            // Only these changes were consumed by this pass. A remedy below may
+            // add bodies/marks; do not clear those before their own registration.
+            self.new_bodies.clear();
+            self.dirty = false;
+            self.dirty_by = 0;
+            if !self.w.quarantine().is_empty() {
+                self.handle_quarantine();
+            }
+            if !self.dirty { return; }
+        }
+        // No recursive or unbounded registration. This would violate the closed
+        // remedy invariant above: retain the pending marks for the next query,
+        // and do not advertise its partially published state as clean.
+        tracing::warn!("physics: quarantine remedies still dirty after two query registration passes; changes remain pending");
     }
 
     /// Scene queries on the current state (updates the broad phase first if needed).
@@ -1770,6 +1817,10 @@ fn probe(shape: &Shape, at: &Iso, k: f32) -> Result<(Pose, SharedShape), Convert
         _ => Err(ConvertError::NotSingleShape),
     }
 }
+
+#[cfg(test)]
+#[path = "world_query_refresh_tests.rs"]
+mod query_refresh_tests;
 
 #[cfg(test)]
 #[path = "world_query_motion_tests.rs"]

@@ -193,6 +193,10 @@ or floor near them. Cause: the shot's impact went to the actor's body only (§4;
   on the world behind <ref>: <s> splatters from <n> rolled hits`) and `decals: blood on the world behind shot
   actors: <s> splatters sent, <p> placed`. Smoke `impact-decals-blood`.
 
+[design] A world decal on a solid receiver below water blends with its receiver before
+the scene colour is copied for refraction. A shot's water entry plays the weapon's water
+impact with decals disabled. A subsequent hit on the bed can leave its own material's mark.
+
 ## 5. Not built, open
 
 - **Angle threshold** ("how far around in degrees a decal renders"): read as the largest

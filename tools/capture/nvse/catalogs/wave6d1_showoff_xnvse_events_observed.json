@@ -1,0 +1,1171 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6d1_showoff_xnvse_events_observed",
+  "description": "Wave 6D-1 strictly read-only console-only clean-room probe catalog confirming matching xNVSE event system, ShowOff pre-activation, and ShowOff batch 2/3/4/5 behaviors against original Fallout: New Vegas 1.4.0.525.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)",
+    "ShowOffNVSE Plugin": "184",
+    "lStewieAl's Tweaks": "1005"
+  },
+  "batches": [
+    {
+      "id": "w6d1_showoff_xnvse_events_observed",
+      "title": "Wave 6D-1 - Confirmed xNVSE & ShowOff Observed Matches",
+      "extender": "xNVSE 6.4.9 + JIP LN 57.30 + ShowOffNVSE 184",
+      "required_plugins": [
+        "jip_nvse.dll",
+        "ShowOffNVSE.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6d1_05_dispatch_event_alt_arity_and_filters",
+          "bucket": "A",
+          "extender": "xNVSE 6.4.9",
+          "required_plugins": [
+            "jip_nvse.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-events.md",
+          "spec_line": 169,
+          "functions_tested": [
+            "DispatchEventAlt",
+            "SetEventHandlerAlt"
+          ],
+          "claim": "Verify DispatchEventAlt return value (0 vs >=1 handler), fewer vs exact vs extra handler params, calling ref 0:: base-form match, case-insensitive string filter, FormList filter, and live-mutated array filter.",
+          "expected": "Fewer params run; verify extra params; 0::rDocBase matches rDoc; string filter is case-insensitive; mutating filter array via ar_Append changes live matching.",
+          "script_lines": [
+            "ref rDoc = GetFormFromMod \"FalloutNV.esm\" \"104C0F\"",
+            "ref rDocBase = GetFormFromMod \"FalloutNV.esm\" \"104C0C\"",
+            "ref cb0 = CompileScript \"nvseprobe_s_w6d1_05_a0.gek\"",
+            "ref cb3 = CompileScript \"nvseprobe_s_w6d1_05_a3.gek\"",
+            "ref cbF = CompileScript \"nvseprobe_s_w6d1_05_flt.gek\"",
+            "int rNone = DispatchEventAlt \"W6D1_AltEv\" 10 \"AbC\"",
+            "Player.AuxVarSetFlt \"*w6d1_05_c0\" 0",
+            "Player.AuxVarSetFlt \"*w6d1_05_c3\" 0",
+            "Player.AuxVarSetFlt \"*w6d1_05_cf\" 0",
+            "SetEventHandlerAlt \"W6D1_AltEv\" cb0",
+            "SetEventHandlerAlt \"W6D1_AltEv\" cb3",
+            "int rHit = rDoc.DispatchEventAlt \"W6D1_AltEv\" 10 \"AbC\"",
+            "int c0 = Player.AuxVarGetFlt \"*w6d1_05_c0\"",
+            "int c3 = Player.AuxVarGetFlt \"*w6d1_05_c3\"",
+            "int s0Doc = ((Player.AuxVarGetRef \"*w6d1_05_self\") == rDoc)",
+            "RemoveEventHandler \"W6D1_AltEv\" cb0",
+            "RemoveEventHandler \"W6D1_AltEv\" cb3",
+            "array_var aDyn = ar_List 10",
+            "SetEventHandlerAlt \"W6D1_AltFlt\" cbF 0::rDocBase 1::aDyn 2::\"abc\"",
+            "rDoc.DispatchEventAlt \"W6D1_AltFlt\" 10 \"AbC\"",
+            "int f1 = Player.AuxVarGetFlt \"*w6d1_05_cf\"",
+            "rDoc.DispatchEventAlt \"W6D1_AltFlt\" 20 \"AbC\"",
+            "int f2 = Player.AuxVarGetFlt \"*w6d1_05_cf\"",
+            "ar_Append aDyn 20",
+            "rDoc.DispatchEventAlt \"W6D1_AltFlt\" 20 \"ABC\"",
+            "int f3 = Player.AuxVarGetFlt \"*w6d1_05_cf\"",
+            "RemoveEventHandler \"W6D1_AltFlt\" cbF",
+            "PrintToConsole \"PROBE|w6d1_05_dispatch_event_alt_arity_and_filters|ret=%g/%g|arity(0=%g,3=%g,selfDoc=%g)|flt=%g,%g,%g\" rNone rHit c0 c3 s0Doc f1 f2 f3"
+          ],
+          "helper_scripts": {
+            "nvseprobe_s_w6d1_05_a0.gek": [
+              "begin Function {}",
+              "Player.AuxVarSetFlt \"*w6d1_05_c0\" ((Player.AuxVarGetFlt \"*w6d1_05_c0\") + 1)",
+              "Player.AuxVarSetRef \"*w6d1_05_self\" (GetSelfAlt)"
+            ],
+            "nvseprobe_s_w6d1_05_a3.gek": [
+              "begin Function { int a, string_var b, int c }",
+              "Player.AuxVarSetFlt \"*w6d1_05_c3\" ((Player.AuxVarGetFlt \"*w6d1_05_c3\") + 1)"
+            ],
+            "nvseprobe_s_w6d1_05_flt.gek": [
+              "begin Function { int a, string_var b }",
+              "Player.AuxVarSetFlt \"*w6d1_05_cf\" ((Player.AuxVarGetFlt \"*w6d1_05_cf\") + 1)"
+            ]
+          }
+        },
+        {
+          "id": "w6d1_06_get_current_event_name_contexts",
+          "bucket": "A",
+          "extender": "xNVSE 6.4.9 + JIP LN 57.30 + ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-events.md",
+          "spec_line": 171,
+          "functions_tested": [
+            "GetCurrentEventName",
+            "SetEventHandler",
+            "SetEventHandlerAlt",
+            "SetOnHealthDamageEventHandler"
+          ],
+          "claim": "Verify GetCurrentEventName outside any handler, inside SetEventHandler, SetEventHandlerAlt, ShowOff:OnAdd, and JIP SetOnHealthDamageEventHandler.",
+          "expected": "Empty string outside; exact event name inside xNVSE/ShowOff handlers; verify inside JIP handler.",
+          "script_lines": [
+            "string_var sOut = GetCurrentEventName",
+            "ref cbStd = CompileScript \"nvseprobe_s_w6d1_06_std.gek\"",
+            "ref cbAlt = CompileScript \"nvseprobe_s_w6d1_06_alt.gek\"",
+            "ref cbAdd = CompileScript \"nvseprobe_s_w6d1_06_add.gek\"",
+            "ref cbJip = CompileScript \"nvseprobe_s_w6d1_06_jip.gek\"",
+            "SetEventHandler \"W6D1_EvStd\" cbStd",
+            "DispatchEvent \"W6D1_EvStd\"",
+            "RemoveEventHandler \"W6D1_EvStd\" cbStd",
+            "SetEventHandlerAlt \"W6D1_EvAlt\" cbAlt",
+            "DispatchEventAlt \"W6D1_EvAlt\"",
+            "RemoveEventHandler \"W6D1_EvAlt\" cbAlt",
+            "SetEventHandlerAlt \"ShowOff:OnAdd\" cbAdd",
+            "ref rCap = GetFormFromMod \"FalloutNV.esm\" \"F\"",
+            "Player.AddItem rCap 1 1",
+            "Player.RemoveItem rCap 1 1",
+            "RemoveEventHandler \"ShowOff:OnAdd\" cbAdd",
+            "SetOnHealthDamageEventHandler cbJip 1 Player",
+            "Player.DamageAV Health 1",
+            "Player.RestoreAV Health 1",
+            "SetOnHealthDamageEventHandler cbJip 0 Player",
+            "string_var sStd = Player.AuxVarGetStr \"*w6d1_06_std\"",
+            "string_var sAlt = Player.AuxVarGetStr \"*w6d1_06_alt\"",
+            "string_var sAdd = Player.AuxVarGetStr \"*w6d1_06_add\"",
+            "string_var sJip = Player.AuxVarGetStr \"*w6d1_06_jip\"",
+            "PrintToConsole \"PROBE|w6d1_06_get_current_event_name_contexts|out=[%z]|std=[%z]|alt=[%z]|add=[%z]|jip=[%z]\" sOut sStd sAlt sAdd sJip"
+          ],
+          "helper_scripts": {
+            "nvseprobe_s_w6d1_06_std.gek": [
+              "begin Function { array_var a }",
+              "Player.AuxVarSetStr \"*w6d1_06_std\" (GetCurrentEventName)"
+            ],
+            "nvseprobe_s_w6d1_06_alt.gek": [
+              "begin Function {}",
+              "Player.AuxVarSetStr \"*w6d1_06_alt\" (GetCurrentEventName)"
+            ],
+            "nvseprobe_s_w6d1_06_add.gek": [
+              "begin Function { ref rI, ref rC }",
+              "Player.AuxVarSetStr \"*w6d1_06_add\" (GetCurrentEventName)"
+            ],
+            "nvseprobe_s_w6d1_06_jip.gek": [
+              "begin Function { float fD, ref rS }",
+              "Player.AuxVarSetStr \"*w6d1_06_jip\" (GetCurrentEventName)"
+            ]
+          }
+        },
+        {
+          "id": "w6d1_09_on_drop_and_xnvse_on_add",
+          "bucket": "A",
+          "extender": "xNVSE 6.4.9 + ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-events.md",
+          "spec_line": 45,
+          "functions_tested": [
+            "OnDrop",
+            "OnAdd",
+            "ShowOff:OnAdd"
+          ],
+          "claim": "Verify xNVSE OnDrop args/GetSelfAlt, xNVSE OnAdd silent on AddItem but firing on world pickup, and ShowOff:OnAdd GetSelfAlt on AddItem (0) vs world pickup (world ref).",
+          "expected": "AddItem fires ShowOff:OnAdd (self=0) only; Drop fires OnDrop (dropper, worldRef); world Activate fires xNVSE OnAdd (worldRef, container) + ShowOff:OnAdd (self=worldRef).",
+          "script_lines": [
+            "ref rCap = GetFormFromMod \"FalloutNV.esm\" \"F\"",
+            "ref cbDrp = CompileScript \"nvseprobe_s_w6d1_09_drp.gek\"",
+            "ref cbAdd = CompileScript \"nvseprobe_s_w6d1_09_add.gek\"",
+            "ref cbSO = CompileScript \"nvseprobe_s_w6d1_09_so.gek\"",
+            "Player.AuxVarSetFlt \"*w6d1_09_drp_n\" 0",
+            "Player.AuxVarSetFlt \"*w6d1_09_add_n\" 0",
+            "Player.AuxVarSetFlt \"*w6d1_09_so_n\" 0",
+            "SetEventHandler \"OnDrop\" cbDrp",
+            "SetEventHandler \"OnAdd\" cbAdd",
+            "SetEventHandlerAlt \"ShowOff:OnAdd\" cbSO",
+            "Player.AddItem rCap 1 1",
+            "int addAfterAI = Player.AuxVarGetFlt \"*w6d1_09_add_n\"",
+            "int soAfterAI = Player.AuxVarGetFlt \"*w6d1_09_so_n\"",
+            "int soSelfAI0 = ((Player.AuxVarGetRef \"*w6d1_09_so_s\") == 0)",
+            "Player.Drop rCap 1",
+            "int drpN = Player.AuxVarGetFlt \"*w6d1_09_drp_n\"",
+            "int drpA1P = ((Player.AuxVarGetRef \"*w6d1_09_drp_a1\") == Player)",
+            "ref rWorld = Player.AuxVarGetRef \"*w6d1_09_drp_a2\"",
+            "int drpA2Ref = IsReference rWorld",
+            "int drpSP = ((Player.AuxVarGetRef \"*w6d1_09_drp_s\") == Player)",
+            "int drpS0 = ((Player.AuxVarGetRef \"*w6d1_09_drp_s\") == 0)",
+            "if rWorld == 0",
+            "  let rWorld := Player.PlaceAtMe rCap 1",
+            "endif",
+            "rWorld.Activate Player 0",
+            "int addAfterPick = Player.AuxVarGetFlt \"*w6d1_09_add_n\"",
+            "int addA1W = ((Player.AuxVarGetRef \"*w6d1_09_add_a1\") == rWorld)",
+            "int addA2P = ((Player.AuxVarGetRef \"*w6d1_09_add_a2\") == Player)",
+            "int soAfterPick = Player.AuxVarGetFlt \"*w6d1_09_so_n\"",
+            "int soSelfPickW = ((Player.AuxVarGetRef \"*w6d1_09_so_s\") == rWorld)",
+            "int soSelfPick0 = ((Player.AuxVarGetRef \"*w6d1_09_so_s\") == 0)",
+            "RemoveEventHandler \"OnDrop\" cbDrp",
+            "RemoveEventHandler \"OnAdd\" cbAdd",
+            "RemoveEventHandler \"ShowOff:OnAdd\" cbSO",
+            "Player.RemoveItem rCap 1 1",
+            "PrintToConsole \"PROBE|w6d1_09_on_drop_and_xnvse_on_add|ai(add=%g,so=%g,soS0=%g)|drp(n=%g,a1P=%g,a2Ref=%g,sP=%g,s0=%g)|pick(add=%g,a1W=%g,a2P=%g,so=%g,soSW=%g,soS0=%g)\" addAfterAI soAfterAI soSelfAI0 drpN drpA1P drpA2Ref drpSP drpS0 addAfterPick addA1W addA2P soAfterPick soSelfPickW soSelfPick0"
+          ],
+          "helper_scripts": {
+            "nvseprobe_s_w6d1_09_drp.gek": [
+              "begin Function { ref r1, ref r2 }",
+              "Player.AuxVarSetFlt \"*w6d1_09_drp_n\" ((Player.AuxVarGetFlt \"*w6d1_09_drp_n\") + 1)",
+              "Player.AuxVarSetRef \"*w6d1_09_drp_s\" (GetSelfAlt)",
+              "Player.AuxVarSetRef \"*w6d1_09_drp_a1\" r1",
+              "Player.AuxVarSetRef \"*w6d1_09_drp_a2\" r2"
+            ],
+            "nvseprobe_s_w6d1_09_add.gek": [
+              "begin Function { ref r1, ref r2 }",
+              "Player.AuxVarSetFlt \"*w6d1_09_add_n\" ((Player.AuxVarGetFlt \"*w6d1_09_add_n\") + 1)",
+              "Player.AuxVarSetRef \"*w6d1_09_add_s\" (GetSelfAlt)",
+              "Player.AuxVarSetRef \"*w6d1_09_add_a1\" r1",
+              "Player.AuxVarSetRef \"*w6d1_09_add_a2\" r2"
+            ],
+            "nvseprobe_s_w6d1_09_so.gek": [
+              "begin Function { ref r1, ref r2 }",
+              "Player.AuxVarSetFlt \"*w6d1_09_so_n\" ((Player.AuxVarGetFlt \"*w6d1_09_so_n\") + 1)",
+              "Player.AuxVarSetRef \"*w6d1_09_so_s\" (GetSelfAlt)"
+            ]
+          }
+        },
+        {
+          "id": "w6d1p2_12_pre_scripted_multi_handler_veto_prio",
+          "bucket": "A",
+          "extender": "ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/preactivation-events.md",
+          "spec_line": 86,
+          "functions_tested": [
+            "ShowOff:OnPreScriptedActivate",
+            "SetEventHandlerAlt"
+          ],
+          "claim": "Verify ShowOff:OnPreScriptedActivate multi-handler priority (20 void -> 15 veto 0 -> 10 dynamic 3::1 vs 3::0 -> 5 SetFunctionValue 1 sticky veto).",
+          "expected": "Order S:V20(1),Z15(1),F0(0),U5(0), dynamic 3::1 skipped, sticky veto keeps caps unchanged.",
+          "script_lines": [
+            "ref rCapB = GetFormFromMod \"FalloutNV.esm\" \"F\"",
+            "ref rRef = Player.PlaceAtMe rCapB 1",
+            "ref cbV = CompileScript \"nvseprobe_s_w6d1p2_12_v20.gek\"",
+            "ref cbZ = CompileScript \"nvseprobe_s_w6d1p2_12_z15.gek\"",
+            "ref cbF1 = CompileScript \"nvseprobe_s_w6d1p2_12_f1.gek\"",
+            "ref cbF0 = CompileScript \"nvseprobe_s_w6d1p2_12_f0.gek\"",
+            "ref cbU = CompileScript \"nvseprobe_s_w6d1p2_12_u5.gek\"",
+            "Player.AuxVarSetStr \"*p2_12_ord\" \"S:\"",
+            "SetEventHandlerAlt \"ShowOff:OnPreScriptedActivate\" cbU 0::rRef \"priority\"::5",
+            "SetEventHandlerAlt \"ShowOff:OnPreScriptedActivate\" cbF1 0::rRef 3::1 \"priority\"::10",
+            "SetEventHandlerAlt \"ShowOff:OnPreScriptedActivate\" cbF0 0::rRef 3::0 \"priority\"::10",
+            "SetEventHandlerAlt \"ShowOff:OnPreScriptedActivate\" cbZ 0::rRef \"priority\"::15",
+            "SetEventHandlerAlt \"ShowOff:OnPreScriptedActivate\" cbV 0::rRef \"priority\"::20",
+            "int c0 = Player.GetItemCount rCapB",
+            "rRef.Activate Player 0",
+            "int c1 = Player.GetItemCount rCapB",
+            "string_var sOut = Player.AuxVarGetStr \"*p2_12_ord\"",
+            "RemoveEventHandler \"ShowOff:OnPreScriptedActivate\" cbV",
+            "RemoveEventHandler \"ShowOff:OnPreScriptedActivate\" cbZ",
+            "RemoveEventHandler \"ShowOff:OnPreScriptedActivate\" cbF1",
+            "RemoveEventHandler \"ShowOff:OnPreScriptedActivate\" cbF0",
+            "RemoveEventHandler \"ShowOff:OnPreScriptedActivate\" cbU",
+            "rRef.Disable 0",
+            "rRef.MarkForDelete",
+            "PrintToConsole \"PROBE|w6d1p2_12_pre_scripted_multi_handler_veto_prio|ord=%z|caps=%g->%g\" sOut c0 c1"
+          ],
+          "helper_scripts": {
+            "nvseprobe_s_w6d1p2_12_v20.gek": [
+              "begin Function { ref rA, int iB, int iOk }",
+              "string_var s = Player.AuxVarGetStr \"*p2_12_ord\"",
+              "Player.AuxVarSetStr \"*p2_12_ord\" (s + (sv_Construct \"V20(%g),\" iOk))"
+            ],
+            "nvseprobe_s_w6d1p2_12_z15.gek": [
+              "begin Function { ref rA, int iB, int iOk }",
+              "string_var s = Player.AuxVarGetStr \"*p2_12_ord\"",
+              "Player.AuxVarSetStr \"*p2_12_ord\" (s + (sv_Construct \"Z15(%g),\" iOk))",
+              "SetFunctionValue 0"
+            ],
+            "nvseprobe_s_w6d1p2_12_f1.gek": [
+              "begin Function { ref rA, int iB, int iOk }",
+              "string_var s = Player.AuxVarGetStr \"*p2_12_ord\"",
+              "Player.AuxVarSetStr \"*p2_12_ord\" (s + (sv_Construct \"F1(%g),\" iOk))"
+            ],
+            "nvseprobe_s_w6d1p2_12_f0.gek": [
+              "begin Function { ref rA, int iB, int iOk }",
+              "string_var s = Player.AuxVarGetStr \"*p2_12_ord\"",
+              "Player.AuxVarSetStr \"*p2_12_ord\" (s + (sv_Construct \"F0(%g),\" iOk))"
+            ],
+            "nvseprobe_s_w6d1p2_12_u5.gek": [
+              "begin Function { ref rA, int iB, int iOk }",
+              "string_var s = Player.AuxVarGetStr \"*p2_12_ord\"",
+              "Player.AuxVarSetStr \"*p2_12_ord\" (s + (sv_Construct \"U5(%g),\" iOk))",
+              "SetFunctionValue 1"
+            ]
+          }
+        },
+        {
+          "id": "w6d1p3_14_cap_destroyed_mutation",
+          "bucket": "A",
+          "extender": "ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/preactivation-events.md",
+          "spec_line": 86,
+          "functions_tested": [
+            "ShowOff:OnPreScriptedActivate",
+            "SetDestroyed"
+          ],
+          "claim": "Verify whether mutating SetDestroyed 1 inside a void ShowOff:OnPreScriptedActivate callback prevents pickup of a placed Bottle Cap.",
+          "expected": "Check cap pickup count before/after SetDestroyed 1 inside void callback.",
+          "script_lines": [
+            "ref rCapB = GetFormFromMod \"FalloutNV.esm\" \"F\"",
+            "Player.RemoveItem rCapB (Player.GetItemCount rCapB) 1",
+            "ref rC1 = Player.PlaceAtMe rCapB 1",
+            "ref rC2 = Player.PlaceAtMe rCapB 1",
+            "ref cb = CompileScript \"nvseprobe_s_w6d1p3_14_cb.gek\"",
+            "SetEventHandlerAlt \"ShowOff:OnPreScriptedActivate\" cb 0::rC1",
+            "rC1.Activate Player 0",
+            "int cAfterMut = Player.GetItemCount rCapB",
+            "RemoveEventHandler \"ShowOff:OnPreScriptedActivate\" cb",
+            "rC2.SetDestroyed 1",
+            "rC2.Activate Player 0",
+            "int cAfterPre = Player.GetItemCount rCapB",
+            "rC1.Disable 0",
+            "rC1.MarkForDelete",
+            "rC2.Disable 0",
+            "rC2.MarkForDelete",
+            "Player.RemoveItem rCapB (Player.GetItemCount rCapB) 1",
+            "PrintToConsole \"PROBE|w6d1p3_14_cap_destroyed_mutation|afterMut=%g,afterPre=%g\" cAfterMut cAfterPre"
+          ],
+          "helper_scripts": {
+            "nvseprobe_s_w6d1p3_14_cb.gek": [
+              "begin Function { ref rA, int iB, int iOk }",
+              "ref rS = GetSelfAlt",
+              "rS.SetDestroyed 1"
+            ]
+          }
+        },
+        {
+          "id": "w6d1_16_showoff_on_pre_activate_vs_scripted",
+          "bucket": "A",
+          "extender": "ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/preactivation-events.md",
+          "spec_line": 8,
+          "functions_tested": [
+            "ShowOff:OnPreActivate",
+            "ShowOff:OnPreScriptedActivate",
+            "GetEventHandlers"
+          ],
+          "claim": "Verify scripted Activate bypasses ShowOff:OnPreActivate while firing ShowOff:OnPreScriptedActivate, and check GetEventHandlers empty-Map vs ar_Null for all ShowOff events.",
+          "expected": "ShowOff:OnPreActivate count=0 on scripted Activate; all ShowOff:* events return empty Map (size 0) in GetEventHandlers.",
+          "script_lines": [
+            "int szPre = ar_Size (GetEventHandlers \"ShowOff:OnPreActivate\")",
+            "int szPreS = ar_Size (GetEventHandlers \"ShowOff:OnPreScriptedActivate\")",
+            "int szInv = ar_Size (GetEventHandlers \"ShowOff:OnPreActivateInventoryItem\")",
+            "int szInvA = ar_Size (GetEventHandlers \"ShowOff:OnPreActivateInventoryItemAlt\")",
+            "int szPov = ar_Size (GetEventHandlers \"ShowOff:OnPOVChange\")",
+            "int szFire = ar_Size (GetEventHandlers \"ShowOff:OnFireWeapon\")",
+            "int szExp = ar_Size (GetEventHandlers \"ShowOff:OnExplosionHit\")",
+            "int szUnh = ar_Size (GetEventHandlers \"ShowOff:OnWeaponUnholster\")",
+            "ref cbPre = CompileScript \"nvseprobe_s_w6d1_16_pre.gek\"",
+            "ref cbScr = CompileScript \"nvseprobe_s_w6d1_16_scr.gek\"",
+            "Player.AuxVarSetFlt \"*w6d1_16_pre\" 0",
+            "Player.AuxVarSetFlt \"*w6d1_16_scr\" 0",
+            "SetEventHandlerAlt \"ShowOff:OnPreActivate\" cbPre",
+            "SetEventHandlerAlt \"ShowOff:OnPreScriptedActivate\" cbScr",
+            "ref rCapB = GetFormFromMod \"FalloutNV.esm\" \"F\"",
+            "ref rRef = Player.PlaceAtMe rCapB 1",
+            "rRef.Activate Player 0",
+            "RemoveEventHandler \"ShowOff:OnPreActivate\" cbPre",
+            "RemoveEventHandler \"ShowOff:OnPreScriptedActivate\" cbScr",
+            "Player.RemoveItem rCapB 1 1",
+            "PrintToConsole \"PROBE|w6d1_16_showoff_on_pre_activate_vs_scripted|bypass(pre=%g,scr=%g)|known=%g,%g,%g,%g,%g,%g,%g,%g\" (Player.AuxVarGetFlt \"*w6d1_16_pre\") (Player.AuxVarGetFlt \"*w6d1_16_scr\") szPre szPreS szInv szInvA szPov szFire szExp szUnh"
+          ],
+          "helper_scripts": {
+            "nvseprobe_s_w6d1_16_pre.gek": [
+              "begin Function { ref rA, int iOk }",
+              "Player.AuxVarSetFlt \"*w6d1_16_pre\" ((Player.AuxVarGetFlt \"*w6d1_16_pre\") + 1)"
+            ],
+            "nvseprobe_s_w6d1_16_scr.gek": [
+              "begin Function { ref rA, int iB, int iOk }",
+              "Player.AuxVarSetFlt \"*w6d1_16_scr\" ((Player.AuxVarGetFlt \"*w6d1_16_scr\") + 1)"
+            ]
+          }
+        },
+        {
+          "id": "w6d1p3_30_unequip_items_trigger",
+          "bucket": "A",
+          "extender": "ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-showoff.md",
+          "spec_line": 151,
+          "functions_tested": [
+            "UnequipItems",
+            "GetEquippedItems",
+            "GetEquippedItemsAsBitMask",
+            "GetEquippedWeaponRef"
+          ],
+          "claim": "Verify UnequipItems triggerOnUnequip=0 vs 1 with OnActorUnequip, plus GetEquippedItems (ammo exclusion, mask 32 vs 1<<20), BitMask, WeaponRef, and ItemRefForItem.",
+          "expected": "Check triggerOnUnequip=0 vs 1; confirm ammo excluded and mask 32 picks weapon.",
+          "script_lines": [
+            "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+            "ref rA10 = GetFormFromMod \"FalloutNV.esm\" \"4241\"",
+            "ref cbUn = CompileScript \"nvseprobe_s_w6d1p3_30_un.gek\"",
+            "Player.AuxVarSetRef \"*p3_30_cb\" cbUn",
+            "Player.AuxVarSetFlt \"*p3_30_un\" 0",
+            "SetEventHandler \"OnActorUnequip\" cbUn \"first\"::Player \"second\"::r10",
+            "Player.AddItem r10 1 1",
+            "Player.AddItem rA10 10 1",
+            "Player.EquipItem r10 0 1"
+          ],
+          "wait_ticks_after": 2,
+          "helper_scripts": {
+            "nvseprobe_s_w6d1p3_30_un.gek": [
+              "begin Function { ref rA, ref rI }",
+              "Player.AuxVarSetFlt \"*p3_30_un\" ((Player.AuxVarGetFlt \"*p3_30_un\") + 1)"
+            ]
+          },
+          "extra_steps": [
+            {
+              "suffix": "check_and_un0",
+              "wait_ticks": 2,
+              "script_lines": [
+                "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+                "ref rA10 = GetFormFromMod \"FalloutNV.esm\" \"4241\"",
+                "array_var aAll = Player.GetEquippedItems",
+                "array_var aM5 = Player.GetEquippedItems 32",
+                "array_var aM20 = Player.GetEquippedItems 1048576",
+                "int hasW = (ar_Find r10 aAll) >= 0",
+                "int hasA = (ar_Find rA10 aAll) >= 0",
+                "int bm = Player.GetEquippedItemsAsBitMask",
+                "ref rWR = Player.GetEquippedWeaponRef",
+                "ref rIR = Player.GetEquippedItemRefForItem r10",
+                "Player.AuxVarSetFlt \"*p3_30_hasw\" hasW",
+                "Player.AuxVarSetFlt \"*p3_30_hasa\" hasA",
+                "Player.AuxVarSetFlt \"*p3_30_m5\" (ar_Size aM5)",
+                "Player.AuxVarSetFlt \"*p3_30_m20\" (ar_Size aM20)",
+                "Player.AuxVarSetFlt \"*p3_30_bm\" bm",
+                "Player.AuxVarSetFlt \"*p3_30_wr\" (IsReference rWR)",
+                "Player.AuxVarSetFlt \"*p3_30_ir\" (IsReference rIR)",
+                "Player.AuxVarSetFlt \"*p3_30_un\" 0",
+                "Player.UnequipItems 32 0 1 0"
+              ]
+            },
+            {
+              "suffix": "reequip",
+              "wait_ticks": 2,
+              "script_lines": [
+                "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+                "Player.AuxVarSetFlt \"*p3_30_un0_eq\" (Player.GetEquipped r10)",
+                "Player.AuxVarSetFlt \"*p3_30_un0_ev\" (Player.AuxVarGetFlt \"*p3_30_un\")",
+                "Player.EquipItem r10 0 1"
+              ]
+            },
+            {
+              "suffix": "un1",
+              "wait_ticks": 2,
+              "script_lines": [
+                "Player.AuxVarSetFlt \"*p3_30_un\" 0",
+                "Player.UnequipItems 32 0 1 1"
+              ]
+            },
+            {
+              "suffix": "read",
+              "wait_ticks": 0,
+              "script_lines": [
+                "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+                "ref rA10 = GetFormFromMod \"FalloutNV.esm\" \"4241\"",
+                "int un1Eq = Player.GetEquipped r10",
+                "int un1Ev = Player.AuxVarGetFlt \"*p3_30_un\"",
+                "RemoveEventHandler \"OnActorUnequip\" (Player.AuxVarGetRef \"*p3_30_cb\")",
+                "Player.RemoveItem r10 1 1",
+                "Player.RemoveItem rA10 10 1",
+                "int hw = Player.AuxVarGetFlt \"*p3_30_hasw\"",
+                "int ha = Player.AuxVarGetFlt \"*p3_30_hasa\"",
+                "int m5 = Player.AuxVarGetFlt \"*p3_30_m5\"",
+                "int m20 = Player.AuxVarGetFlt \"*p3_30_m20\"",
+                "int bm = Player.AuxVarGetFlt \"*p3_30_bm\"",
+                "int wr = Player.AuxVarGetFlt \"*p3_30_wr\"",
+                "int ir = Player.AuxVarGetFlt \"*p3_30_ir\"",
+                "int u0q = Player.AuxVarGetFlt \"*p3_30_un0_eq\"",
+                "int u0v = Player.AuxVarGetFlt \"*p3_30_un0_ev\"",
+                "PrintToConsole \"PROBE|w6d1p3_30_unequip_items_trigger|eq(%g,%g,m5=%g,m20=%g,bm=%g,wr=%g,ir=%g)|un0(%g,%g)|un1(%g,%g)\" hw ha m5 m20 bm wr ir u0q u0v un1Eq un1Ev"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "w6d1_31_showoff_equipped_weight_minweight",
+          "bucket": "A",
+          "extender": "ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-showoff.md",
+          "spec_line": 154,
+          "functions_tested": [
+            "GetBaseEquippedWeight",
+            "GetCalculatedEquippedWeight"
+          ],
+          "claim": "Verify GetBaseEquippedWeight vs GetCalculatedEquippedWeight minWeight comparison (>= vs >) and whether minWeight tests base weight or perk-reduced weight under Pack Rat (2.0 -> 1.0).",
+          "expected": "With Combat Knife (weight 1.0 -> 0.5 under Pack Rat), compare GetCalculatedEquippedWeight at minWeight 0.5, 0.51, 0.75, 1.0.",
+          "script_lines": [
+            "ref rKnife = GetFormFromMod \"FalloutNV.esm\" \"4326\"",
+            "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+            "Player.AddItem rKnife 1 1",
+            "Player.EquipItem rKnife 0 1"
+          ],
+          "wait_ticks_after": 2,
+          "extra_steps": [
+            {
+              "suffix": "measure",
+              "wait_ticks": 0,
+              "script_lines": [
+                "ref rKnife = GetFormFromMod \"FalloutNV.esm\" \"4326\"",
+                "ref rPR = EditorIDToFormID \"PackRat\"",
+                "float wBase = GetWeight rKnife",
+                "float b0 = Player.GetBaseEquippedWeight 0 32",
+                "float bEq = Player.GetBaseEquippedWeight wBase 32",
+                "float bGt = Player.GetBaseEquippedWeight (wBase + 0.01) 32",
+                "float cPre = Player.GetCalculatedEquippedWeight 0 32",
+                "if IsFormValid rPR",
+                "  Player.AddPerk rPR",
+                "endif",
+                "float c0 = Player.GetCalculatedEquippedWeight 0 32",
+                "float cHalf = Player.GetCalculatedEquippedWeight (wBase * 0.5) 32",
+                "float cMid = Player.GetCalculatedEquippedWeight (wBase * 0.75) 32",
+                "float cFull = Player.GetCalculatedEquippedWeight wBase 32",
+                "if IsFormValid rPR",
+                "  Player.RemovePerk rPR",
+                "endif",
+                "Player.UnequipItem rKnife 0 1",
+                "Player.RemoveItem rKnife 1 1",
+                "PrintToConsole \"PROBE|w6d1_31_showoff_equipped_weight_minweight|w=%.2f|base(0=%.2f,eq=%.2f,gt=%.2f)|calc(pre=%.2f,0=%.2f,half=%.2f,mid=%.2f,full=%.2f)\" wBase b0 bEq bGt cPre c0 cHalf cMid cFull"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "w6d1_32_showoff_ally_enemy_temp_precedence",
+          "bucket": "A",
+          "extender": "ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-showoff.md",
+          "spec_line": 170,
+          "functions_tested": [
+            "SetAllyTemp",
+            "SetEnemyTemp",
+            "GetFactionCombatReaction"
+          ],
+          "claim": "Verify SetAllyTemp and SetEnemyTemp override saved SetAlly/SetEnemy reactions until a subsequent SetAlly/SetEnemy overwrites them.",
+          "expected": "SetEnemyTemp overrides SetAlly; subsequent SetAlly overrides SetEnemyTemp; SetAllyTemp overrides SetEnemy.",
+          "script_lines": [
+            "ref rF1 = GetFormFromMod \"FalloutNV.esm\" \"1B2A4\"",
+            "ref rF2 = GetFormFromMod \"FalloutNV.esm\" \"104C6E\"",
+            "int c0 = GetFactionCombatReaction rF1 rF2",
+            "SetAlly rF1 rF2 0 0",
+            "int cAl = GetFactionCombatReaction rF1 rF2",
+            "SetEnemyTemp rF1 rF2 0 0",
+            "int cEnT = GetFactionCombatReaction rF1 rF2",
+            "SetAlly rF1 rF2 1 1",
+            "int cAlOver = GetFactionCombatReaction rF1 rF2",
+            "SetEnemy rF1 rF2 0 0",
+            "int cEn = GetFactionCombatReaction rF1 rF2",
+            "SetAllyTemp rF1 rF2 0 0",
+            "int cAlT = GetFactionCombatReaction rF1 rF2",
+            "SetEnemy rF1 rF2 1 1",
+            "int cRest = GetFactionCombatReaction rF1 rF2",
+            "PrintToConsole \"PROBE|w6d1_32_showoff_ally_enemy_temp_precedence|init=%g,al=%g,enT=%g,alOver=%g,en=%g,alT=%g,rest=%g\" c0 cAl cEnT cAlOver cEn cAlT cRest"
+          ]
+        },
+        {
+          "id": "w6d1p2_33_matrix_and_quat_edges",
+          "bucket": "A",
+          "extender": "ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-showoff.md",
+          "spec_line": 262,
+          "functions_tested": [
+            "Matrix_IsMatrix",
+            "Matrix_ApplyOperationWithMatrix",
+            "Quaternion_GetMatrix",
+            "Matrix3x3_GetQuaternion"
+          ],
+          "claim": "Verify Matrix_IsMatrix empty/ragged, 1-D Matrix_ApplyOperationWithMatrix (+, %, * 3x1), Quaternion_GetMatrix [0,0,0,0], and Matrix3x3_GetQuaternion on identity, 90-deg Z, and 180-deg X/Y.",
+          "expected": "1-D + and % stay 1-D; zero quat gives -1 diagonal; check Matrix3x3_GetQuaternion on 180-deg X/Y vs 90-deg Z.",
+          "script_lines": [
+            "array_var aEmpty = ar_Construct \"array\"",
+            "array_var aRag = ar_List (ar_List 1 2) (ar_List 3)",
+            "int mEmp = Matrix_IsMatrix aEmpty",
+            "int mRag = Matrix_IsMatrix aRag",
+            "array_var a1 = ar_List 1 2 3",
+            "array_var aAdd = Matrix_ApplyOperationWithMatrix a1 \"+\" a1",
+            "array_var aSch = Matrix_ApplyOperationWithMatrix a1 \"%\" a1",
+            "string_var tAdd = typeof (aAdd[0])",
+            "string_var tSch = typeof (aSch[0])",
+            "array_var aCol = ar_List (ar_List 2) (ar_List 3) (ar_List 4)",
+            "array_var aMul = Matrix_ApplyOperationWithMatrix a1 \"*\" aCol",
+            "int mulSz = ar_Size aMul",
+            "string_var tMul = \"none\"",
+            "if mulSz > 0",
+            "  let tMul := typeof (aMul[0])",
+            "endif",
+            "array_var aQ0 = Quaternion_GetMatrix (ar_List 0 0 0 0)",
+            "int q0Sz = ar_Size aQ0",
+            "float q0d = -99",
+            "if q0Sz == 3",
+            "  let q0d := aQ0[0][0]",
+            "endif",
+            "array_var aId = ar_List (ar_List 1 0 0) (ar_List 0 1 0) (ar_List 0 0 1)",
+            "array_var aQid = Matrix3x3_GetQuaternion aId",
+            "array_var aRz90 = ar_List (ar_List 0 -1 0) (ar_List 1 0 0) (ar_List 0 0 1)",
+            "array_var aQrz = Matrix3x3_GetQuaternion aRz90",
+            "array_var aRx180 = ar_List (ar_List 1 0 0) (ar_List 0 -1 0) (ar_List 0 0 -1)",
+            "array_var aQrx = Matrix3x3_GetQuaternion aRx180",
+            "int szId = ar_Size aQid",
+            "int szRz = ar_Size aQrz",
+            "int szRx = ar_Size aQrx",
+            "float rzW = -9",
+            "float rzZ = -9",
+            "if szRz == 4",
+            "  let rzW := aQrz[0]",
+            "  let rzZ := aQrz[3]",
+            "endif",
+            "PrintToConsole \"PROBE|w6d1p2_33_matrix_and_quat_edges|is=%g,%g|1d(add=%z:%g,sch=%z:%g,mul=%g:%z)|q0=%g:%.1f|qid=%g|qrz=%g(%.3f,%.3f)|qrx=%g\" mEmp mRag tAdd (aAdd[2]) tSch (aSch[2]) mulSz tMul q0Sz q0d szId szRz rzW rzZ szRx"
+          ]
+        },
+        {
+          "id": "w6d1_34_showoff_toggle_quest_msg_and_reset_int",
+          "bucket": "A",
+          "extender": "ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-showoff.md",
+          "spec_line": 272,
+          "functions_tested": [
+            "ToggleQuestMessages",
+            "ResetInteriorAlt",
+            "FreezeAmmoRegen",
+            "GetPlayerCanPickpocketEquippedItems",
+            "SetPlayerCanPickpocketEquippedItems",
+            "GetItemHotkeyIconPath",
+            "SetItemHotkeyIconPath"
+          ],
+          "claim": "Verify ToggleQuestMessages read/toggle return values, ResetInteriorAlt on exterior CELL (Sunny's parent cell) vs non-CELL, FreezeAmmoRegen, PickpocketEquippedItems, and ItemHotkeyIconPath override/reset.",
+          "expected": "ToggleQuestMessages reads 1 on / 0 off; ResetInteriorAlt returns 0 on exterior CELL and non-CELL; ItemHotkeyIconPath onlyOverride=1 returns empty without override.",
+          "script_lines": [
+            "int q0 = ToggleQuestMessages",
+            "int qM1 = ToggleQuestMessages -1",
+            "int qOff = ToggleQuestMessages 0",
+            "int qOff2 = ToggleQuestMessages 0",
+            "int qReadOff = ToggleQuestMessages",
+            "int qOn = ToggleQuestMessages 1",
+            "ref rSun = GetFormFromMod \"FalloutNV.esm\" \"104E85\"",
+            "ref rExtCell = rSun.GetParentCell",
+            "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+            "int riExt = ResetInteriorAlt rExtCell",
+            "int riBad = ResetInteriorAlt r10",
+            "int fa0 = FreezeAmmoRegen",
+            "int fa1 = FreezeAmmoRegen 1",
+            "int fa2 = FreezeAmmoRegen 0",
+            "int pp0 = GetPlayerCanPickpocketEquippedItems",
+            "SetPlayerCanPickpocketEquippedItems 1",
+            "int pp1 = GetPlayerCanPickpocketEquippedItems",
+            "SetPlayerCanPickpocketEquippedItems 0",
+            "string_var icDef = GetItemHotkeyIconPath r10 0",
+            "string_var icOnly0 = GetItemHotkeyIconPath r10 1",
+            "SetItemHotkeyIconPath r10 \"interface\\icons\\w6d1.dds\"",
+            "string_var icOver = GetItemHotkeyIconPath r10 1",
+            "SetItemHotkeyIconPath r10 \"\"",
+            "string_var icClr = GetItemHotkeyIconPath r10 1",
+            "PrintToConsole \"PROBE|w6d1_34_showoff_toggle_quest_msg_and_reset_int|tqm=%g,%g,%g,%g,%g,%g|ri=%g,%g|fa=%g,%g,%g|pp=%g,%g|ic(defLen=%g,o0=[%z],ov=[%z],clr=[%z])\" q0 qM1 qOff qOff2 qReadOff qOn riExt riBad fa0 fa1 fa2 pp0 pp1 (sv_Length icDef) icOnly0 icOver icClr"
+          ]
+        },
+        {
+          "id": "w6d1p3_34_ext_cell_and_quat_neg",
+          "bucket": "A",
+          "extender": "ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-showoff.md",
+          "spec_line": 276,
+          "functions_tested": [
+            "ResetInteriorAlt",
+            "Matrix3x3_GetQuaternion"
+          ],
+          "claim": "Verify ResetInteriorAlt on a true exterior CELL (GSMapMarker 0xCDF51 parent cell, isInt==0) and Matrix3x3_GetQuaternion on 90-deg Z and 180-deg X/Y rotations.",
+          "expected": "ResetInteriorAlt returns 0 on true exterior CELL; Matrix3x3_GetQuaternion returns w>=0 unit quaternions.",
+          "script_lines": [
+            "ref rMk = GetFormFromMod \"FalloutNV.esm\" \"CDF51\"",
+            "ref rExtC = rMk.GetParentCell",
+            "int tExt = GetType rExtC",
+            "int isInt = GetCellFlag rExtC 0",
+            "int riExt = ResetInteriorAlt rExtC",
+            "array_var aRz90 = ar_List (ar_List 0 (-1) 0) (ar_List 1 0 0) (ar_List 0 0 1)",
+            "array_var aQrz = Matrix3x3_GetQuaternion aRz90",
+            "array_var aRx180 = ar_List (ar_List 1 0 0) (ar_List 0 (-1) 0) (ar_List 0 0 (-1))",
+            "array_var aQrx = Matrix3x3_GetQuaternion aRx180",
+            "array_var aRy180 = ar_List (ar_List (-1) 0 0) (ar_List 0 1 0) (ar_List 0 0 (-1))",
+            "array_var aQry = Matrix3x3_GetQuaternion aRy180",
+            "PrintToConsole \"PROBE|w6d1p3_34_ext_cell_and_quat_neg|ext(t=%g,isInt=%g,ri=%g)|rz=(%.3f,%.3f,%.3f,%.3f)|rx=(%.2f,%.2f,%.2f,%.2f)|ry=(%.2f,%.2f,%.2f,%.2f)\" tExt isInt riExt (aQrz[0]) (aQrz[1]) (aQrz[2]) (aQrz[3]) (aQrx[0]) (aQrx[1]) (aQrx[2]) (aQrx[3]) (aQry[0]) (aQry[1]) (aQry[2]) (aQry[3])"
+          ]
+        },
+        {
+          "id": "w6d1_36_showoff_calc_ap_cost_and_item_value",
+          "bucket": "A",
+          "extender": "ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-showoff.md",
+          "spec_line": 235,
+          "functions_tested": [
+            "GetCalculatedAPCost",
+            "GetCalculatedItemValue"
+          ],
+          "claim": "Verify GetCalculatedAPCost (whatAttack 0/1/2 on Power Fist, Brass Knuckles, Combat Knife, Baseball Bat, 10mm Pistol, Fists) and GetCalculatedItemValue on placed ref, damaged ref, inv ref, and non-item door.",
+          "expected": "Check unarmed override AP vs Fists, melee whatAttack=1 VATS AP, and GetCalculatedItemValue condition scaling & -1 on non-item.",
+          "script_lines": [
+            "ref rPF = GetFormFromMod \"FalloutNV.esm\" \"4347\"",
+            "ref rKn = GetFormFromMod \"FalloutNV.esm\" \"4324\"",
+            "ref rKf = GetFormFromMod \"FalloutNV.esm\" \"4326\"",
+            "ref rBt = GetFormFromMod \"FalloutNV.esm\" \"421C\"",
+            "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+            "int pf0 = Player.GetCalculatedAPCost 0 rPF",
+            "int pf1 = Player.GetCalculatedAPCost 1 rPF",
+            "int pf2 = Player.GetCalculatedAPCost 2 rPF",
+            "int kn0 = Player.GetCalculatedAPCost 0 rKn",
+            "int kn1 = Player.GetCalculatedAPCost 1 rKn",
+            "int kn2 = Player.GetCalculatedAPCost 2 rKn",
+            "int kf0 = Player.GetCalculatedAPCost 0 rKf",
+            "int kf1 = Player.GetCalculatedAPCost 1 rKf",
+            "int bt0 = Player.GetCalculatedAPCost 0 rBt",
+            "int bt1 = Player.GetCalculatedAPCost 1 rBt",
+            "ref rWRef = Player.PlaceAtMe r10 1",
+            "int vFull = rWRef.GetCalculatedItemValue 0",
+            "rWRef.SetCurrentHealth 50",
+            "int vDmg = rWRef.GetCalculatedItemValue 0",
+            "rWRef.Disable 0",
+            "rWRef.MarkForDelete",
+            "ref rDoor = GetFormFromMod \"FalloutNV.esm\" \"103E61\"",
+            "int vBad = rDoor.GetCalculatedItemValue 0",
+            "PrintToConsole \"PROBE|w6d1_36_showoff_calc_ap_cost_and_item_value|pf=%g/%g/%g|kn=%g/%g/%g|kf=%g/%g|bt=%g/%g|val(full=%g,dmg50=%g,bad=%g)\" pf0 pf1 pf2 kn0 kn1 kn2 kf0 kf1 bt0 bt1 vFull vDmg vBad"
+          ]
+        },
+        {
+          "id": "w6d1_37_showoff_vats_fast_travel_and_switches",
+          "bucket": "A",
+          "extender": "ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-showoff.md",
+          "spec_line": 229,
+          "functions_tested": [
+            "GetVATSTargetable",
+            "GetPCHasScriptedFastTravelOverride",
+            "GetPCCanFastTravel",
+            "GetPCHasSleepWaitOverride",
+            "SetPCHasSleepWaitOverride",
+            "SetForceDrawHitscanProjectiles",
+            "SetProjectileTracerChanceOverride",
+            "SetIsPCAMurderer"
+          ],
+          "claim": "Verify GetVATSTargetable on living/disabled/dead NPC and non-actor door, FastTravel/SleepWait override flags, SetForceDrawHitscanProjectiles, SetProjectileTracerChanceOverride, and SetIsPCAMurderer.",
+          "expected": "Disabled/dead NPC and door return 0 for GetVATSTargetable; EnableFastTravel 0 flips override; switches return prior state.",
+          "script_lines": [
+            "ref rNpcB = GetFormFromMod \"FalloutNV.esm\" \"104C78\"",
+            "SetEssential rNpcB 0",
+            "ref rNpc = Player.PlaceAtMe rNpcB 1 120 0",
+            "ref rDoor = GetFormFromMod \"FalloutNV.esm\" \"103E61\"",
+            "int vLiv = rNpc.GetVATSTargetable",
+            "rNpc.Disable 0",
+            "int vDis = rNpc.GetVATSTargetable",
+            "rNpc.Enable 0",
+            "rNpc.KillActor Player",
+            "int vDed = rNpc.GetVATSTargetable",
+            "rNpc.Disable 0",
+            "rNpc.MarkForDelete",
+            "int vDr = rDoor.GetVATSTargetable",
+            "int ftO0 = GetPCHasScriptedFastTravelOverride",
+            "EnableFastTravel 0",
+            "int ftO1 = GetPCHasScriptedFastTravelOverride",
+            "int ftC0 = GetPCCanFastTravel",
+            "EnableFastTravel 1",
+            "int ftO2 = GetPCHasScriptedFastTravelOverride",
+            "int sw0 = GetPCHasSleepWaitOverride",
+            "SetPCHasSleepWaitOverride 1",
+            "int sw1 = GetPCHasSleepWaitOverride",
+            "SetPCHasSleepWaitOverride 0",
+            "int hs0 = SetForceDrawHitscanProjectiles",
+            "int hs1 = SetForceDrawHitscanProjectiles 1",
+            "int hs2 = SetForceDrawHitscanProjectiles 0",
+            "int tr0 = SetProjectileTracerChanceOverride",
+            "int tr1 = SetProjectileTracerChanceOverride 1",
+            "int tr2 = SetProjectileTracerChanceOverride 0",
+            "int tr3 = SetProjectileTracerChanceOverride -1",
+            "SetIsPCAMurderer 1",
+            "int m1 = IsPCAMurderer",
+            "SetIsPCAMurderer 0",
+            "int m0 = IsPCAMurderer",
+            "PrintToConsole \"PROBE|w6d1_37_showoff_vats_fast_travel_and_switches|vats(liv=%g,dis=%g,ded=%g,dr=%g)|ft(%g,%g,%g,can=%g)|sw(%g,%g)|hs(%g,%g,%g)|tr(%g,%g,%g,%g)|m(%g,%g)\" vLiv vDis vDed vDr ftO0 ftO1 ftO2 ftC0 sw0 sw1 hs0 hs1 hs2 tr0 tr1 tr2 tr3 m1 m0"
+          ]
+        },
+        {
+          "id": "w6d1_38_showoff_recoil_stagger_invis_combat_actors",
+          "bucket": "A",
+          "extender": "ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-showoff.md",
+          "spec_line": 232,
+          "functions_tested": [
+            "ForceRecoilAnim",
+            "ForceHitStaggerReaction",
+            "IsActorInvisibleToPlayer",
+            "HighlightAdditionalReferenceAlt",
+            "GetNumCombatActorsFromActor"
+          ],
+          "claim": "Verify ForceRecoilAnim on 1H melee (Combat Knife anim 1), thrown (Frag Grenade anim 10), dead NPC, and non-actor door; IsActorInvisibleToPlayer & HighlightAdditionalReferenceAlt with Chameleon/Invisibility; GetNumCombatActorsFromActor in live combat.",
+          "expected": "ForceRecoilAnim returns 1 for 1H melee, 0 for thrown/dead/door; IsActorInvisibleToPlayer=1 with Chameleon>0 and HighlightAdditionalReferenceAlt(1) returns 0 vs (0) returns 1.",
+          "script_lines": [
+            "ref rKnife = GetFormFromMod \"FalloutNV.esm\" \"4326\"",
+            "ref rGren = GetFormFromMod \"FalloutNV.esm\" \"4330\"",
+            "ref rDoor = GetFormFromMod \"FalloutNV.esm\" \"103E61\"",
+            "Player.AddItem rKnife 1 1",
+            "Player.EquipItem rKnife 0 1",
+            "Player.AuxVarSetFlt \"*w6d1_38_dr\" (rDoor.ForceRecoilAnim)"
+          ],
+          "wait_ticks_after": 2,
+          "extra_steps": [
+            {
+              "suffix": "knife_to_gren",
+              "wait_ticks": 2,
+              "script_lines": [
+                "ref rKnife = GetFormFromMod \"FalloutNV.esm\" \"4326\"",
+                "ref rGren = GetFormFromMod \"FalloutNV.esm\" \"4330\"",
+                "Player.AuxVarSetFlt \"*w6d1_38_kf\" (Player.ForceRecoilAnim)",
+                "Player.UnequipItem rKnife 0 1",
+                "Player.RemoveItem rKnife 1 1",
+                "Player.AddItem rGren 1 1",
+                "Player.EquipItem rGren 0 1"
+              ]
+            },
+            {
+              "suffix": "npc_combat",
+              "wait_ticks": 2,
+              "script_lines": [
+                "ref rGren = GetFormFromMod \"FalloutNV.esm\" \"4330\"",
+                "Player.AuxVarSetFlt \"*w6d1_38_gr\" (Player.ForceRecoilAnim)",
+                "Player.UnequipItem rGren 0 1",
+                "Player.RemoveItem rGren 1 1",
+                "ref rNpcB = GetFormFromMod \"FalloutNV.esm\" \"104C78\"",
+                "SetEssential rNpcB 0",
+                "ref rNpc = Player.PlaceAtMe rNpcB 1 140 0",
+                "Player.AuxVarSetRef \"*w6d1_38_npc\" rNpc",
+                "int inv0 = rNpc.IsActorInvisibleToPlayer",
+                "rNpc.ForceAV Chameleon 50",
+                "int invCh = rNpc.IsActorInvisibleToPlayer",
+                "int hl1 = rNpc.HighlightAdditionalReferenceAlt 1 0",
+                "int hl0 = rNpc.HighlightAdditionalReferenceAlt 0 0",
+                "rNpc.ForceAV Chameleon 0",
+                "Player.AuxVarSetFlt \"*w6d1_38_inv0\" inv0",
+                "Player.AuxVarSetFlt \"*w6d1_38_invch\" invCh",
+                "Player.AuxVarSetFlt \"*w6d1_38_hl1\" hl1",
+                "Player.AuxVarSetFlt \"*w6d1_38_hl0\" hl0",
+                "rNpc.StartCombat Player"
+              ]
+            },
+            {
+              "suffix": "read",
+              "wait_ticks": 0,
+              "script_lines": [
+                "ref rNpc = Player.AuxVarGetRef \"*w6d1_38_npc\"",
+                "int ca0 = Player.GetNumCombatActorsFromActor 2000 0",
+                "int ca2 = Player.GetNumCombatActorsFromActor 2000 2",
+                "int ca1 = Player.GetNumCombatActorsFromActor 2000 1",
+                "rNpc.StopCombat",
+                "rNpc.KillActor Player",
+                "int recDead = rNpc.ForceRecoilAnim",
+                "rNpc.Disable 0",
+                "rNpc.MarkForDelete",
+                "PrintToConsole \"PROBE|w6d1_38_showoff_recoil_stagger_invis_combat_actors|rec(kf=%g,gr=%g,dr=%g,dead=%g)|inv(%g,%g,hl=%g/%g)|cbt(0=%g,2=%g,1=%g)\" (Player.AuxVarGetFlt \"*w6d1_38_kf\") (Player.AuxVarGetFlt \"*w6d1_38_gr\") (Player.AuxVarGetFlt \"*w6d1_38_dr\") recDead (Player.AuxVarGetFlt \"*w6d1_38_inv0\") (Player.AuxVarGetFlt \"*w6d1_38_invch\") (Player.AuxVarGetFlt \"*w6d1_38_hl1\") (Player.AuxVarGetFlt \"*w6d1_38_hl0\") ca0 ca2 ca1"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "w6d1_39_showoff_levelup_early_exit_and_spell_usage",
+          "bucket": "A",
+          "extender": "ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-showoff.md",
+          "spec_line": 119,
+          "functions_tested": [
+            "ShowSkillMenu",
+            "GetLevelUpMenuCurrentPage",
+            "SetLevelUpMenuCurrentPage",
+            "GetLevelUpMenuPoints",
+            "SetLevelUpMenuCanExitEarly",
+            "SetOwnershipTemp",
+            "GetZoneRespawns"
+          ],
+          "claim": "Verify ShowSkillMenu 3, SetLevelUpMenuCanExitEarly (open 1/0 vs closed), SetLevelUpMenuCurrentPage (same page 0 vs close 2), SetOwnershipTemp on placed ref, and GetZoneRespawns with live SetZoneFlag.",
+          "expected": "SetLevelUpMenuCanExitEarly returns 0 closed, 1 open; SetLevelUpMenuCurrentPage 0 returns 0 when already on page 0; SetOwnershipTemp updates GetOwner.",
+          "script_lines": [
+            "int exCl = SetLevelUpMenuCanExitEarly 1",
+            "int sOpen = ShowSkillMenu 3 1",
+            "int pg0 = GetLevelUpMenuCurrentPage",
+            "int pts = GetLevelUpMenuPoints 0 0",
+            "int ex1 = SetLevelUpMenuCanExitEarly 1",
+            "int ex0 = SetLevelUpMenuCanExitEarly 0",
+            "int pgSame = SetLevelUpMenuCurrentPage 0",
+            "int pgClose = SetLevelUpMenuCurrentPage 2",
+            "int pgAfter = GetLevelUpMenuCurrentPage",
+            "ref rCapB = GetFormFromMod \"FalloutNV.esm\" \"F\"",
+            "ref rRef = Player.PlaceAtMe rCapB 1",
+            "ref rDocB = GetFormFromMod \"FalloutNV.esm\" \"104C0C\"",
+            "int ownSet = rRef.SetOwnershipTemp rDocB",
+            "int ownOk = ((rRef.GetOwner) == rDocB)",
+            "rRef.Disable 0",
+            "rRef.MarkForDelete",
+            "ref rZ = GetFormFromMod \"FalloutNV.esm\" \"E9081\"",
+            "int z0 = GetZoneRespawns rZ",
+            "SetZoneFlag rZ 1 0",
+            "int z1 = GetZoneRespawns rZ",
+            "SetZoneRespawns rZ 0",
+            "int z2 = GetZoneRespawns rZ",
+            "SetZoneFlag rZ 1 1",
+            "PrintToConsole \"PROBE|w6d1_39_showoff_levelup_early_exit_and_spell_usage|lu(exCl=%g,op=%g,pg0=%g,pts=%g,ex1=%g,ex0=%g,same=%g,cl=%g,aft=%g)|own(%g,%g)|zone(%g,%g,%g)\" exCl sOpen pg0 pts ex1 ex0 pgSame pgClose pgAfter ownSet ownOk z0 z1 z2"
+          ]
+        },
+        {
+          "id": "w6d1_40_showoff_spread_anim_1_7_11_and_misc_states",
+          "bucket": "A",
+          "extender": "ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-showoff.md",
+          "spec_line": 286,
+          "functions_tested": [
+            "GetCalculatedActorSpread",
+            "PlayerHasNightVisionActive",
+            "PlayerIsDrinkingPlacedWater",
+            "GetIsActivationPromptShown",
+            "IsPlayerLookingAround",
+            "PlaceAtReticleAlt"
+          ],
+          "claim": "Verify GetCalculatedActorSpread crippled-arm penalties for anim types 0 (Power Fist), 1 (Combat Knife), and 11 (Frag Mine), plus PlayerHasNightVisionActive, PlayerIsDrinkingPlacedWater, GetIsActivationPromptShown, IsPlayerLookingAround, and PlaceAtReticleAlt bounds.",
+          "expected": "Anim 0, 1, and 11 have 0.0 crippled-arm penalty; misc status getters return 0 when idle; PlaceAtReticleAlt clamps distance to [min, max].",
+          "script_lines": [
+            "ref rPF = GetFormFromMod \"FalloutNV.esm\" \"4347\"",
+            "Player.AddItem rPF 1 1",
+            "Player.EquipItem rPF 0 1"
+          ],
+          "wait_ticks_after": 2,
+          "extra_steps": [
+            {
+              "suffix": "t0_crip",
+              "wait_ticks": 1,
+              "script_lines": [
+                "Player.AuxVarSetFlt \"*w6d1_40_t0n\" (Player.GetCalculatedActorSpread)",
+                "Player.DamageAV RightAttackCondition 100",
+                "Player.DamageAV LeftAttackCondition 100"
+              ]
+            },
+            {
+              "suffix": "to_t1",
+              "wait_ticks": 2,
+              "script_lines": [
+                "Player.AuxVarSetFlt \"*w6d1_40_t0b\" (Player.GetCalculatedActorSpread)",
+                "Player.RestoreAV RightAttackCondition 100",
+                "Player.RestoreAV LeftAttackCondition 100",
+                "ref rPF = GetFormFromMod \"FalloutNV.esm\" \"4347\"",
+                "ref rKf = GetFormFromMod \"FalloutNV.esm\" \"4326\"",
+                "Player.UnequipItem rPF 0 1",
+                "Player.RemoveItem rPF 1 1",
+                "Player.AddItem rKf 1 1",
+                "Player.EquipItem rKf 0 1"
+              ]
+            },
+            {
+              "suffix": "t1_crip",
+              "wait_ticks": 1,
+              "script_lines": [
+                "Player.AuxVarSetFlt \"*w6d1_40_t1n\" (Player.GetCalculatedActorSpread)",
+                "Player.DamageAV RightAttackCondition 100",
+                "Player.DamageAV LeftAttackCondition 100"
+              ]
+            },
+            {
+              "suffix": "to_t11",
+              "wait_ticks": 2,
+              "script_lines": [
+                "Player.AuxVarSetFlt \"*w6d1_40_t1b\" (Player.GetCalculatedActorSpread)",
+                "Player.RestoreAV RightAttackCondition 100",
+                "Player.RestoreAV LeftAttackCondition 100",
+                "ref rKf = GetFormFromMod \"FalloutNV.esm\" \"4326\"",
+                "ref rMine = GetFormFromMod \"FalloutNV.esm\" \"433C\"",
+                "Player.UnequipItem rKf 0 1",
+                "Player.RemoveItem rKf 1 1",
+                "Player.AddItem rMine 1 1",
+                "Player.EquipItem rMine 0 1"
+              ]
+            },
+            {
+              "suffix": "t11_crip",
+              "wait_ticks": 1,
+              "script_lines": [
+                "Player.AuxVarSetFlt \"*w6d1_40_t11n\" (Player.GetCalculatedActorSpread)",
+                "Player.DamageAV RightAttackCondition 100",
+                "Player.DamageAV LeftAttackCondition 100"
+              ]
+            },
+            {
+              "suffix": "read",
+              "wait_ticks": 0,
+              "script_lines": [
+                "float t11b = Player.GetCalculatedActorSpread",
+                "Player.RestoreAV RightAttackCondition 100",
+                "Player.RestoreAV LeftAttackCondition 100",
+                "ref rMine = GetFormFromMod \"FalloutNV.esm\" \"433C\"",
+                "Player.UnequipItem rMine 0 1",
+                "Player.RemoveItem rMine 1 1",
+                "int nv = PlayerHasNightVisionActive",
+                "int drk = PlayerIsDrinkingPlacedWater",
+                "int prm = GetIsActivationPromptShown",
+                "int lkg = IsPlayerLookingAround",
+                "ref rCapB = GetFormFromMod \"FalloutNV.esm\" \"F\"",
+                "ref rRet = PlaceAtReticleAlt rCapB 1 50 100",
+                "float dRet = -1",
+                "if rRet",
+                "  let dRet := Player.GetDistance rRet",
+                "  rRet.Disable 0",
+                "  rRet.MarkForDelete",
+                "endif",
+                "PrintToConsole \"PROBE|w6d1_40_showoff_spread_anim_1_7_11_and_misc_states|t0(%.4f,%.4f)|t1(%.4f,%.4f)|t11(%.4f,%.4f)|st(%g,%g,%g,%g)|ret=%.1f\" (Player.AuxVarGetFlt \"*w6d1_40_t0n\") (Player.AuxVarGetFlt \"*w6d1_40_t0b\") (Player.AuxVarGetFlt \"*w6d1_40_t1n\") (Player.AuxVarGetFlt \"*w6d1_40_t1b\") (Player.AuxVarGetFlt \"*w6d1_40_t11n\") t11b nv drk prm lkg dRet"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -608,7 +608,8 @@ None since #3615 (2026-11-23), which registered GetIsObjectType (0x11B1; one con
 use in the masters) by the form type codes of `fnv_script::vm::form_type_code`, with
 seven more base-game functions players' games call: SameFaction, SameSex,
 HasFriendDisposition, GetFatiguePercentage, GetTimeDead, GetLastHitCritical (all
-`Impl`) and GetVampire (`NoOp`).
+`Impl`) and GetVampire (`NoOp`). SameSexAsPC (0x1087, condition index 135) followed in #3787,
+seen in one player's modded game (25 calls).
 
 Condition indices with no page in the catalogue were not counted here until #3614
 (2026-11-23): 123 and 258 reached every player (as `0x107B` and `0x1102` in the player

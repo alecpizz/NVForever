@@ -72,8 +72,8 @@ fn the_masters_dialogue() {
 }
 
 /// [observed: fnvtool dialogue topics/lines over FalloutNV.esm, issue #1895] The eligible
-/// pool and actor references come from the issue's data survey. [hypothesis] Per-listing-quest insertion restores that pool in HELLO
-/// (docs/spec-notes/dialogue.md §1.2); this does not establish original-game behavior.
+/// pool and actor references come from the issue's data survey. Per-listing-quest insertion restores that pool in HELLO
+/// (see docs/spec-notes/dialogue.md §1.2); this does not establish original-game behavior.
 fn powder_ganger_hellos_keep_their_shared_random_pool(l: &Loaded) {
     use fnv_game::game::{Game, GameConfig};
     use fnv_sim::{SimConfig, World};

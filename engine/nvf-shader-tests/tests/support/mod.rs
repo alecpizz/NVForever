@@ -33,27 +33,47 @@ pub struct Compiler {
     /// `pbr_functions` also takes the reflection gate (nvforever lights/reflection_gate.rs)
     /// after the ambient occlusion's hook, as lights.rs makes it in the game.
     reflection_gate: bool,
+    /// `pbr_lighting` and `pbr_functions` take the physical PBR patches (the Physical lighting row).
+    physical_pbr: bool,
 }
 
 impl Compiler {
     /// `remove_invariance` restores the unannotated producer in memory. This runs
     /// through WESL and Naga too; it is not a source-text assertion.
     pub fn new(remove_invariance: &[&str]) -> Self {
-        Self::build(remove_invariance, false, false)
+        Self::build(remove_invariance, false, false, false)
     }
 
     /// The production sources with the ambient occlusion's hook in `pbr_functions` as well,
     /// and nvf_assets' shaders (the NIF material) registered.
     pub fn with_ambient_occlusion_hook() -> Self {
-        Self::build(&[], true, false)
+        Self::build(&[], true, false, false)
     }
 
     /// As [`Self::with_ambient_occlusion_hook`], with the reflection gate after the hook.
     pub fn with_reflection_gate() -> Self {
-        Self::build(&[], true, true)
+        Self::build(&[], true, true, false)
     }
 
-    fn build(remove_invariance: &[&str], ambient_occlusion_hook: bool, reflection_gate: bool) -> Self {
+    /// The production sources with the physical PBR patches (`Fd_OrenNayar`, full
+    /// Cook-Torrance Fresnel, linear diffuse/ambient; the ambient occlusion's hook for them
+    /// comes with #3828's split part 2).
+    pub fn with_physical_pbr() -> Self {
+        Self::build(&[], false, false, true)
+    }
+
+    /// The physical PBR patches with the reflection gate after them (Physical lighting in a
+    /// run with authored reflections, nvforever lights.rs `gating`).
+    pub fn with_physical_pbr_and_gate() -> Self {
+        Self::build(&[], false, true, true)
+    }
+
+    fn build(
+        remove_invariance: &[&str],
+        ambient_occlusion_hook: bool,
+        reflection_gate: bool,
+        physical_pbr: bool,
+    ) -> Self {
         let mut compiler = Self {
             cache: ShaderCache::new((), |_, source, _| {
                 let ShaderCacheSource::Wgsl(wgsl) = source else {
@@ -73,6 +93,7 @@ impl Compiler {
             assets: Assets::default(),
             ambient_occlusion_hook,
             reflection_gate,
+            physical_pbr,
         };
         let engine = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
         let mut packages = vec![
@@ -80,12 +101,19 @@ impl Compiler {
             ("bevy_render", "vendor/bevy_render/src"),
             ("nvforever", "nvforever/src"),
         ];
-        if ambient_occlusion_hook {
+        if ambient_occlusion_hook || physical_pbr {
             packages.push(("nvf_assets", "nvf-assets/src"));
         }
+        let all_assets = packages.iter().any(|(package, _)| *package == "nvf_assets");
         for (package, directory) in packages {
             let root = engine.join(directory);
             compiler.register_directory(package, &root, &root, remove_invariance);
+        }
+        // The shared tonemapper input, which nvforever's sky and clouds import whatever else
+        // of nvf_assets a test leaves out.
+        if !all_assets {
+            let path = engine.join("nvf-assets/src/tone_input.wesl");
+            compiler.register("nvf_assets/tone_input.wesl", fs::read_to_string(path).expect("tone_input.wesl"));
         }
         compiler
     }
@@ -117,15 +145,26 @@ impl Compiler {
                     .replace('\\', "/");
                 let name = format!("{package}/{relative}");
                 let mut source = fs::read_to_string(&path).expect("production WESL source");
+                if self.physical_pbr && name == "bevy_pbr/render/pbr_lighting.wesl" {
+                    source = production_display_shader::lighting_patched(&source, true)
+                        .expect("production physical lighting patch anchors match the selected shader");
+                }
                 if name == "bevy_pbr/render/pbr_functions.wesl" {
-                    // LightsPlugin prepares this actual module before grass uses it.
-                    source = production_display_shader::display_patched(
-                        &production_display_shader::unix_lines(&source),
-                    )
-                    .expect("production display-lighting patch anchors match the selected shader");
-                    if self.ambient_occlusion_hook {
-                        source = production_ambient_occlusion_hook::hook_patched(&source)
-                            .expect("the ambient occlusion hook's anchors match the selected shader");
+                    if self.physical_pbr {
+                        source = production_display_shader::physical_patched(
+                            &production_display_shader::unix_lines(&source),
+                        )
+                        .expect("production physical PBR patch anchors match the selected shader");
+                    } else {
+                        // LightsPlugin prepares this actual module before grass uses it.
+                        source = production_display_shader::display_patched(
+                            &production_display_shader::unix_lines(&source),
+                        )
+                        .expect("production display-lighting patch anchors match the selected shader");
+                        if self.ambient_occlusion_hook {
+                            source = production_ambient_occlusion_hook::hook_patched(&source)
+                                .expect("the ambient occlusion hook's anchors match the selected shader");
+                        }
                     }
                     if self.reflection_gate {
                         source = production_reflection_gate::gate_patched(&source)
@@ -198,7 +237,7 @@ impl Compiler {
             ShaderDefVal::UInt("MAX_RECT_LIGHTS".into(), 1),
         ]);
         self.cache
-            .get(0, self.shaders[name], &definitions)
+            .get(0, *self.shaders.get(name).unwrap_or_else(|| panic!("{name}: no such shader registered")), &definitions)
             .unwrap_or_else(|error| panic!("{name}, {extra:?}: {error}"))
     }
 }

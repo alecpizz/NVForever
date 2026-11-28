@@ -1,0 +1,203 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6_t1_jg_sky_color",
+  "description": "Wave 6 Tier 1 strictly read-only console-only clean-room probes verifying JohnnyGuitar GetCurrentSkyColor normalized 0..1 RGB channels, interior return=1 behavior, and out-of-range variable preservation.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)",
+    "JohnnyGuitarNVSE": "528",
+    "lStewieAl Tweaks": "1005"
+  },
+  "batches": [
+    {
+      "id": "w6_t1_jg_sky_color",
+      "title": "Wave 6 Tier 1 - JohnnyGuitar GetCurrentSkyColor Interior & Exterior Probes",
+      "extender": "xNVSE 6.4.9 + JIP LN 57.30 + JohnnyGuitar 528",
+      "required_plugins": [
+        "jip_nvse.dll",
+        "johnnyguitar.dll"
+      ],
+      "default_wait_ticks": 1,
+      "probes": [
+        {
+          "id": "w6_t1_09_jg_sky_color_interior",
+          "bucket": "A",
+          "extender": "JohnnyGuitarNVSE 528",
+          "required_plugins": [
+            "johnnyguitar.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": false,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-jg9.md",
+          "spec_line": 110,
+          "functions_tested": [
+            "GetCurrentSkyColor"
+          ],
+          "claim": "Verify GetCurrentSkyColor return value and RGB writeback in an interior cell for valid (0, 9) and out-of-range (-1, 10) types.",
+          "expected": "Exact return value and whether pre-seeded RGB vars are zeroed or unchanged in an interior.",
+          "script_lines": [
+            "int inInt = Player.IsInInterior",
+            "float rr = 111",
+            "float gg = 222",
+            "float bb = 333",
+            "int s0 = GetCurrentSkyColor 0 (rr) (gg) (bb)",
+            "float r0 = rr",
+            "float g0 = gg",
+            "float b0 = bb",
+            "rr = 111",
+            "gg = 222",
+            "bb = 333",
+            "int s9 = GetCurrentSkyColor 9 (rr) (gg) (bb)",
+            "float r9 = rr",
+            "float g9 = gg",
+            "float b9 = bb",
+            "rr = 111",
+            "gg = 222",
+            "bb = 333",
+            "int sBad = GetCurrentSkyColor 10 (rr) (gg) (bb)",
+            "PrintToConsole \"PROBE|w6_t1_09_jg_sky_color_interior|int=%g|t0=%g(%.3f,%.3f,%.3f)|t9=%g(%.3f,%.3f,%.3f)|t10=%g(%.1f,%.1f,%.1f)\" inInt s0 r0 g0 b0 s9 r9 g9 b9 sBad rr gg bb"
+          ]
+        },
+        {
+          "id": "w6_t1_15b_raycast_ref_mat_reticle_sky",
+          "bucket": "A",
+          "extender": "JIP LN 57.30",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "johnnyguitar.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": false,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/jip-physics-13.md",
+          "spec_line": 50,
+          "functions_tested": [
+            "GetRayCastRef",
+            "GetRayCastMaterial",
+            "GetReticlePos",
+            "GetReticlePosAlt",
+            "GetReticleRange",
+            "GetTerrainHeight",
+            "GetCurrentSkyColor"
+          ],
+          "claim": "In Goodsprings exterior, verify GetRayCastRef, GetRayCastMaterial, GetReticlePos/Alt/Range (ground hit vs sky miss), GetTerrainHeight (loaded vs unloaded), and GetCurrentSkyColor (exterior).",
+          "expected": "Exact terrain/sky raycast ref & material, reticle hit vs miss, terrain height, and exterior sky color.",
+          "script_lines": [
+            "Player.SetAngle X 89",
+            "Player.SetAngle Z 0"
+          ],
+          "wait_ticks_after": 3,
+          "extra_steps": [
+            {
+              "suffix": "probe_down",
+              "wait_ticks": 3,
+              "script_lines": [
+                "int inInt = Player.IsInInterior",
+                "float px = Player.GetPos X",
+                "float py = Player.GetPos Y",
+                "float pz = Player.GetPos Z",
+                "ref rfDn0 = Player.GetRayCastRef",
+                "ref rfDn19 = Player.GetRayCastRef 19",
+                "int mtDn0 = Player.GetRayCastMaterial",
+                "int mtDn19 = Player.GetRayCastMaterial 19",
+                "float rx = 111",
+                "float ry = 222",
+                "float rz = 333",
+                "int rtDn = GetReticlePosAlt (rx) (ry) (rz)",
+                "float rtDnDZ = rz - pz",
+                "float rrDn = GetReticleRange",
+                "array_var aRp = GetReticlePos",
+                "int rpSz = Ar_Size aRp",
+                "float thHere = GetTerrainHeight px py",
+                "float thFar = GetTerrainHeight 999999 999999",
+                "float sr = 111",
+                "float sg = 222",
+                "float sb = 333",
+                "int sky0 = GetCurrentSkyColor 0 (sr) (sg) (sb)",
+                "float sky0r = sr",
+                "float sky0g = sg",
+                "float sky0b = sb",
+                "sr = 111",
+                "sg = 222",
+                "sb = 333",
+                "int skyBad = GetCurrentSkyColor 10 (sr) (sg) (sb)",
+                "Player.AuxVarSetFlt \"*t1b_inInt\" inInt",
+                "Player.AuxVarSetFlt \"*t1b_rfDn0\" (rfDn0 != 0)",
+                "Player.AuxVarSetFlt \"*t1b_rfDn19\" (rfDn19 != 0)",
+                "Player.AuxVarSetFlt \"*t1b_mtDn0\" mtDn0",
+                "Player.AuxVarSetFlt \"*t1b_mtDn19\" mtDn19",
+                "Player.AuxVarSetFlt \"*t1b_rtDn\" rtDn",
+                "Player.AuxVarSetFlt \"*t1b_rtDnDZ\" rtDnDZ",
+                "Player.AuxVarSetFlt \"*t1b_rrDn\" rrDn",
+                "Player.AuxVarSetFlt \"*t1b_rpSz\" rpSz",
+                "Player.AuxVarSetFlt \"*t1b_thHere\" (thHere - pz)",
+                "Player.AuxVarSetFlt \"*t1b_thFar\" thFar",
+                "Player.AuxVarSetFlt \"*t1b_sky0\" sky0",
+                "Player.AuxVarSetFlt \"*t1b_sky0r\" sky0r",
+                "Player.AuxVarSetFlt \"*t1b_sky0g\" sky0g",
+                "Player.AuxVarSetFlt \"*t1b_sky0b\" sky0b",
+                "Player.AuxVarSetFlt \"*t1b_skyBad\" skyBad",
+                "Player.AuxVarSetFlt \"*t1b_skyBr\" sr",
+                "Player.SetAngle X -89"
+              ]
+            },
+            {
+              "suffix": "probe_up",
+              "wait_ticks": 0,
+              "script_lines": [
+                "ref rfUp = Player.GetRayCastRef",
+                "int mtUp = Player.GetRayCastMaterial",
+                "float rx = 111",
+                "float ry = 222",
+                "float rz = 333",
+                "int rtUp = GetReticlePosAlt (rx) (ry) (rz)",
+                "float rrUp = GetReticleRange",
+                "array_var aRpUp = GetReticlePos",
+                "int rpUpSz = Ar_Size aRpUp",
+                "int inInt = Player.AuxVarGetFlt \"*t1b_inInt\"",
+                "int rfDn0 = Player.AuxVarGetFlt \"*t1b_rfDn0\"",
+                "int rfDn19 = Player.AuxVarGetFlt \"*t1b_rfDn19\"",
+                "int mtDn0 = Player.AuxVarGetFlt \"*t1b_mtDn0\"",
+                "int mtDn19 = Player.AuxVarGetFlt \"*t1b_mtDn19\"",
+                "int rtDn = Player.AuxVarGetFlt \"*t1b_rtDn\"",
+                "float rtDnDZ = Player.AuxVarGetFlt \"*t1b_rtDnDZ\"",
+                "float rrDn = Player.AuxVarGetFlt \"*t1b_rrDn\"",
+                "int rpSz = Player.AuxVarGetFlt \"*t1b_rpSz\"",
+                "float thHere = Player.AuxVarGetFlt \"*t1b_thHere\"",
+                "float thFar = Player.AuxVarGetFlt \"*t1b_thFar\"",
+                "int sky0 = Player.AuxVarGetFlt \"*t1b_sky0\"",
+                "float sky0r = Player.AuxVarGetFlt \"*t1b_sky0r\"",
+                "float sky0g = Player.AuxVarGetFlt \"*t1b_sky0g\"",
+                "float sky0b = Player.AuxVarGetFlt \"*t1b_sky0b\"",
+                "int skyBad = Player.AuxVarGetFlt \"*t1b_skyBad\"",
+                "float skyBr = Player.AuxVarGetFlt \"*t1b_skyBr\"",
+                "string_var s1 = sv_Construct \"int=%g|dnRf=(%g,%g)|dnMt=(%g,%g)|upRf=%g|upMt=%g\" inInt rfDn0 rfDn19 mtDn0 mtDn19 (rfUp != 0) mtUp",
+                "string_var s2 = sv_Construct \"retDn=%g(dz=%.1f,rng=%.1f,ar=%g)|retUp=%g(raw=%.0f,%.0f,%.0f,rng=%.1f,ar=%g)\" rtDn rtDnDZ rrDn rpSz rtUp rx ry rz rrUp rpUpSz",
+                "string_var s3 = sv_Construct \"th=(%.1f,%.1f)|sky0=%g(%.3f,%.3f,%.3f)|sky10=%g(r=%.0f)\" thHere thFar sky0 sky0r sky0g sky0b skyBad skyBr",
+                "PrintToConsole \"PROBE|w6_t1_15b_raycast_ref_mat_reticle_sky|%z|%z|%z\" s1 s2 s3"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

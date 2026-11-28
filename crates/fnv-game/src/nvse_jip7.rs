@@ -1197,8 +1197,8 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
     let ammo = |g: &Game, f: Option<FormId>| f.filter(|&f| g.data.sig(g.unclone(f)) == Some(*b"AMMO"));
     let amef = |g: &Game, f: Option<FormId>| f.filter(|&f| g.data.sig(g.unclone(f)) == Some(*b"AMEF"));
     let zero = XVal::Num(0.0);
-    // The setters of a trait return 0 [hypothesis: as the record setters of batch 5 were
-    // observed to, jip-records-5.md].
+    // The setters of a trait return 0 [observed: jip7 and `b3_jip_ex_04_set_ammo_trait_ret`
+    // (`wave4b_extenders.json`), see docs/spec-notes/jip-records-7.md].
     let v = match name {
         // ---- ammunition
         "setammotraitnumeric" => {
@@ -1210,25 +1210,33 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
             }
             zero
         }
-        // `ammo [form]`: left out, none [documented: SetAmmoProjectile, SetAmmoCasing].
-        // SetAmmoProjectile validates PROJ (following clones) when a form is given [hypothesis].
-        "setammoprojectile" | "setammocasing" => {
+        // `ammo [projectile]`: omitting the 2nd argument clears to 0; passing an explicit
+        // null ref (0) is a no-op leaving the current projectile unchanged [observed:
+        // w4g_11_ammo_clear_and_proj_delete, tools/capture/nvse/catalogs/wave4g_f2_extenders.json].
+        // A non-null 2nd argument must be a PROJ (following TempCloneForm clones) [hypothesis].
+        "setammoprojectile" => {
             if let Some(a) = ammo(g, form(args, 0)) {
-                let target = form(args, 1);
-                if name == "setammoprojectile" {
-                    if let Some(p) = target {
-                        if g.data.sig(g.unclone(p)) != Some(*b"PROJ") {
-                            return Some(Ok(zero));
-                        }
+                if args.len() < 2 {
+                    g.set_field(a, "DAT2", "projectile", XVal::Ref(0));
+                } else if let Some(p) = form(args, 1) {
+                    if g.data.sig(g.unclone(p)) == Some(*b"PROJ") {
+                        g.set_field(a, "DAT2", "projectile", XVal::Ref(p.0));
                     }
                 }
-                let path = if name == "setammoprojectile" { "projectile" } else { "consumed_ammo" };
-                g.set_field(a, "DAT2", path, XVal::Ref(target.map_or(0, |f| f.0)));
             }
             zero
         }
-        // `ammo effect`: 1 when the list changed [documented: `successful`; hypothesis: 0
-        // for an effect already there, or not there to remove].
+        // `ammo [form]`: left out, none [documented: SetAmmoCasing].
+        "setammocasing" => {
+            if let Some(a) = ammo(g, form(args, 0)) {
+                let target = form(args, 1);
+                g.set_field(a, "DAT2", "consumed_ammo", XVal::Ref(target.map_or(0, |f| f.0)));
+            }
+            zero
+        }
+        // `ammo effect`: 1 when the list changed, 0 for an effect already there or not
+        // there to remove [documented: `successful`; observed: `jip_16_ammo_effect_add_remove_ret`
+        // (`wave4a_extenders.json`), see docs/spec-notes/jip-records-7.md §1].
         "addammoeffect" | "removeammoeffect" => {
             let (Some(a), Some(e)) = (ammo(g, form(args, 0)), amef(g, form(args, 1))) else { return Some(Ok(zero)) };
             let mut list = g.ammo_effects(a);
@@ -1494,7 +1502,9 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
             XVal::Num(was)
         }
         // `[maxPercent]` 0-1, the same way [documented: SetDamageToArmorMaxPercent]; 1
-        // (no cap) until a script sets it [hypothesis: the page gives no default].
+        // (no cap) until a script sets it [observed: jip7 armor.maxpercent and
+        // `b3_jip7_01_dmg_to_armor_max_clamp` (`wave4b_extenders.json`), see
+        // docs/spec-notes/jip-records-7.md §5].
         "setdamagetoarmormaxpercent" => {
             let was = g.other.jip7.damage_to_armor_max.unwrap_or(1.0);
             if let Some(m) = args.first().and_then(|v| v.num().ok()).filter(|m| (0.0..=1.0).contains(m)) {

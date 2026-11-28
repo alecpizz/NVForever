@@ -1,0 +1,79 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6d2_nth_effect_neg_and_mgef_check",
+  "description": "Wave 6D-2 read-only probe for SetNthEffectTraitNumeric negative values on added slots and SetNthEffectBase MGEF validation.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "jip_ln_nvse": "57.30 (5730)"
+  },
+  "batches": [
+    {
+      "id": "w6d2_nth_effect_edges",
+      "title": "Wave 6D-2: NthEffect negative traits & MGEF check",
+      "extender": "JIP LN NVSE 57.30",
+      "required_plugins": [
+        "jip_nvse.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6d2_05_nth_effect_traits_and_base_edges",
+          "bucket": "A",
+          "extender": "JIP LN 57.30",
+          "required_plugins": [
+            "jip_nvse.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/jip-last-14.md",
+          "spec_line": 19,
+          "functions_tested": [
+            "GetNthEffectBase",
+            "SetNthEffectBase",
+            "GetNthEffectTraitNumeric",
+            "SetNthEffectTraitNumeric",
+            "AddNewEffect",
+            "RemoveNthEffect"
+          ],
+          "claim": "Verify SetNthEffectTraitNumeric (21 active mod calls; static audit SD-03) negative values on record slot vs AddNewEffect-added slot, trait 3 OOB, and SetNthEffectBase non-MGEF rejection.",
+          "expected": "Check whether negative magnitude wraps as u32 or clamps to 0 or stays negative on record vs added slots, and whether SetNthEffectBase rejects non-MGEF (Caps001).",
+          "script_lines": [
+            "ref rStim = GetFormFromMod \"FalloutNV.esm\" \"15169\"",
+            "ref rDmg = GetFormFromMod \"FalloutNV.esm\" \"33595\"",
+            "ref rCaps = GetFormFromMod \"FalloutNV.esm\" \"F\"",
+            "float m0 = GetNthEffectTraitNumeric rStim 0 0",
+            "float a0 = GetNthEffectTraitNumeric rStim 0 1",
+            "float d0 = GetNthEffectTraitNumeric rStim 0 2",
+            "float t3 = GetNthEffectTraitNumeric rStim 0 3",
+            "SetNthEffectTraitNumeric rStim 0 0 -5",
+            "float mNeg = GetNthEffectTraitNumeric rStim 0 0",
+            "SetNthEffectTraitNumeric rStim 0 0 m0",
+            "int idx = AddNewEffect rStim rDmg 10 25 0 0 1",
+            "SetNthEffectTraitNumeric rStim idx 0 -7",
+            "float addNeg = GetNthEffectTraitNumeric rStim idx 0",
+            "ref b0 = GetNthEffectBase rStim idx",
+            "SetNthEffectBase rStim idx rCaps",
+            "ref bBad = GetNthEffectBase rStim idx",
+            "RemoveNthEffect rStim idx",
+            "PrintToConsole \"PROBE|w6d2_05_nth_effect_traits_and_base_edges|init=%.1f,%.1f,%.1f,t3=%.1f|recNeg=%.1f|addIdx=%g,addNeg=%.1f|b0=%g,bBadEq0=%g,bBadEqC=%g\" m0 a0 d0 t3 mNeg idx addNeg (b0 == rDmg) (bBad == rDmg) (bBad == rCaps)"
+          ]
+        }
+      ]
+    }
+  ]
+}

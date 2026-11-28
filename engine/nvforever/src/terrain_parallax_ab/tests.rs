@@ -39,11 +39,12 @@ fn plain() -> Luma {
 
 #[test]
 fn the_times_modes_and_poses_are_read() {
-    let spec = |at: f32, hold: bool, pose: Pose| Spec { at, hold, pose };
+    let spec = |at: f32, hold: bool, pose: Pose| Spec { at, hold, pose, base: false };
     assert_eq!(parse("20:hold, 8").unwrap(), [spec(8.0, false, Pose::View), spec(20.0, true, Pose::View)], "in time order");
     assert_eq!(parse("8:flip").unwrap(), [spec(8.0, false, Pose::View)]);
     assert_eq!(parse("9:grazing,42:head-on:hold").unwrap(), [spec(9.0, false, Pose::Grazing), spec(42.0, true, Pose::HeadOn)]);
     assert_eq!(parse("5:hold:view").unwrap(), [spec(5.0, true, Pose::View)]);
+    assert_eq!(parse("9:grazing:base").unwrap(), [Spec { base: true, ..spec(9.0, false, Pose::Grazing) }]);
     for bad in ["", "x", "8:sideways", " , ", "8:grazing:up"] {
         assert!(parse(bad).is_err(), "{bad:?}");
     }

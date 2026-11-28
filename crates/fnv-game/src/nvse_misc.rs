@@ -146,15 +146,20 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
         // `actor.SetClass class` (a base-game function scripts reach by name: the
         // catalogue has no opcode for it): the actor's base takes the class, kept in the
         // save (`FormChanges::classes`) [documented: SetClass, "Changes the class of the
-        // actor to the parameter"; hypothesis: on the base form, as SetEssential]. The
-        // autocalc the page names for actors with autocalc on is not run: NVForever reads
-        // the record's stats. A form that is no class changes nothing.
+        // actor to the parameter"; observed: w4f_04_set_class]. The autocalc the page
+        // names for actors with autocalc on is not run: NVForever reads the record's
+        // stats. Non-actor and null receivers continue without mutation; a non-CLAS or
+        // null class argument aborts the script at runtime leaving the actor's class
+        // unchanged [observed: w4g_05_isactordetected_and_setclass_invalid].
         "setclass" => {
-            let (Some(r), Some(class)) = (subject, form(args, 0)) else { return Some(Ok(XVal::Num(0.0))) };
+            let Some(class) = form(args, 0).filter(|&c| g.data.sig(c) == Some(*b"CLAS")) else {
+                return Some(Err("setclass requires a CLAS form".into()));
+            };
+            let Some(r) = subject else { return Some(Ok(XVal::Num(0.0))) };
             let b = crate::functions::base_of(g, r).unwrap_or(r);
             // Class changes belong to actors, including the actor selected for a
             // placed leveled list; a carrier's signature alone does not classify it.
-            if g.data.sig(class) == Some(*b"CLAS") && g.template_source(b, r, |_| false).is_some() {
+            if g.template_source(b, r, |_| false).is_some() {
                 g.forms.classes.insert(b, class);
             }
             XVal::Num(0.0)

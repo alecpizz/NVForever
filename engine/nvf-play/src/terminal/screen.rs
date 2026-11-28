@@ -698,6 +698,27 @@ fn centred(p: &mut ChildSpawnerCommands, face: &Face, s: &str, width: f32, top: 
     text(p, face, s, (width - w) / 2.0, top, color);
 }
 
+/// Draw the existing terminal glass beneath caller-owned content. Coordinates use
+/// the caller's original terminal canvas scope; no terminal session is opened.
+pub fn spawn_background(c: &mut ChildSpawnerCommands, faces: &Faces, canvas: Rect) {
+    // [design] Keep the texture/vignette, accounting for its contribution in the
+    // undercoat. Both layers stay beneath ink; compose_screen mirrors this order.
+    // Both are raised by what the scanlines take away on average (`lifted`).
+    let undercoat = if faces.background.is_some() { screen_color() } else { compose_screen(Color::NONE, None) };
+    c.spawn((at(canvas.min.x, canvas.min.y, canvas.width(), canvas.height()), BackgroundColor(lifted(undercoat, faces.scan_kept))));
+    if let Some(image) = &faces.background {
+        c.spawn((at(canvas.min.x, canvas.min.y, canvas.width(), canvas.height()), ImageNode { color: lifted(BACKGROUND_TINT, faces.scan_kept).with_alpha(BACKGROUND_ALPHA), image_mode: NodeImageMode::Stretch, ..ImageNode::new(image.clone()) }));
+    }
+}
+
+/// Draw the existing terminal scanline treatment above caller-owned content.
+pub fn spawn_scanlines(c: &mut ChildSpawnerCommands, faces: &Faces, canvas: Rect) {
+    // [design] Over everything on the canvas, under the monitor's glare (§2, §7).
+    if let Some(lines) = &faces.scanlines {
+        c.spawn((at(canvas.min.x, canvas.min.y, canvas.width(), canvas.height()), ImageNode { image_mode: NodeImageMode::Stretch, ..ImageNode::new(lines.clone()) }));
+    }
+}
+
 /// Draw the screen into the picture `camera` renders; returns the menu's rows on the
 /// canvas, for the pointer, and an open note's window ([`Drawn`]).
 /// `read`: the entries drawn dimmer (the Grey Read Notes tweak on).
@@ -709,23 +730,13 @@ pub fn spawn(commands: &mut Commands, camera: Entity, faces: &Faces, session: &S
     let mut rows = Drawn::default();
     let root = Node { overflow: Overflow::clip(), ..at(0.0, 0.0, CANVAS.x, CANVAS.y) };
     commands.spawn((ScreenRoot, root, UiTargetCamera(camera), Name::new("Terminal screen"))).with_children(|c| {
-        // [design] Keep the texture/vignette, accounting for its contribution in the
-        // undercoat. Both layers stay beneath ink; compose_screen mirrors this order.
-        // Both are raised by what the scanlines take away on average (`lifted`).
-        let undercoat = if faces.background.is_some() { screen_color() } else { compose_screen(Color::NONE, None) };
-        c.spawn((at(0.0, 0.0, CANVAS.x, CANVAS.y), BackgroundColor(lifted(undercoat, faces.scan_kept))));
-        if let Some(image) = &faces.background {
-            c.spawn((at(0.0, 0.0, CANVAS.x, CANVAS.y), ImageNode { color: lifted(BACKGROUND_TINT, faces.scan_kept).with_alpha(BACKGROUND_ALPHA), image_mode: NodeImageMode::Stretch, ..ImageNode::new(image.clone()) }));
-        }
+        spawn_background(c, faces, Rect::from_corners(Vec2::ZERO, CANVAS));
         match &session.page {
             Page::Hacking(h) => hacking_page(c, &faces.text, &faces.lit, h, cursor_on),
             Page::LockedOut(lines) => lockout_page(c, &faces.text, lines),
             Page::Menu(m) => menu_page(c, &faces.text, &faces.lit, m, game, cursor_on, &mut rows, read),
         }
-        // [design] Over everything on the canvas, under the monitor's glare (§2, §7).
-        if let Some(lines) = &faces.scanlines {
-            c.spawn((at(0.0, 0.0, CANVAS.x, CANVAS.y), ImageNode { image_mode: NodeImageMode::Stretch, ..ImageNode::new(lines.clone()) }));
-        }
+        spawn_scanlines(c, faces, Rect::from_corners(Vec2::ZERO, CANVAS));
     });
     rows
 }

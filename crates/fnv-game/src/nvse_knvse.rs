@@ -78,8 +78,17 @@ fn transition_offset(g: &mut Game, actor: FormId, first: bool, path: &str, time:
     let now = g.anim_clock(actor, false);
     g.knvse.offsets.insert((actor, key(path)), time - now);
     let clock = g.script_sequence_clock(actor, first);
-    if let Some(sequence) = g.anim_paths.sequences.get_mut(&(actor, first, key(path))) {
+    let seq_key = (actor, first, key(path));
+    if let Some(sequence) = g.anim_paths.sequences.get_mut(&seq_key) {
         sequence.clock_offset = time - clock;
+        g.anim_paths.sequence_clocks.insert(
+            seq_key,
+            crate::nvse_anim::SequenceClock {
+                initialized: true,
+                current_time: time,
+                last_clock: clock,
+            },
+        );
     }
 }
 
@@ -192,9 +201,19 @@ impl Game<'_> {
             self.knvse.offsets.insert((a, k), t - now);
         }
         for (actor, first, path, time) in std::mem::take(&mut self.knvse.pending_sequence_times) {
-            let offset = time - self.script_sequence_clock(actor,first);
-            if let Some(sequence) = self.anim_paths.sequences.get_mut(&(actor,first,path.clone())) {
+            let clock = self.script_sequence_clock(actor, first);
+            let offset = time - clock;
+            let seq_key = (actor, first, path.clone());
+            if let Some(sequence) = self.anim_paths.sequences.get_mut(&seq_key) {
                 sequence.clock_offset = offset;
+                self.anim_paths.sequence_clocks.insert(
+                    seq_key,
+                    crate::nvse_anim::SequenceClock {
+                        initialized: true,
+                        current_time: time,
+                        last_clock: clock,
+                    },
+                );
             }
             if let Some(paused) = self.anim_paths.sequence_resume.get_mut(&(actor,first,path)) { paused.0 = time; }
         }
@@ -203,8 +222,8 @@ impl Game<'_> {
 
     /// GetGlobalAnimTime: what SetGlobalAnimTime gave plus the game seconds since, else
     /// the game seconds since the game first knew the actor's animations, that first
-    /// frame counted [hypothesis: the clock starts with the actor's 3D; observed:
-    /// knvse-anim, Ceil of it reads 1 a few frames after placing an actor].
+    /// frame counted [observed: knvse-anim, Ceil of it reads 1 a few frames after
+    /// placing an actor] (clock start: see docs/spec-notes/ext-knvse.md §1).
     fn anim_clock(&mut self, a: FormId, first: bool) -> f64 {
         let now = self.script_sequence_now(a, first);
         // Admit the default origins even when this view has an explicit value:
@@ -316,23 +335,39 @@ fn attributes(g: &mut Game, a: Option<FormId>, path: &str) -> XVal {
     ];
     if let Some(a) = a.filter(|&a| g.plays(a, path)) {
         let first = a == FormId::PLAYER_REF && g.senses.first_person;
-        let (offset, now) = if let Some(sequence) = g.anim_paths.sequences.get(&(a,first,k.clone())) {
-            (sequence.clock_offset, g.script_sequence_time(a,path))
+        let seq_key = (a, first, k.clone());
+        let (offset, last_time, calc_time) = if let Some(sequence) = g.anim_paths.sequences.get(&seq_key) {
+            if g.anim_paths.sequence_clocks.get(&seq_key).is_some_and(|sc| !sc.initialized) {
+                // `calculatedTime` / `GetAnimCurrentTime` reads `-f32::MAX` before the
+                // first tick [observed: `w4e_08_knvse_legacy_anim_time`, #3803];
+                // returning `-f32::MAX` for pre-first-tick `offset` and `lastTime` is
+                // [hypothesis] (`w4e_08` on `main` reads only `t0L` pre-first-tick).
+                let invalid = f64::from(-f32::MAX);
+                (invalid, invalid, invalid)
+            } else {
+                // `offset` stays fixed and `lastTime` stays unscaled (`global + offset`),
+                // while `calculatedTime` / `GetAnimCurrentTime` integrates frequency-scaled
+                // deltas [observed: `w4e_08_knvse_legacy_anim_time`, #3803].
+                let unscaled = g.script_sequence_clock(a, first) + sequence.clock_offset;
+                let scaled = g.script_sequence_time(a, path);
+                (sequence.clock_offset, unscaled, scaled)
+            }
         } else {
-            let global = g.anim_clock(a,false);
-            let offset = g.knvse.offsets.get(&(a,k.clone())).copied().unwrap_or(0.0);
-            (offset,global+offset)
+            let global = g.anim_clock(a, false);
+            let offset = g.knvse.offsets.get(&(a, k.clone())).copied().unwrap_or(0.0);
+            let now = global + offset;
+            (offset, now, now)
         };
         m.extend([
-            ("lastTime", XVal::Num(now)),
-            ("weightedLastTime", XVal::Num(now)),
-            ("lastScaledTime", XVal::Num(now * info.frequency)),
+            ("lastTime", XVal::Num(last_time)),
+            ("weightedLastTime", XVal::Num(last_time)),
+            ("lastScaledTime", XVal::Num(last_time * info.frequency)),
             // kState_Animating [documented: the State list].
             ("state", XVal::Num(1.0)),
             ("offset", XVal::Num(offset)),
             ("startTime", XVal::Num(info.begin)),
             ("endTime", XVal::Num(info.end)),
-            ("calculatedTime", XVal::Num(now)),
+            ("calculatedTime", XVal::Num(calc_time)),
             ("multiplier", XVal::Num(1.0)),
         ]);
     }

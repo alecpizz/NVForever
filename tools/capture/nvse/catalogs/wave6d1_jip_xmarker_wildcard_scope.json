@@ -1,0 +1,382 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6d1_jip_xmarker_wildcard_scope",
+  "description": "Wave 6D-1 strictly read-only console-only clean-room probe catalog verifying JIP LN XMarker (0x3B) is not a wildcard for SetOnHealthDamageEventHandler, SetOnUseAidItemEventHandler, SetOnAnimActionEventHandler, or SetOnCrippledLimbEventHandler.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)",
+    "ShowOffNVSE Plugin": "184",
+    "lStewieAl's Tweaks": "1005"
+  },
+  "batches": [
+    {
+      "id": "w6d1_jip_xmarker_wildcard_scope",
+      "title": "Wave 6D-1 - JIP XMarker Wildcard Scope",
+      "extender": "xNVSE 6.4.9 + JIP LN 57.30",
+      "required_plugins": [
+        "jip_nvse.dll",
+        "ShowOffNVSE.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6d1_21_jip_health_damage_filters_dups_rem",
+          "bucket": "A",
+          "extender": "JIP LN 57.30",
+          "required_plugins": [
+            "jip_nvse.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/jip-events.md",
+          "spec_line": 52,
+          "functions_tested": [
+            "SetOnHealthDamageEventHandler"
+          ],
+          "claim": "Verify JIP SetOnHealthDamageEventHandler filters (Player, FormList, XMarker, empty FLST), duplicate registration of same compiled UDF, and removal with exact vs different filter.",
+          "expected": "Confirm duplicate registration count and filter matching across Player, FormList, XMarker, empty FLST.",
+          "script_lines": [
+            "ref rXm = GetFormFromMod \"FalloutNV.esm\" \"3B\"",
+            "ref rFlBase = GetFormFromMod \"FalloutNV.esm\" \"645D5\"",
+            "ref rFlEmp = TempCloneForm rFlBase",
+            "ListClear rFlEmp",
+            "ref rFlP = TempCloneForm rFlBase",
+            "ListClear rFlP",
+            "ListAddForm rFlP Player",
+            "ref cbDup = CompileScript \"nvseprobe_s_w6d1_21_dup.gek\"",
+            "ref cbFl = CompileScript \"nvseprobe_s_w6d1_21_fl.gek\"",
+            "ref cbXm = CompileScript \"nvseprobe_s_w6d1_21_xm.gek\"",
+            "ref cbEm = CompileScript \"nvseprobe_s_w6d1_21_em.gek\"",
+            "Player.AuxVarSetFlt \"*w6d1_21_dup\" 0",
+            "Player.AuxVarSetFlt \"*w6d1_21_fl\" 0",
+            "Player.AuxVarSetFlt \"*w6d1_21_xm\" 0",
+            "Player.AuxVarSetFlt \"*w6d1_21_em\" 0",
+            "SetOnHealthDamageEventHandler cbDup 1 Player",
+            "SetOnHealthDamageEventHandler cbDup 1 Player",
+            "SetOnHealthDamageEventHandler cbFl 1 rFlP",
+            "SetOnHealthDamageEventHandler cbXm 1 rXm",
+            "SetOnHealthDamageEventHandler cbEm 1 rFlEmp",
+            "Player.DamageAV Health 5",
+            "int nDup = Player.AuxVarGetFlt \"*w6d1_21_dup\"",
+            "int nFl = Player.AuxVarGetFlt \"*w6d1_21_fl\"",
+            "int nXm = Player.AuxVarGetFlt \"*w6d1_21_xm\"",
+            "int nEm = Player.AuxVarGetFlt \"*w6d1_21_em\"",
+            "float fAmt = Player.AuxVarGetFlt \"*w6d1_21_amt\"",
+            "SetOnHealthDamageEventHandler cbDup 0 Player",
+            "SetOnHealthDamageEventHandler cbFl 0 rFlP",
+            "SetOnHealthDamageEventHandler cbXm 0 rXm",
+            "SetOnHealthDamageEventHandler cbEm 0 rFlEmp",
+            "Player.RestoreAV Health 20",
+            "PrintToConsole \"PROBE|w6d1_21_jip_health_damage_filters_dups_rem|dup=%g,fl=%g,xm=%g,emp=%g,amt=%.1f\" nDup nFl nXm nEm fAmt"
+          ],
+          "helper_scripts": {
+            "nvseprobe_s_w6d1_21_dup.gek": [
+              "begin Function { float fD, ref rS }",
+              "Player.AuxVarSetFlt \"*w6d1_21_dup\" ((Player.AuxVarGetFlt \"*w6d1_21_dup\") + 1)",
+              "Player.AuxVarSetFlt \"*w6d1_21_amt\" fD"
+            ],
+            "nvseprobe_s_w6d1_21_fl.gek": [
+              "begin Function { float fD, ref rS }",
+              "Player.AuxVarSetFlt \"*w6d1_21_fl\" ((Player.AuxVarGetFlt \"*w6d1_21_fl\") + 1)"
+            ],
+            "nvseprobe_s_w6d1_21_xm.gek": [
+              "begin Function { float fD, ref rS }",
+              "Player.AuxVarSetFlt \"*w6d1_21_xm\" ((Player.AuxVarGetFlt \"*w6d1_21_xm\") + 1)"
+            ],
+            "nvseprobe_s_w6d1_21_em.gek": [
+              "begin Function { float fD, ref rS }",
+              "Player.AuxVarSetFlt \"*w6d1_21_em\" ((Player.AuxVarGetFlt \"*w6d1_21_em\") + 1)"
+            ]
+          }
+        },
+        {
+          "id": "w6d1_22_jip_use_aid_item_filters",
+          "bucket": "A",
+          "extender": "JIP LN 57.30",
+          "required_plugins": [
+            "jip_nvse.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/jip-events.md",
+          "spec_line": 61,
+          "functions_tested": [
+            "SetOnUseAidItemEventHandler"
+          ],
+          "claim": "Verify JIP SetOnUseAidItemEventHandler exact base form, FormList, XMarker, and empty FormList filters plus GetSelfAlt and arg1.",
+          "expected": "Matches base form, FormList, XMarker, empty FLST; GetSelfAlt == Player and arg1 == Stimpak.",
+          "script_lines": [
+            "ref rStim = GetFormFromMod \"FalloutNV.esm\" \"15169\"",
+            "ref rXm = GetFormFromMod \"FalloutNV.esm\" \"3B\"",
+            "ref rFlBase = GetFormFromMod \"FalloutNV.esm\" \"645D5\"",
+            "ref rFlS = TempCloneForm rFlBase",
+            "ListClear rFlS",
+            "ListAddForm rFlS rStim",
+            "ref rFlE = TempCloneForm rFlBase",
+            "ListClear rFlE",
+            "ref cbB = CompileScript \"nvseprobe_s_w6d1_22_b.gek\"",
+            "ref cbF = CompileScript \"nvseprobe_s_w6d1_22_f.gek\"",
+            "ref cbX = CompileScript \"nvseprobe_s_w6d1_22_x.gek\"",
+            "ref cbE = CompileScript \"nvseprobe_s_w6d1_22_e.gek\"",
+            "Player.AuxVarSetFlt \"*w6d1_22_b\" 0",
+            "Player.AuxVarSetFlt \"*w6d1_22_f\" 0",
+            "Player.AuxVarSetFlt \"*w6d1_22_x\" 0",
+            "Player.AuxVarSetFlt \"*w6d1_22_e\" 0",
+            "SetOnUseAidItemEventHandler cbB 1 rStim",
+            "SetOnUseAidItemEventHandler cbF 1 rFlS",
+            "SetOnUseAidItemEventHandler cbX 1 rXm",
+            "SetOnUseAidItemEventHandler cbE 1 rFlE",
+            "Player.AddItem rStim 1 1",
+            "Player.EquipItem rStim 0 1",
+            "int nb = Player.AuxVarGetFlt \"*w6d1_22_b\"",
+            "int nf = Player.AuxVarGetFlt \"*w6d1_22_f\"",
+            "int nx = Player.AuxVarGetFlt \"*w6d1_22_x\"",
+            "int ne = Player.AuxVarGetFlt \"*w6d1_22_e\"",
+            "int sP = ((Player.AuxVarGetRef \"*w6d1_22_s\") == Player)",
+            "int a1S = ((Player.AuxVarGetRef \"*w6d1_22_a1\") == rStim)",
+            "SetOnUseAidItemEventHandler cbB 0 rStim",
+            "SetOnUseAidItemEventHandler cbF 0 rFlS",
+            "SetOnUseAidItemEventHandler cbX 0 rXm",
+            "SetOnUseAidItemEventHandler cbE 0 rFlE",
+            "PrintToConsole \"PROBE|w6d1_22_jip_use_aid_item_filters|b=%g,fl=%g,xm=%g,emp=%g|sP=%g,a1S=%g\" nb nf nx ne sP a1S"
+          ],
+          "helper_scripts": {
+            "nvseprobe_s_w6d1_22_b.gek": [
+              "begin Function { ref rAid }",
+              "Player.AuxVarSetFlt \"*w6d1_22_b\" ((Player.AuxVarGetFlt \"*w6d1_22_b\") + 1)",
+              "Player.AuxVarSetRef \"*w6d1_22_s\" (GetSelfAlt)",
+              "Player.AuxVarSetRef \"*w6d1_22_a1\" rAid"
+            ],
+            "nvseprobe_s_w6d1_22_f.gek": [
+              "begin Function { ref rAid }",
+              "Player.AuxVarSetFlt \"*w6d1_22_f\" ((Player.AuxVarGetFlt \"*w6d1_22_f\") + 1)"
+            ],
+            "nvseprobe_s_w6d1_22_x.gek": [
+              "begin Function { ref rAid }",
+              "Player.AuxVarSetFlt \"*w6d1_22_x\" ((Player.AuxVarGetFlt \"*w6d1_22_x\") + 1)"
+            ],
+            "nvseprobe_s_w6d1_22_e.gek": [
+              "begin Function { ref rAid }",
+              "Player.AuxVarSetFlt \"*w6d1_22_e\" ((Player.AuxVarGetFlt \"*w6d1_22_e\") + 1)"
+            ]
+          }
+        },
+        {
+          "id": "w6d1_24_jip_anim_action_and_play_group",
+          "bucket": "A",
+          "extender": "JIP LN 57.30 + ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/jip-events.md",
+          "spec_line": 59,
+          "functions_tested": [
+            "SetOnAnimActionEventHandler",
+            "SetOnPlayGroupEventHandler",
+            "ForceWeaponJamAnim"
+          ],
+          "claim": "Verify SetOnAnimActionEventHandler exact action 0 (Equip), action 9 (Jam), empty FormList & XMarker filters, and SetOnPlayGroupEventHandler.",
+          "expected": "Action 0 matches Equip (not Jam); action 9 matches ForceWeaponJamAnim; empty FormList and XMarker match Player.",
+          "script_lines": [
+            "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+            "ref rA10 = GetFormFromMod \"FalloutNV.esm\" \"4241\"",
+            "ref rXm = GetFormFromMod \"FalloutNV.esm\" \"3B\"",
+            "ref rFlBase = GetFormFromMod \"FalloutNV.esm\" \"645D5\"",
+            "ref rFlE = TempCloneForm rFlBase",
+            "ListClear rFlE",
+            "Player.AuxVarSetRef \"*w6d1_24_fle\" rFlE",
+            "ref cbA0 = CompileScript \"nvseprobe_s_w6d1_24_a0.gek\"",
+            "ref cbA9 = CompileScript \"nvseprobe_s_w6d1_24_a9.gek\"",
+            "ref cbAE = CompileScript \"nvseprobe_s_w6d1_24_ae.gek\"",
+            "ref cbAX = CompileScript \"nvseprobe_s_w6d1_24_ax.gek\"",
+            "ref cbPG = CompileScript \"nvseprobe_s_w6d1_24_pg.gek\"",
+            "Player.AuxVarSetRef \"*w6d1_24_cba0\" cbA0",
+            "Player.AuxVarSetRef \"*w6d1_24_cba9\" cbA9",
+            "Player.AuxVarSetRef \"*w6d1_24_cbae\" cbAE",
+            "Player.AuxVarSetRef \"*w6d1_24_cbax\" cbAX",
+            "Player.AuxVarSetRef \"*w6d1_24_cbpg\" cbPG",
+            "Player.AuxVarSetFlt \"*w6d1_24_a0\" 0",
+            "Player.AuxVarSetFlt \"*w6d1_24_a9\" 0",
+            "Player.AuxVarSetFlt \"*w6d1_24_ae\" 0",
+            "Player.AuxVarSetFlt \"*w6d1_24_ax\" 0",
+            "Player.AuxVarSetFlt \"*w6d1_24_pg\" 0",
+            "SetOnAnimActionEventHandler cbA0 1 Player 0",
+            "SetOnAnimActionEventHandler cbA9 1 Player 9",
+            "SetOnAnimActionEventHandler cbAE 1 rFlE 0",
+            "SetOnAnimActionEventHandler cbAX 1 rXm 9",
+            "SetOnPlayGroupEventHandler cbPG 1 Player \"Equip\"",
+            "Player.AddItem r10 1 1",
+            "Player.AddItem rA10 10 1",
+            "Player.EquipItem r10 0 1",
+            "Player.SetWeaponOut 0"
+          ],
+          "wait_ticks_after": 2,
+          "helper_scripts": {
+            "nvseprobe_s_w6d1_24_a0.gek": [
+              "begin Function { int iAct }",
+              "Player.AuxVarSetFlt \"*w6d1_24_a0\" ((Player.AuxVarGetFlt \"*w6d1_24_a0\") + 1)"
+            ],
+            "nvseprobe_s_w6d1_24_a9.gek": [
+              "begin Function { int iAct }",
+              "Player.AuxVarSetFlt \"*w6d1_24_a9\" ((Player.AuxVarGetFlt \"*w6d1_24_a9\") + 1)"
+            ],
+            "nvseprobe_s_w6d1_24_ae.gek": [
+              "begin Function { int iAct }",
+              "Player.AuxVarSetFlt \"*w6d1_24_ae\" ((Player.AuxVarGetFlt \"*w6d1_24_ae\") + 1)"
+            ],
+            "nvseprobe_s_w6d1_24_ax.gek": [
+              "begin Function { int iAct }",
+              "Player.AuxVarSetFlt \"*w6d1_24_ax\" ((Player.AuxVarGetFlt \"*w6d1_24_ax\") + 1)"
+            ],
+            "nvseprobe_s_w6d1_24_pg.gek": [
+              "begin Function { int iGrp }",
+              "Player.AuxVarSetFlt \"*w6d1_24_pg\" ((Player.AuxVarGetFlt \"*w6d1_24_pg\") + 1)",
+              "Player.AuxVarSetFlt \"*w6d1_24_pgv\" iGrp"
+            ]
+          },
+          "extra_steps": [
+            {
+              "suffix": "draw",
+              "wait_ticks": 3,
+              "script_lines": [
+                "Player.SetWeaponOut 1"
+              ]
+            },
+            {
+              "suffix": "jam",
+              "wait_ticks": 2,
+              "script_lines": [
+                "Player.AuxVarSetFlt \"*w6d1_24_a0_d\" (Player.AuxVarGetFlt \"*w6d1_24_a0\")",
+                "Player.AuxVarSetFlt \"*w6d1_24_ae_d\" (Player.AuxVarGetFlt \"*w6d1_24_ae\")",
+                "Player.AuxVarSetFlt \"*w6d1_24_a9_d\" (Player.AuxVarGetFlt \"*w6d1_24_a9\")",
+                "Player.ForceWeaponJamAnim"
+              ]
+            },
+            {
+              "suffix": "read",
+              "wait_ticks": 0,
+              "script_lines": [
+                "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+                "ref rA10 = GetFormFromMod \"FalloutNV.esm\" \"4241\"",
+                "ref rXm = GetFormFromMod \"FalloutNV.esm\" \"3B\"",
+                "ref rFlE = Player.AuxVarGetRef \"*w6d1_24_fle\"",
+                "SetOnAnimActionEventHandler (Player.AuxVarGetRef \"*w6d1_24_cba0\") 0 Player 0",
+                "SetOnAnimActionEventHandler (Player.AuxVarGetRef \"*w6d1_24_cba9\") 0 Player 9",
+                "SetOnAnimActionEventHandler (Player.AuxVarGetRef \"*w6d1_24_cbae\") 0 rFlE 0",
+                "SetOnAnimActionEventHandler (Player.AuxVarGetRef \"*w6d1_24_cbax\") 0 rXm 9",
+                "SetOnPlayGroupEventHandler (Player.AuxVarGetRef \"*w6d1_24_cbpg\") 0 Player \"Equip\"",
+                "Player.SetWeaponOut 0",
+                "Player.UnequipItem r10 0 1",
+                "Player.RemoveItem r10 1 1",
+                "Player.RemoveItem rA10 10 1",
+                "int a0d = Player.AuxVarGetFlt \"*w6d1_24_a0_d\"",
+                "int aed = Player.AuxVarGetFlt \"*w6d1_24_ae_d\"",
+                "int a9d = Player.AuxVarGetFlt \"*w6d1_24_a9_d\"",
+                "int a0 = Player.AuxVarGetFlt \"*w6d1_24_a0\"",
+                "int a9 = Player.AuxVarGetFlt \"*w6d1_24_a9\"",
+                "int ax = Player.AuxVarGetFlt \"*w6d1_24_ax\"",
+                "int pg = Player.AuxVarGetFlt \"*w6d1_24_pg\"",
+                "int pgv = Player.AuxVarGetFlt \"*w6d1_24_pgv\"",
+                "PrintToConsole \"PROBE|w6d1_24_jip_anim_action_and_play_group|draw(%g,%g,%g)|jam(%g,%g,%g)|pg=%g(v=%g)\" a0d aed a9d a0 a9 ax pg pgv"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "w6d1_25_jip_crippled_limb_and_note_added",
+          "bucket": "A",
+          "extender": "JIP LN 57.30",
+          "required_plugins": [
+            "jip_nvse.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/jip-events.md",
+          "spec_line": 54,
+          "functions_tested": [
+            "SetOnCrippledLimbEventHandler",
+            "SetOnNoteAddedEventHandler"
+          ],
+          "claim": "Verify SetOnCrippledLimbEventHandler (Player, XMarker, arg1=2, GetSelfAlt) and SetOnNoteAddedEventHandler (GetSelfAlt, arg1=note).",
+          "expected": "CrippledLimb passes GetSelfAlt=Player, arg1=2; NoteAdded passes GetSelfAlt=0, arg1=note.",
+          "script_lines": [
+            "ref rXm = GetFormFromMod \"FalloutNV.esm\" \"3B\"",
+            "ref rTerm = GetFormFromMod \"FalloutNV.esm\" \"13253C\"",
+            "ref rNote = GetPasswordNote rTerm",
+            "ref cbCL = CompileScript \"nvseprobe_s_w6d1_25_cl.gek\"",
+            "ref cbCX = CompileScript \"nvseprobe_s_w6d1_25_cx.gek\"",
+            "ref cbNA = CompileScript \"nvseprobe_s_w6d1_25_na.gek\"",
+            "Player.AuxVarSetFlt \"*w6d1_25_cl\" 0",
+            "Player.AuxVarSetFlt \"*w6d1_25_cx\" 0",
+            "Player.AuxVarSetFlt \"*w6d1_25_na\" 0",
+            "SetOnCrippledLimbEventHandler cbCL 1 Player",
+            "SetOnCrippledLimbEventHandler cbCX 1 rXm",
+            "Player.DamageAV LeftAttackCondition 200",
+            "int clN = Player.AuxVarGetFlt \"*w6d1_25_cl\"",
+            "int cxN = Player.AuxVarGetFlt \"*w6d1_25_cx\"",
+            "int clLimb = Player.AuxVarGetFlt \"*w6d1_25_limb\"",
+            "int clSP = ((Player.AuxVarGetRef \"*w6d1_25_cls\") == Player)",
+            "Player.RestoreAV LeftAttackCondition 200",
+            "SetOnCrippledLimbEventHandler cbCL 0 Player",
+            "SetOnCrippledLimbEventHandler cbCX 0 rXm",
+            "SetOnNoteAddedEventHandler cbNA 1",
+            "if IsFormValid rNote",
+            "  AddNote rNote",
+            "endif",
+            "int naN = Player.AuxVarGetFlt \"*w6d1_25_na\"",
+            "int naS0 = ((Player.AuxVarGetRef \"*w6d1_25_nas\") == 0)",
+            "int naSP = ((Player.AuxVarGetRef \"*w6d1_25_nas\") == Player)",
+            "int naOk = ((Player.AuxVarGetRef \"*w6d1_25_nan\") == rNote)",
+            "SetOnNoteAddedEventHandler cbNA 0",
+            "PrintToConsole \"PROBE|w6d1_25_jip_crippled_limb_and_note_added|crip(n=%g,xm=%g,limb=%g,sP=%g)|note(n=%g,s0=%g,sP=%g,ok=%g)\" clN cxN clLimb clSP naN naS0 naSP naOk"
+          ],
+          "helper_scripts": {
+            "nvseprobe_s_w6d1_25_cl.gek": [
+              "begin Function { int iLimb }",
+              "Player.AuxVarSetFlt \"*w6d1_25_cl\" ((Player.AuxVarGetFlt \"*w6d1_25_cl\") + 1)",
+              "Player.AuxVarSetFlt \"*w6d1_25_limb\" iLimb",
+              "Player.AuxVarSetRef \"*w6d1_25_cls\" (GetSelfAlt)"
+            ],
+            "nvseprobe_s_w6d1_25_cx.gek": [
+              "begin Function { int iLimb }",
+              "Player.AuxVarSetFlt \"*w6d1_25_cx\" ((Player.AuxVarGetFlt \"*w6d1_25_cx\") + 1)"
+            ],
+            "nvseprobe_s_w6d1_25_na.gek": [
+              "begin Function { ref rNt }",
+              "Player.AuxVarSetFlt \"*w6d1_25_na\" ((Player.AuxVarGetFlt \"*w6d1_25_na\") + 1)",
+              "Player.AuxVarSetRef \"*w6d1_25_nas\" (GetSelfAlt)",
+              "Player.AuxVarSetRef \"*w6d1_25_nan\" rNt"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

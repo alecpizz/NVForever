@@ -1,0 +1,80 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6d2_set_quest_flag_5_clear",
+  "description": "Wave 6D-2 read-only probe for GetQuestFlag / SetQuestFlag flag 5 clear and bounds.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "jip_ln_nvse": "57.30 (5730)"
+  },
+  "batches": [
+    {
+      "id": "w6d2_quest_flag_5",
+      "title": "Wave 6D-2: GetQuestFlag / SetQuestFlag flag 5 clear",
+      "extender": "JIP LN NVSE 57.30",
+      "required_plugins": [
+        "jip_nvse.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6d2_26_quest_flag_5_clear_and_all_bits",
+          "bucket": "A",
+          "extender": "JIP LN 57.30",
+          "required_plugins": [
+            "jip_nvse.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/jip-traits-4.md",
+          "spec_line": 114,
+          "functions_tested": [
+            "GetQuestFlag",
+            "SetQuestFlag"
+          ],
+          "claim": "Verify CONFIRMED STATIC P0 BUG SD-02: SetQuestFlag q 5 0 clearing flag 5 (shown in Pip-Boy) on a running named quest (VCG01 0x104C1C), plus flags 0/4/5/7/8 on VCG01, VMS01 (unstarted), and VDeadSea (unnamed running).",
+          "expected": "NVForever falls through to running && named check when flag 5 is cleared to 0; probe confirms whether original JIP LN 57.30 clears flag 5 to 0.",
+          "script_lines": [
+            "ref rVcg = GetFormFromMod \"FalloutNV.esm\" \"104C1C\"",
+            "ref rVms = GetFormFromMod \"FalloutNV.esm\" \"80664\"",
+            "ref rDs = GetFormFromMod \"FalloutNV.esm\" \"125E7E\"",
+            "int v0 = GetQuestFlag rVcg 0",
+            "int v4 = GetQuestFlag rVcg 4",
+            "int v5a = GetQuestFlag rVcg 5",
+            "SetQuestFlag rVcg 5 1",
+            "int v5on = GetQuestFlag rVcg 5",
+            "SetQuestFlag rVcg 5 0",
+            "int v5off = GetQuestFlag rVcg 5",
+            "SetQuestFlag rVcg 5 v5a",
+            "int m5a = GetQuestFlag rVms 5",
+            "SetQuestFlag rVms 5 1",
+            "int m5b = GetQuestFlag rVms 5",
+            "SetQuestFlag rVms 5 m5a",
+            "int d0 = GetQuestFlag rDs 0",
+            "int d5 = GetQuestFlag rDs 5",
+            "int v7a = GetQuestFlag rVcg 7",
+            "SetQuestFlag rVcg 7 1",
+            "int v7b = GetQuestFlag rVcg 7",
+            "SetQuestFlag rVcg 7 v7a",
+            "int v8 = GetQuestFlag rVcg 8",
+            "PrintToConsole \"PROBE|w6d2_26_quest_flag_5_clear_and_all_bits|vcg(0=%g,4=%g,5=%g->on:%g->off:%g)|vms5=%g->%g|ds=%g,%g|f7=%g->%g,f8=%g\" v0 v4 v5a v5on v5off m5a m5b d0 d5 v7a v7b v8"
+          ]
+        }
+      ]
+    }
+  ]
+}

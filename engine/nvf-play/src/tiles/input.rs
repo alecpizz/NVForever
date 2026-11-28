@@ -198,6 +198,7 @@ pub(crate) struct Devices<'w, 's> {
     windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
     /// The window's pointer asleep under the controller is on nothing (#2310).
     pad_pointer: Option<Res<'w, crate::pad::pointer::PadPointer>>,
+    touch_owner: Option<Res<'w, crate::ui_pointer::TouchUiCapture>>,
 }
 
 /// T15a: the message box button the pointer or a script clicked on its tiles this frame,
@@ -212,6 +213,14 @@ pub(crate) struct MenuInputs<'w, 's> {
     click: ResMut<'w, MessageClick>,
     active: Option<Res<'w, crate::menu::ActiveMenu>>,
     commands: MessageWriter<'w, crate::menu::MenuInput>,
+    normal: Option<ResMut<'w, crate::menu::normal_touch::NormalBarter>>,
+    normal_event: Local<'s, Option<crate::menu::normal_touch::NativeTap>>,
+    normal_emitted: Local<'s, bool>,
+    normal_gate: crate::menu::normal_touch::NativeAdmission<'w,'s>,
+    services:Option<ResMut<'w,crate::menu::normal_services::NormalServices>>,
+    service_event:Local<'s,Option<crate::menu::normal_services::NativeTap>>,
+    service_emitted:Local<'s,bool>,
+    service_gate:crate::menu::normal_services::NativeAdmission<'w,'s>,
     /// A press on the prompt's meter, held: the amount follows the pointer.
     dragging: Local<'s, bool>,
     /// T15b: the Wait / Sleep menu, and its commands.
@@ -260,6 +269,39 @@ pub(crate) struct MenuInputs<'w, 's> {
 }
 
 impl MenuInputs<'_, '_> {
+    /// Only the actual pointer click belonging to this owned native End may
+    /// resolve its token. Script/key clicks keep their original command path.
+    fn normal_pointer_commands(&mut self, ui:&fnv_ui::Ui, click:&fnv_ui::input::Click, commands:&[crate::menu::model::Command])->bool {
+        use crate::menu::{model::Command,MenuInput};
+        let Some(n)=*self.normal_event else{return false};
+        if !matches!(click.by,fnv_ui::input::By::Pointer){return false}
+        let crate::menu::normal_touch::Source::Tile(menu,_) = n.source else{return false};
+        if *self.normal_emitted || ui.root_of(click.tile)!=menu {return true}
+        if let Some(token)=self.normal.as_ref().and_then(|state|state.native_commands(n,commands)) {
+            self.commands.write(MenuInput(Command::CommitNormalBarter(token)));
+            *self.normal_emitted=true;
+        }
+        true
+    }
+
+    fn normal_service_command(&mut self,ui:&fnv_ui::Ui,click:&fnv_ui::input::Click,
+        action:crate::menu::normal_services::Action)->bool {
+        use crate::menu::normal_services::{Action,Kind};
+        let Some(n)=*self.service_event else{return false};
+        if !matches!(click.by,fnv_ui::input::By::Pointer){return false}
+        let crate::menu::normal_touch::Source::Tile(menu,_)=n.source else{return false};
+        if *self.service_emitted || ui.root_of(click.tile)!=menu{return true}
+        if let Some(token)=self.services.as_ref().and_then(|state|state.native_command(n,action)) {
+            match (n.kind,action) {
+                (Kind::Vendor,Action::Vendor(_))=>{self.repair_commands.write(crate::repair::RepairServicesInput::CommitNormal(token));}
+                (Kind::Workbench,Action::Workbench(_))=>{self.recipe_commands.write(crate::crafting::RecipeInput::CommitNormal(token));}
+                _=>return true,
+            }
+            *self.service_emitted=true;
+        }
+        true
+    }
+
     fn quantity(&self) -> Option<crate::menu::model::Quantity> {
         self.active.as_ref().and_then(|a| a.0.as_ref()).and_then(|m| m.quantity)
     }
@@ -416,6 +458,9 @@ impl MenuInputs<'_, '_> {
         if ask == Ask::Repair {
             *row_acted = true;
         }
+        // The owned finger envelope must reach its late guard before any legacy
+        // painted-row Select can overwrite a newer actual selection.
+        if self.normal_service_command(ui,c,crate::menu::normal_services::Action::Vendor(ask)){return Some(())}
         if let (Ask::Repair, Some(i)) = (ask, selected) {
             self.repair_commands.write(Ask::Select(i));
         }
@@ -451,7 +496,7 @@ impl MenuInputs<'_, '_> {
     /// row click that acts: the commands are applied later in the frame, so a second row
     /// click would be on rows the first may change.
     fn follow_item_menu(&mut self, ui: &fnv_ui::Ui, c: &fnv_ui::input::Click, at: Option<(f64, f64)>, inputs: Pressed<'_>, row_acted: &mut bool) -> Option<()> {
-        use super::container_menu::{row_commands, ContainerTile};
+        use super::container_menu::{row_commands_with, ContainerTile};
         use crate::menu::{model::Command, MenuInput};
         use fnv_ui::input::By;
         let st = if self.container.menu.is_some() { &mut *self.container } else { &mut self.barter.as_mut()?.view };
@@ -466,6 +511,7 @@ impl MenuInputs<'_, '_> {
         if m.quantity.is_some() {
             return Some(());
         }
+        let ctrl_single = m.qtt_select_short_keys && inputs.ctrl;
         let mut guard = None;
         let commands = match what {
             ContainerTile::Row(side, index) => {
@@ -476,7 +522,7 @@ impl MenuInputs<'_, '_> {
                 };
                 *row_acted = true;
                 let on_it = m.focus == side && m.selected[side as usize] == index;
-                let commands = row_commands(side, index, on_it, inputs.shift);
+                let commands = row_commands_with(side, index, on_it, inputs.shift, ctrl_single);
                 guard = st.guard(m.mode, side, index, on_it, commands.len() as u8);
                 commands
             }
@@ -501,6 +547,7 @@ impl MenuInputs<'_, '_> {
             }
             ContainerTile::Focus(_) | ContainerTile::Other => return Some(()),
         };
+        if self.normal_pointer_commands(ui,c,&commands){return Some(())}
         if let Some(guard) = guard {
             self.commands.write(MenuInput(Command::Expect(guard)));
         }
@@ -558,6 +605,7 @@ impl MenuInputs<'_, '_> {
             }
             RecipeTile::Other => return Some(()),
         };
+        if self.normal_service_command(ui,c,crate::menu::normal_services::Action::Workbench(input)){return Some(())}
         info!("tiles: {RECIPE_MENU} {input:?} on its tiles");
         self.recipe_commands.write(input);
         Some(())
@@ -618,10 +666,11 @@ impl MenuInputs<'_, '_> {
     }
 
     /// Act on a frame's report (see the module doc): `at` the pointer, `over` the tile under
-    /// it now, `held` the left button down, `shift` a Shift key down, `physical` the keys from
-    /// the keyboard (or a controller standing in for them) this frame.
+    /// it now, `held` the left button down, `shift` a Shift key down, `ctrl` a Control key
+    /// down, `physical` the keys from the keyboard (or a controller standing in for them)
+    /// this frame.
     #[allow(clippy::too_many_arguments)]
-    fn follow(&mut self, ui: &fnv_ui::Ui, report: &fnv_ui::input::Report, at: Option<(f64, f64)>, over: Option<fnv_ui::TileId>, held: bool, shift: bool, physical: &[&str], tutorial: Option<fnv_ui::TileId>) -> Option<u32> {
+    fn follow(&mut self, ui: &fnv_ui::Ui, report: &fnv_ui::input::Report, at: Option<(f64, f64)>, over: Option<fnv_ui::TileId>, held: bool, shift: bool, ctrl: bool, physical: &[&str], tutorial: Option<fnv_ui::TileId>) -> Option<u32> {
         use super::menus::{chosen_row, key_click_acts, message_pick, nav_by_hand, quantity_tile, row_button, QuantityTile, QUANTITY_MENU};
         use crate::menu::{model::Command, MenuInput};
         use fnv_ui::input::By;
@@ -654,16 +703,16 @@ impl MenuInputs<'_, '_> {
             if self.traits.as_mut().filter(|t| t.menu.is_some()).is_some_and(|t| super::trait_menu::follow_click(t, ui, c, at, held, physical).is_some()) {
                 continue;
             }
-            if self.follow_repair_services(ui, c, at, Pressed { held, shift, physical }, &mut row_acted).is_some() {
+            if self.follow_repair_services(ui, c, at, Pressed { held, shift, ctrl, physical }, &mut row_acted).is_some() {
                 continue;
             }
             if self.tags.as_mut().filter(|t| t.menu.is_some()).is_some_and(|t| super::selection_menu::follow_click(t, ui, c, at, held, physical).is_some()) {
                 continue;
             }
-            if self.follow_item_menu(ui, c, at, Pressed { held, shift, physical }, &mut row_acted).is_some() {
+            if self.follow_item_menu(ui, c, at, Pressed { held, shift, ctrl, physical }, &mut row_acted).is_some() {
                 continue;
             }
-            if self.follow_recipe(ui, c, at, Pressed { held, shift, physical }, &mut row_acted).is_some() {
+            if self.follow_recipe(ui, c, at, Pressed { held, shift, ctrl, physical }, &mut row_acted).is_some() {
                 continue;
             }
             if let Some(hours) = self.follow_wait(ui, c, at, held, physical) {
@@ -700,7 +749,9 @@ impl MenuInputs<'_, '_> {
             };
             clicked = true;
             info!("tiles: {} {cmd:?} on its tiles", super::menus::QUANTITY_MENU);
-            self.commands.write(MenuInput(cmd));
+            if !self.normal_pointer_commands(ui,c,&[cmd]) {
+                self.commands.write(MenuInput(cmd));
+            }
         }
         // A drag: the amount under the pointer while the press holds.
         if let (true, false, Some(q)) = (*self.dragging, clicked, q) {
@@ -740,6 +791,7 @@ impl MenuInputs<'_, '_> {
 struct Pressed<'a> {
     held: bool,
     shift: bool,
+    ctrl: bool,
     physical: &'a [&'a str],
 }
 
@@ -858,6 +910,9 @@ pub(crate) fn feed(
     others: Others,
 ) {
     let Others { paused, page, mut stats, mut inventory, mut map, repair, modding, mut item_mod, pip } = others;
+    *inputs.normal_event=None;
+    *inputs.normal_emitted=false;
+    *inputs.service_event=None;*inputs.service_emitted=false;
     let Some(rt) = script.rt.as_mut() else { return };
     if rt.game.ui_files.is_none() {
         // Still end script clicks (ClickMenuTile / ClickMenuButton on injected tiles) and
@@ -948,7 +1003,8 @@ pub(crate) fn feed(
     let anchor = super::draw::menu_anchor(dialog_menu.is_some() && taking.len() == 1);
     // The HUD alone under a script's cursor is hit where its tiles stand, in no frame.
     let hud_alone = hud_cursor && aid_at.is_none() && taking.len() == 1 && rt.game.ui_tree.menu(super::draw::HUD_MENU) == taking.first().copied();
-    let sleeping = crate::pad::pointer::asleep(devices.pad_pointer.as_deref());
+    let sleeping = crate::pad::pointer::asleep(devices.pad_pointer.as_deref())
+        || devices.touch_owner.as_ref().is_some_and(|owner| owner.pointer_suppressed());
     let cursor = || {
         aid_at.or_else(|| {
             devices.windows.single().ok().filter(|_| !sleeping).and_then(|w| {
@@ -1035,11 +1091,43 @@ pub(crate) fn feed(
         return;
     }
     // The aid's pointer, else the cursor in the window.
-    let at = cursor();
+    let native=inputs.normal.as_mut().and_then(|state|state.take_native());
+    if let Some(n)=native {
+        let valid=aid_at.is_none() && !aid_click
+            && inputs.active.as_ref().and_then(|a|a.0.as_ref()).is_some_and(|m|
+            inputs.normal_gate.allows(n,m,&rt.game)
+                && (if m.quantity.is_some() && super::menus::normal_touch_quantity_shown(&rt.game.ui_tree) {
+                    super::menus::normal_touch_quantity_hit(&rt.game.ui_tree,n.point,n.frame.size)
+                } else {
+                    inputs.barter.as_ref().and_then(|tiles|
+                        tiles.normal_touch_hit(&rt.game.ui_tree,m,n.point,n.frame.size))
+                })
+                .is_some_and(|h|h.source==n.source && crate::menu::normal_touch::same_target(h.target,n.target)))
+            && matches!(n.source,crate::menu::normal_touch::Source::Tile(menu,_) if taking.contains(&menu));
+        if valid {*inputs.normal_event=Some(n);}
+        else if let Some(state)=inputs.normal.as_mut(){state.finish_native(n.token,false);}
+    }
+    let service=inputs.services.as_mut().and_then(|state|state.take_native());
+    if let Some(n)=service {
+        let source=match n.kind {
+            crate::menu::normal_services::Kind::Vendor=>inputs.repair_services.as_ref().and_then(|tiles|
+                tiles.normal_hit(&rt.game.ui_tree,n.frame,inputs.services.as_ref()?.native_guard(n.token)?,n.point,n.text_size)),
+            crate::menu::normal_services::Kind::Workbench=>inputs.recipe.as_ref().and_then(|tiles|
+                tiles.normal_hit(&rt.game.ui_tree,n.frame,inputs.services.as_ref()?.native_guard(n.token)?,n.point,n.text_size)),
+        };
+        let valid=inputs.normal_event.is_none() && aid_at.is_none() && !aid_click
+            && inputs.service_gate.allows(n,&rt.game)
+            && source.is_some_and(|h|h.source==n.source && h.action==n.action)
+            && matches!(n.source,crate::menu::normal_touch::Source::Tile(menu,_) if taking.contains(&menu));
+        if valid {*inputs.service_event=Some(n);}
+        else if let Some(state)=inputs.services.as_mut(){state.finish_native(n.token,false);}
+    }
+    let service_at=(*inputs.service_event).map(|n|to_menu_units(n.point,n.frame.size,anchor));
+    let at = (*inputs.normal_event).map(|n|to_menu_units(n.point,n.frame.size,anchor)).or(service_at).or_else(cursor);
     let mut input = Input {
         at,
-        press: aid_click || devices.mouse.just_pressed(MouseButton::Left),
-        shift: devices.keys.pressed(KeyCode::ShiftLeft) || devices.keys.pressed(KeyCode::ShiftRight),
+        press: inputs.normal_event.is_some() || inputs.service_event.is_some() || aid_click || devices.mouse.just_pressed(MouseButton::Left),
+        shift: inputs.normal_event.is_none() && inputs.service_event.is_none() && (devices.keys.pressed(KeyCode::ShiftLeft) || devices.keys.pressed(KeyCode::ShiftRight)),
         ..Input::default()
     };
     // The tutorial menu's triggers stand for its own keys (`crate::pad::menu_buttons`), which
@@ -1067,7 +1155,18 @@ pub(crate) fn feed(
     let report = fnv_game::ui_input::step(&mut rt.game, &taking, &input, &no_measure);
     let over = rt.game.ui_pointer.active(&rt.game.ui_tree);
     let ui = &rt.game.ui_tree;
-    let slider = inputs.follow(ui, &report, at, over, held, input.shift, &physical, tutorial);
+    let ctrl = devices.keys.pressed(KeyCode::ControlLeft) || devices.keys.pressed(KeyCode::ControlRight);
+    let slider = inputs.follow(ui, &report, at, over, held, input.shift, ctrl, &physical, tutorial);
+    if let Some(n)=*inputs.normal_event {
+        if let Some(state)=inputs.normal.as_mut() {
+            state.finish_native(n.token,*inputs.normal_emitted);
+        }
+    }
+    if let Some(n)=*inputs.service_event {
+        if let Some(state)=inputs.services.as_mut() {
+            state.finish_native(n.token,*inputs.service_emitted);
+        }
+    }
     if let (Some(menu), Some(v)) = (dialog_menu, inputs.view_input.as_deref_mut()) {
         let mut steps = 0;
         super::dialog_menu::follow(ui, &report, &physical, menu, inputs.dialog.as_ref().and_then(|d| d.list()), v, &mut steps);
