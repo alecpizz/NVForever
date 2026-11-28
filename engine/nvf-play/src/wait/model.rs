@@ -439,7 +439,7 @@ mod tests {
         assert_eq!(v.hours, "22 hours (8:34)");
         assert_eq!(v.date, "Saturday, 19.10.81, 10:34");
         assert_eq!((v.marker, v.can_accept), (22, true));
-        assert_eq!((v.accept.as_str(), v.cancel.as_str()), ("Wait E)", "Cancel X)"));
+        assert_eq!((v.accept.as_str(), v.cancel.as_str()), ("Wait [E]", "Cancel [X]"));
         m.apply(Command::Hours(1));
         assert_eq!(m.view(&w, &now).hours, "1 hour (11:34)");
         // A whole day ends at the same time.
@@ -451,7 +451,7 @@ mod tests {
     fn on_a_bed_it_is_a_sleep_menu() {
         let w = Words::default();
         let v = Model::open(true).view(&w, &cal(19.0, 9.0, 22.0));
-        assert_eq!((v.title, v.accept), (w.sleep_title.clone(), "Sleep E)".to_string()));
+        assert_eq!((v.title, v.accept), (w.sleep_title.clone(), "Sleep [E]".to_string()));
         assert_eq!(Model::open(false).view(&w, &cal(19.0, 9.0, 22.0)).title, w.wait_title);
     }
 
@@ -593,7 +593,7 @@ mod tests {
             _ => None,
         });
         let v = Model::open(false).view(&w, &cal(19.0, 9.0, 10.0));
-        assert_eq!((v.accept.as_str(), v.date.as_str()), ("Warten E)", "Samstag, 19.10.81, 10:00"));
+        assert_eq!((v.accept.as_str(), v.date.as_str()), ("Warten [E]", "Samstag, 19.10.81, 10:00"));
         assert_eq!(v.title, Words::default().wait_title);
         // The week starts on the day GameDaysPassed counts from.
         assert_eq!(weekday(&cal(13.0, 9.0, 0.0)), 0);

@@ -15,6 +15,11 @@ fnv-vfs.workspace = true
 fnv-world.workspace = true
 # Half floats for the reflection cube's texels (reflection_cube.rs); already in the lock.
 half = "2"
+# The plain data a room's geometry and textures are read again as (model/geometry.rs,
+# texture/levels.rs); it depends on nothing.
+nvf-rtgi.workspace = true
+# BC1 to BC3 on the CPU, for those textures (texture/levels.rs).
+texpresso.workspace = true
 
 [dev-dependencies]
 # tests/sample_mask_spirv.rs: the vendored naga's SPIR-V for `@builtin(sample_mask)`

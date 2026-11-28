@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Original NVForever geometry; Industrial family. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="currentColor" color="#ffffff" fill-rule="evenodd" stroke-width="1.8" stroke-linecap="square" stroke-linejoin="bevel">
+  <title>Aid</title>
+  <path d="M 7 10 L 25 10 L 29 14 L 29 25 L 26 28 L 6 28 L 3 25 L 3 14 Z M 11 10 L 11 4 L 21 4 L 21 10 M 11 19 L 21 19 M 16 14 L 16 24"/>
+</svg>

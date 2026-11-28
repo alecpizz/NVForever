@@ -38,6 +38,17 @@ jobs:
       # taken out of an archive can be saved as any image type. Images are refused
       # everywhere except the app's own icons and the vendored Bevy sources; add a new
       # image of NVForever's own here by its path, in the pull request that adds it.
+      # Verified Apache-2.0 winit 0.30.13 crate demo art (examples/window.rs),
+      # retained exactly; two cursor crosses, a gradient and the winit mascot icon.
+      # Archive SHA256 a6755fa58a9f8350bd1e472d4c3fcc25f824ec358933bba33306d0b63df5978d.
+      # These four files use the existing vendor allowance; no new image exclusion.
+      # winit/examples/data/cross.png SHA256 4db9fec917c6cb3196872073e4168d28c4f3e0ad04c5c41865407088abf279e4
+      # winit/examples/data/cross2.png SHA256 fbeeb71e5d6f24898017739d088acefb522d85108a6f1f96183e60e6b4b1f6e6
+      # winit/examples/data/gradient.png SHA256 8f80c21867a59959b84f9ced19ff3aba7bf4e1cf0e2c24dea2c8465c8705c7ca
+      # winit/examples/data/icon.png SHA256 4340d72fb8b5d95a10e3b2c02230f1060dff0950a137bd1d830c63dbc020dd45
+      # The contributor's AI-generated Classic frame is project-owned art (see its README).
+      - name: Verify Classic dialogue artwork
+        run: echo '8c84a4dffd64c6ef85a560a355da5c11d08db9ece1af4f5f1519a428c4561b46  engine/nvf-play/assets/dialogue/classic.png' | sha256sum --check --strict
       - name: No images outside the allow-list
         run: |
           found=$(git ls-files -- \
@@ -46,6 +57,22 @@ jobs:
             ':(icase)*.tiff' ':(icase)*.hdr' ':(icase)*.exr' ':(icase)*.ico' \
             ':(exclude)engine/nvforever/assets/icon.png' \
             ':(exclude)engine/nvforever/assets/nvforever.ico' \
+            ':(exclude)engine/nvf-play/assets/dialogue/classic.png' \
+            ':(exclude)android/app/src/main/res/mipmap-mdpi/ic_launcher.png' \
+            ':(exclude)android/app/src/main/res/mipmap-mdpi/ic_launcher_foreground.png' \
+            ':(exclude)android/app/src/main/res/mipmap-mdpi/ic_launcher_monochrome.png' \
+            ':(exclude)android/app/src/main/res/mipmap-hdpi/ic_launcher.png' \
+            ':(exclude)android/app/src/main/res/mipmap-hdpi/ic_launcher_foreground.png' \
+            ':(exclude)android/app/src/main/res/mipmap-hdpi/ic_launcher_monochrome.png' \
+            ':(exclude)android/app/src/main/res/mipmap-xhdpi/ic_launcher.png' \
+            ':(exclude)android/app/src/main/res/mipmap-xhdpi/ic_launcher_foreground.png' \
+            ':(exclude)android/app/src/main/res/mipmap-xhdpi/ic_launcher_monochrome.png' \
+            ':(exclude)android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png' \
+            ':(exclude)android/app/src/main/res/mipmap-xxhdpi/ic_launcher_foreground.png' \
+            ':(exclude)android/app/src/main/res/mipmap-xxhdpi/ic_launcher_monochrome.png' \
+            ':(exclude)android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png' \
+            ':(exclude)android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png' \
+            ':(exclude)android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_monochrome.png' \
             ':(exclude)crates/nvf-launcher/assets/icon-64.png' \
             ':(exclude)crates/nvf-launcher/assets/logo-256.png' \
             ':(exclude)crates/nvf-launcher/assets/nvf-launcher.ico' \

@@ -1,0 +1,146 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6c_jg_on_dying_base_filter",
+  "description": "Wave 6C strictly read-only console-only probe verifying SetJohnnyOnDyingEventHandler unfiltered, XMarker wildcard, exact placed reference, NPC_ base-form, and FormList filter behavior.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)",
+    "JohnnyGuitarNVSE": "528"
+  },
+  "batches": [
+    {
+      "id": "w6c_jg_on_dying_base_filter",
+      "title": "Wave 6C - SetJohnnyOnDyingEventHandler Base-Form and XMarker Filters",
+      "extender": "JohnnyGuitar 528 + JIP LN 57.30",
+      "required_plugins": [
+        "jip_nvse.dll",
+        "johnnyguitar.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6t2p2_09_jg_on_dying_all_filters",
+          "bucket": "B",
+          "extender": "JohnnyGuitar 528",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "johnnyguitar.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-jg8.md",
+          "spec_line": 41,
+          "functions_tested": [
+            "SetJohnnyOnDyingEventHandler"
+          ],
+          "claim": "Verify SetJohnnyOnDyingEventHandler unfiltered, XMarker (0x3B), exact placed ref, NPC_ base form, and FormList of NPC_ base forms on a killed non-essential spawned NPC.",
+          "expected": "dead=1|u=1,xm=1,ref=1,base=1,flst=0",
+          "script_lines": [
+            "ref rNpcB = GetFormFromMod \"FalloutNV.esm\" \"104C78\"",
+            "SetEssential rNpcB 0",
+            "ref rXm = GetFormFromMod \"FalloutNV.esm\" \"3B\"",
+            "ref rBaseFlst = GetFormFromMod \"FalloutNV.esm\" \"645D5\"",
+            "ref rFlst = TempCloneForm rBaseFlst",
+            "ListClear rFlst",
+            "ListAddForm rFlst rNpcB",
+            "ref rNpc = Player.PlaceAtMe rNpcB 1 120 0",
+            "Player.AuxVarSetRef \"*p2_09_npc\" rNpc",
+            "Player.AuxVarSetRef \"*p2_09_fl\" rFlst",
+            "Player.AuxVarSetFlt \"*p2_09_u\" 0",
+            "Player.AuxVarSetFlt \"*p2_09_x\" 0",
+            "Player.AuxVarSetFlt \"*p2_09_r\" 0",
+            "Player.AuxVarSetFlt \"*p2_09_b\" 0",
+            "Player.AuxVarSetFlt \"*p2_09_l\" 0",
+            "ref cbU = CompileScript \"nvseprobe_s_p2_09_u.gek\"",
+            "ref cbX = CompileScript \"nvseprobe_s_p2_09_x.gek\"",
+            "ref cbR = CompileScript \"nvseprobe_s_p2_09_r.gek\"",
+            "ref cbB = CompileScript \"nvseprobe_s_p2_09_b.gek\"",
+            "ref cbL = CompileScript \"nvseprobe_s_p2_09_l.gek\"",
+            "Player.AuxVarSetRef \"*p2_09_cbu\" cbU",
+            "Player.AuxVarSetRef \"*p2_09_cbx\" cbX",
+            "Player.AuxVarSetRef \"*p2_09_cbr\" cbR",
+            "Player.AuxVarSetRef \"*p2_09_cbb\" cbB",
+            "Player.AuxVarSetRef \"*p2_09_cbl\" cbL",
+            "SetJohnnyOnDyingEventHandler 1 cbU 0",
+            "SetJohnnyOnDyingEventHandler 1 cbX 0 rXm",
+            "SetJohnnyOnDyingEventHandler 1 cbR 0 rNpc",
+            "SetJohnnyOnDyingEventHandler 1 cbB 0 rNpcB",
+            "SetJohnnyOnDyingEventHandler 1 cbL 0 rFlst"
+          ],
+          "wait_ticks_after": 2,
+          "helper_scripts": {
+            "nvseprobe_s_p2_09_u.gek": [
+              "begin Function { ref rDead }",
+              "Player.AuxVarSetFlt \"*p2_09_u\" ((Player.AuxVarGetFlt \"*p2_09_u\") + 1)"
+            ],
+            "nvseprobe_s_p2_09_x.gek": [
+              "begin Function { ref rDead }",
+              "Player.AuxVarSetFlt \"*p2_09_x\" ((Player.AuxVarGetFlt \"*p2_09_x\") + 1)"
+            ],
+            "nvseprobe_s_p2_09_r.gek": [
+              "begin Function { ref rDead }",
+              "Player.AuxVarSetFlt \"*p2_09_r\" ((Player.AuxVarGetFlt \"*p2_09_r\") + 1)"
+            ],
+            "nvseprobe_s_p2_09_b.gek": [
+              "begin Function { ref rDead }",
+              "Player.AuxVarSetFlt \"*p2_09_b\" ((Player.AuxVarGetFlt \"*p2_09_b\") + 1)"
+            ],
+            "nvseprobe_s_p2_09_l.gek": [
+              "begin Function { ref rDead }",
+              "Player.AuxVarSetFlt \"*p2_09_l\" ((Player.AuxVarGetFlt \"*p2_09_l\") + 1)"
+            ]
+          },
+          "extra_steps": [
+            {
+              "suffix": "kill",
+              "wait_ticks": 3,
+              "script_lines": [
+                "ref rNpc = Player.AuxVarGetRef \"*p2_09_npc\"",
+                "rNpc.KillActor Player"
+              ]
+            },
+            {
+              "suffix": "read",
+              "wait_ticks": 0,
+              "script_lines": [
+                "ref rNpcB = GetFormFromMod \"FalloutNV.esm\" \"104C78\"",
+                "ref rXm = GetFormFromMod \"FalloutNV.esm\" \"3B\"",
+                "ref rNpc = Player.AuxVarGetRef \"*p2_09_npc\"",
+                "ref rFlst = Player.AuxVarGetRef \"*p2_09_fl\"",
+                "int isD = rNpc.GetDead",
+                "int nu = Player.AuxVarGetFlt \"*p2_09_u\"",
+                "int nx = Player.AuxVarGetFlt \"*p2_09_x\"",
+                "int nr = Player.AuxVarGetFlt \"*p2_09_r\"",
+                "int nb = Player.AuxVarGetFlt \"*p2_09_b\"",
+                "int nl = Player.AuxVarGetFlt \"*p2_09_l\"",
+                "SetJohnnyOnDyingEventHandler 0 (Player.AuxVarGetRef \"*p2_09_cbu\") 0",
+                "SetJohnnyOnDyingEventHandler 0 (Player.AuxVarGetRef \"*p2_09_cbx\") 0 rXm",
+                "SetJohnnyOnDyingEventHandler 0 (Player.AuxVarGetRef \"*p2_09_cbr\") 0 rNpc",
+                "SetJohnnyOnDyingEventHandler 0 (Player.AuxVarGetRef \"*p2_09_cbb\") 0 rNpcB",
+                "SetJohnnyOnDyingEventHandler 0 (Player.AuxVarGetRef \"*p2_09_cbl\") 0 rFlst",
+                "rNpc.Disable",
+                "rNpc.MarkForDelete",
+                "PrintToConsole \"PROBE|w6t2p2_09_jg_on_dying_all_filters|dead=%g|u=%g,xm=%g,ref=%g,base=%g,flst=%g\" isD nu nx nr nb nl"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

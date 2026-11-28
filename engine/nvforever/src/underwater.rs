@@ -20,6 +20,11 @@ use nvf_play::phys::PhysState;
 use nvf_play::sim::SimState;
 use std::collections::HashMap;
 
+/// Whether the main camera is under water this frame (set by [`underwater_fog`], so in
+/// `PostUpdate`, where the app has the resource: the volumetric clouds are not drawn while it is).
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CameraSubmerged(pub bool);
+
 /// Apply the water override to the same camera transform the renderer extracts.
 pub struct UnderwaterFogPlugin;
 
@@ -151,6 +156,7 @@ pub fn underwater_fog(
     sim: Option<Res<SimState>>,
     graphics: Option<Res<crate::graphics::Graphics>>,
     remaps: Option<Res<crate::water::WaterRemaps>>,
+    submerged: Option<ResMut<CameraSubmerged>>,
     mut types: Local<WaterTypes>,
     mut placed_types: Local<HashMap<u32, Option<u32>>>,
     mut was_under: Local<bool>,
@@ -165,6 +171,12 @@ pub fn underwater_fog(
         let wid = remaps.as_ref().map_or(wid, |r| r.resolve(wid));
         types.0.entry(wid).or_insert_with(|| fnv_world::sky::water(world.lo, world.schema, wid)).clone()
     });
+    // Under a water surface whether or not its water record could be read.
+    if let Some(mut submerged) = submerged {
+        if submerged.0 != under.is_some() {
+            submerged.0 = under.is_some();
+        }
+    }
     let Some(w) = water else {
         if std::mem::take(&mut *was_under) {
             // Back above the surface: reapply the current weather/interior fog immediately

@@ -61,11 +61,12 @@ pause/resume or easing rules from a convenient portable clock implementation.
 
 ## 3. Mandatory lifecycle correction
 
-[design] PlayAnimationPath is not inherently once-only. A request
-using looping or reversing clip metadata must survive several complete periods
-until explicitly deactivated. End-time retirement is only for the clip's
-non-looping/clamped cycle. Render playback must select its mode from actual clip
-cycle metadata, rather than treating PlayAnimationPath itself as always once.
+[hypothesis: not yet probed in the original game with kNVSE] PlayAnimationPath
+is not inherently once-only: a request using looping or reversing clip metadata
+survives several complete periods until explicitly deactivated, and end-time
+retirement applies only to the clip's non-looping/clamped cycle. [design]
+NVForever's render playback selects its mode from actual clip cycle metadata,
+rather than treating PlayAnimationPath itself as always once.
 
 [design] Owned cycle controls must cover the portable metadata values 0 and 1
 (loop/reverse), with 2 as the clamped control, nonzero begin/end/frequency and

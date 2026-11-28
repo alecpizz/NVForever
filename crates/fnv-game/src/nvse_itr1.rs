@@ -269,7 +269,7 @@ impl Game<'_> {
     /// Once a frame: SetAlertNS timers that ran out (kept while the actor still fights
     /// [documented: SetAlertNS]) and the watched tile traits that changed, each firing
     /// ITR:OnTileValueChange (numbers) or ITR:OnTileStrValueChange (text) with the watch
-    /// id, the path and the new value [hypothesis: the events' parameters, no page].
+    /// id, the path and the new value (see docs/spec-notes/ext-itr.md §6).
     pub(crate) fn itr_tick(&mut self) {
         self.itr_drop_gone_tile_textures();
         if !self.other.itr.alerts.is_empty() {
@@ -374,7 +374,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
                 } else {
                     s.no_crouch.remove(&a);
                 }
-                // A forced stance gives way to the new rule [hypothesis].
+                // A forced stance gives way to the new rule (see docs/spec-notes/ext-itr.md §2).
                 s.crouch.remove(&a);
             } else {
                 s.crouch.insert(a, on);
@@ -440,7 +440,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
         }
         "getaimzoomfirstpersononly" => yes(g.other.itr.aim_zoom_first_person_only.unwrap_or(false)),
         // `enable x y z` in degrees; 0 releases it [documented: SetCameraAngle]. The
-        // page's return type is None: 0 [hypothesis]. An angle that is not a finite
+        // page's return type is None: 0 (see docs/spec-notes/ext-itr.md §3). An angle that is not a finite
         // number changes nothing [decision].
         "setcameraangle" => {
             let angle = [num(args, 1, 0.0), num(args, 2, 0.0), num(args, 3, 0.0)];
@@ -495,7 +495,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
             }
         }
         // `angle enable` [documented: SetDialogueCameraAngleEnabled, "Allow or block an
-        // angle (0-11)"]; 1 done, 0 out of range [hypothesis].
+        // angle (0-11)"]; 1 done, 0 out of range (see docs/spec-notes/ext-itr.md §3).
         "setdialoguecameraangleenabled" => match usize::try_from(num(args, 0, -1.0) as i64).ok().filter(|a| *a <= 11) {
             Some(a) => {
                 g.other.itr.dialogue_camera.allowed[a] = num(args, 1, 0.0) != 0.0;
@@ -526,8 +526,8 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
         }
         // ---- keys ----
         // `key [mask]`: DisableKey, kept under the mask group (0 when none), and
-        // ITR:OnKeyDisabled with the key and mask [documented: DisableKeyEx; hypothesis:
-        // the event's parameters, no page]. Any code is taken [observed: itr probes,
+        // ITR:OnKeyDisabled with the key and mask [documented: DisableKeyEx] (event params:
+        // see docs/spec-notes/ext-itr.md §3). Any code is taken [observed: itr probes,
         // DisableKeyEx 300 returns 1]; 0 only for a code outside 1-65535 [hypothesis].
         "disablekeyex" | "enablekeyex" => {
             let code = num(args, 0, -1.0) as i64;
@@ -539,8 +539,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
                 g.input.disabled_keys.insert(k);
             } else {
                 // No mask releases the key; a mask releases that group's hold, the key
-                // coming free once no group holds it [hypothesis: the page says only
-                // "releases keys that were disabled under the matching group mask"].
+                // coming free once no group holds it (see docs/spec-notes/ext-itr.md §3).
                 if args.len() < 2 {
                     masks.clear();
                 } else {
@@ -557,8 +556,8 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
         }
         // ---- race eyes and eye meshes ----
         // `race eyes`: the eyes join the race's list (GetRaceEyes, the race menu) if they
-        // are playable [documented: AddRaceEye]; 1 when added [hypothesis: the page gives
-        // no return]. RemoveRaceEye takes them off, ClearRaceEyes empties the list.
+        // are playable [documented: AddRaceEye]; 1 when added (see docs/spec-notes/ext-itr.md §3).
+        // RemoveRaceEye takes them off, ClearRaceEyes empties the list.
         // The list is the generic list 1 (`Game::generic_list`).
         "addraceeye" | "removeraceeye" | "clearraceeyes" => {
             let Some(race) = form(args, 0).filter(|&r| g.data.sig(r) == Some(*b"RACE")) else { return Some(Ok(zero)) };
@@ -587,7 +586,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
         }
         // `eyes left [right]`: right is left when not given; paths under Meshes\ for the
         // engine's head model on its next Update3D (follow-up) [documented: SetEyeMesh;
-        // ClearEyeMesh]; 1 for an eyes form [hypothesis].
+        // ClearEyeMesh]; 1 for an eyes form (see docs/spec-notes/ext-itr.md §3).
         "seteyemesh" => {
             let Some(e) = form(args, 0).filter(|&e| g.data.sig(e) == Some(*b"EYES")) else { return Some(Ok(zero)) };
             let left = text(args, 1);
@@ -628,7 +627,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
             one
         }
         // `value [creature]`: the creature base's DATA combat skill, above 255 kept at
-        // 255 (below 0 at 0 [hypothesis]; not a finite number, 0 [decision]); the calling
+        // 255 (below 0 at 0, see docs/spec-notes/ext-itr.md §2; not a finite number, 0 [decision]); the calling
         // reference's base when no creature
         // is given; 1 done [documented: SetCreatureCombatSkill]. GetCreatureCombatSkill
         // reads it.
@@ -665,7 +664,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
         // `challenge amount`: forwards, as many steps as the challenge takes, so one call
         // can cross a recurring challenge's threshold more than once [documented:
         // ModChallenge, "Handles overflow"]; backwards, the progress less the amount, not
-        // below 0 and not undoing a completion [hypothesis]. 1 for a challenge.
+        // below 0 and not undoing a completion (see docs/spec-notes/ext-itr.md §4). 1 for a challenge.
         "modchallenge" => {
             let Some(c) = form(args, 0).filter(|c| g.data.challenge_defs.contains_key(c)) else { return Some(Ok(zero)) };
             let mut amount = num(args, 1, 0.0).trunc();
@@ -773,7 +772,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
         // `path trait`: a positive id, the same one for a trait already watched, 0 when
         // 48 are watched [documented: WatchTileValue]; a trait that is not there is
         // watched too while its menu is [observed: itr probes, "HUDMainMenu"
-        // "_nvfnone" returns an id; the page says 0], 0 without the menu [hypothesis].
+        // "_nvfnone" returns an id; the page says 0], 0 without the menu (see docs/spec-notes/ext-itr.md §6).
         // The trait's path is the tile's path and the trait's name.
         "watchtilevalue" => {
             let path = format!("{}/{}", text(args, 0).trim_end_matches(['/', '\\']), text(args, 1));
@@ -805,8 +804,8 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
         // texture is not decoded here: the engine's tile renderer reads it when it draws
         // the tile (`nvf-play`'s `tiles::texmod`), so a texture not in the data (loose or
         // in an archive, under `Data\Textures\`) is the failure this side sees
-        // [hypothesis: existence as the test for "texture load failure"; a file there that
-        // does not decode is refused by the renderer only, said in its log]. While the host
+        // (existence as the test for "texture load failure", see docs/spec-notes/ext-itr.md §6;
+        // a file there that does not decode is refused by the renderer only, said in its log). While the host
         // gives no answer for the archives (no Data open, or a game made without the
         // engine) the file is taken as there [decision]. A refused call leaves the tile as
         // it was [hypothesis].
@@ -839,7 +838,7 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
         // ---- item mods ----
         // On an inventory reference: the weapon's mod bits (1, 2, 4) [documented:
         // GetItemModFlags]; SetItemModFlags `[flags]`, 1 by default, 0 takes them off
-        // [documented]; 1 done, 0 when the item could not be changed [hypothesis].
+        // [documented]; 1 done, 0 when the item could not be changed (see docs/spec-notes/ext-itr.md §6).
         "getitemmodflags" => match subject.and_then(|r| g.temp_item(r)) {
             Some((c, it)) => XVal::Num(f64::from(g.world.inventory_mut(c).map(|inv| inv.groups().find(|(i, _, _)| *i == it).map_or(0, |(_, e, _)| e.mods)).unwrap_or(0))),
             None => zero,

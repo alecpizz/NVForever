@@ -164,6 +164,39 @@ impl CombatForms {
             .fold((0.0, 0.0), |(dt, dr), (a, m)| (dt + a.dt * m, dr + a.dr_raw as f32 / 100.0 * m))
     }
 
+    /// DT and DR (percent) of worn armour covering `zone`, for the optional
+    /// `localized-dt-dr` setting (#3843): head hits benefit only from worn head-armour
+    /// (`covers_head`) and body hits only from worn body-armour (`covers_body`) [documented:
+    /// JIP LN NVSE v57.30 / Settings INI v56.24 `jip_nvse.ini` `bLocalizedDTDR`; no DLL or
+    /// source consulted]; `Zone::All` sums all worn armour for explosions [observed:
+    /// `tools/capture/nvse/probes/localized_dt_dr_probe.json`,
+    /// `w4e_c02_jip_localized_dtdr_explosions_innate`, 2026-11-24].
+    pub fn armor_values_worn_in_zone_with(&self, worn: &[(FormId, f32)], penalty: f32, zone: Zone) -> (f32, f32) {
+        self.armor_values_worn_in_zone_with_lookup(worn, penalty, zone, |id| self.armor.get(&id).cloned())
+    }
+
+    /// [`CombatForms::armor_values_worn_in_zone_with`] using a caller-supplied effective
+    /// [`ArmorStats`] lookup.
+    pub fn armor_values_worn_in_zone_with_lookup(
+        &self,
+        worn: &[(FormId, f32)],
+        penalty: f32,
+        zone: Zone,
+        lookup: impl Fn(FormId) -> Option<crate::data::ArmorStats>,
+    ) -> (f32, f32) {
+        worn.iter()
+            .filter_map(|&(id, c)| {
+                let a = lookup(id)?;
+                let matches_zone = match zone {
+                    Zone::Head => a.covers_head(),
+                    Zone::Body => a.covers_body(),
+                    Zone::All => true,
+                };
+                matches_zone.then(|| (a, armor_mult_with(c, penalty)))
+            })
+            .fold((0.0, 0.0), |(dt, dr), (a, m)| (dt + a.dt * m, dr + a.dr_raw as f32 / 100.0 * m))
+    }
+
     /// The full health of a weapon or a piece of armour (its record's `DATA` health); 0
     /// for anything else.
     pub fn item_health(&self, item: FormId) -> i32 {
@@ -251,5 +284,30 @@ mod armor_override_tests {
         assert!((dr - 25.0).abs() < 1e-5, "5 + 20 = 25 DR");
         assert_eq!(cf.item_health_with(base_id, lookup), 100);
         assert_eq!(cf.item_health_with(clone_id, lookup), 250);
+    }
+
+    #[test]
+    fn localized_dt_dr_separates_head_and_body_armor() {
+        let helmet = FormId(0x201);
+        let chest = FormId(0x202);
+        let mut cf = CombatForms::default();
+        cf.armor.insert(
+            helmet,
+            ArmorStats { health: 100, dt: 4.0, dr_raw: 500, slots: ArmorStats::HEAD_SLOTS, ..Default::default() },
+        );
+        cf.armor.insert(
+            chest,
+            ArmorStats { health: 100, dt: 14.0, dr_raw: 1500, slots: ArmorStats::UPPER_BODY, ..Default::default() },
+        );
+        let worn = [(helmet, 1.0), (chest, 1.0)];
+        let (head_dt, head_dr) = cf.armor_values_worn_in_zone_with(&worn, ARMOR_CONDITION_PENALTY, Zone::Head);
+        assert!((head_dt - 4.0).abs() < 1e-5 && (head_dr - 5.0).abs() < 1e-5, "head only: ({head_dt}, {head_dr})");
+        let (body_dt, body_dr) = cf.armor_values_worn_in_zone_with(&worn, ARMOR_CONDITION_PENALTY, Zone::Body);
+        assert!((body_dt - 14.0).abs() < 1e-5 && (body_dr - 15.0).abs() < 1e-5, "body only: ({body_dt}, {body_dr})");
+        let (all_dt, all_dr) = cf.armor_values_worn_in_zone_with(&worn, ARMOR_CONDITION_PENALTY, Zone::All);
+        assert!((all_dt - 18.0).abs() < 1e-5 && (all_dr - 20.0).abs() < 1e-5, "all: ({all_dt}, {all_dr})");
+        // No helmet worn: head hit gets 0 worn DT/DR, body hit still gets chest DT/DR.
+        assert_eq!(cf.armor_values_worn_in_zone_with(&[(chest, 1.0)], ARMOR_CONDITION_PENALTY, Zone::Head), (0.0, 0.0));
+        assert_eq!(cf.armor_values_worn_in_zone_with(&[(helmet, 1.0)], ARMOR_CONDITION_PENALTY, Zone::Body), (0.0, 0.0));
     }
 }

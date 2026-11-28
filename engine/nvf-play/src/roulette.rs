@@ -80,7 +80,9 @@ pub mod sounds {
 /// is open; `screen` shows it behind the menu's text.
 #[derive(Resource, Clone, Debug)]
 pub struct RouletteView {
-    pub image: Handle<Image>,
+    /// The picture of the table drawn alone; `None` when the game's own camera shows the
+    /// table where it stands in the world (the room is the backdrop).
+    pub image: Option<Handle<Image>>,
 }
 
 /// The bet point under the mouse pointer, as the engine finds it on the felt (nvforever
@@ -133,6 +135,10 @@ pub struct Session {
     /// The test aid's pocket for the next spin.
     forced: Option<u8>,
     rng: ChaCha8Rng,
+    /// The table in the world the menu is at ([`world_table`]): the menu's table and
+    /// camera stand where it does, the room around it the backdrop (nvforever
+    /// `roulette_view.rs`).
+    pub table_ref: Option<FormId>,
 }
 
 impl Session {
@@ -304,7 +310,7 @@ fn run_aid(
                     warn!("roulette: scripts are not running; the test aid cannot open the table");
                     continue;
                 };
-                rt.game.roulette_requests.push(rules::RouletteRequest { casino: FormId(c), min_bet: 1, max_bet: 200, max_winnings: 0 });
+                rt.game.roulette_requests.push(rules::RouletteRequest { casino: FormId(c), min_bet: 1, max_bet: 200, max_winnings: 0, table: None });
             }
             AidStep::Chips(n, c) => {
                 let chip = script.as_ref().and_then(|s| s.rt.as_ref()).and_then(|rt| fnv_game::casino::chip(&rt.game, FormId(c)));
@@ -332,6 +338,9 @@ fn seed(aid: &RouletteAid, casino: FormId, now: f32) -> u64 {
     })
 }
 
+/// Roulette's stats, corner messages, key bindings and the play world.
+type RouletteExtras<'w> = (ResMut<'w, RouletteStats>, Option<ResMut<'w, crate::corner_messages::CornerMessages>>, Res<'w, crate::bindings::Bindings>, Option<Res<'w, crate::PlayWorld>>);
+
 #[allow(clippy::too_many_arguments)]
 fn open(
     state: Res<State<PlayState>>,
@@ -342,7 +351,7 @@ fn open(
     script: Option<ResMut<ScriptState>>,
     aid: Res<RouletteAid>,
     time: AidTime,
-    (mut stats, mut corner, bindings): (ResMut<RouletteStats>, Option<ResMut<crate::corner_messages::CornerMessages>>, Res<crate::bindings::Bindings>),
+    (mut stats, mut corner, bindings, play): RouletteExtras,
     mut waiting: Local<Option<(rules::RouletteRequest, f32)>>,
 ) {
     let Some(rt) = script.and_then(|s| s.into_inner().rt.as_mut()) else { return };
@@ -395,6 +404,11 @@ fn open(
         if help.is_some() { "; help message shown (first use)" } else { "" }
     );
     let bet = table.clamp_bet(5);
+    let table_ref = world_table(&sim, play.as_deref(), asked.table, def.roulette_model.as_deref(), "roulette");
+    match table_ref {
+        Some(t) => info!("roulette: at the table {t} in the world (asked by {:?})", asked.table),
+        None => info!("roulette: no table of {} near in the world; the menu draws its table alone", def.roulette_model.as_deref().unwrap_or("(no model)")),
+    }
     screen.0 = Some(Session {
         casino: asked.casino,
         casino_name: def.name.clone(),
@@ -413,8 +427,107 @@ fn open(
         banned: false,
         forced: None,
         rng: ChaCha8Rng::seed_from_u64(seed(&aid, asked.casino, now)),
+        table_ref,
     });
     next.set(PlayState::Menu);
+}
+
+/// How far from the asking reference (or the player) the table in the world may be, game
+/// units [design].
+pub const TABLE_REACH: f32 = 400.0;
+
+/// A model path as the plugins and the casino records give it, for comparing.
+pub fn same_model(a: &str, b: &str) -> bool {
+    let norm = |s: &str| {
+        let s = s.replace('/', "\\").to_ascii_lowercase();
+        s.strip_prefix("meshes\\").map(str::to_string).unwrap_or(s)
+    };
+    norm(a) == norm(b)
+}
+
+/// The table in the world a casino menu is at: the nearest reference of a table model in
+/// the player's cell (the casino's menu `model`, or one whose path names the `game`: the
+/// world's tables are the clutter models, `clutter\casino\roulettetable01.nif`, not the
+/// menu's [observed: FalloutNV.esm ACTI `RouletteTableUltraLuxe`]), within [`TABLE_REACH`]
+/// of the reference whose script asked (the activated table), else of the player. None
+/// when there is none (the menu then draws its table alone).
+pub fn world_table(sim: &SimState, play: Option<&crate::PlayWorld>, asked: Option<FormId>, model: Option<&str>, game: &str) -> Option<FormId> {
+    let play = play?;
+    let model = model.unwrap_or("");
+    let pose = |id: FormId| sim.world.peek(id).map(|r| (r.pos, r.cell)).or_else(|| sim.refs.get(id).map(|r| (r.pos, r.stored_in)));
+    let (from, cell) = asked.and_then(pose).filter(|p| p.1.is_some()).or_else(|| pose(FormId::PLAYER_REF))?;
+    let near = |p: [f32; 3]| (0..3).map(|i| (p[i] - from[i]).powi(2)).sum::<f32>().sqrt();
+    let mut best: Option<(f32, FormId)> = None;
+    for id in sim.refs.by_cell.get(&cell?).into_iter().flatten() {
+        if !sim.present(id.0) {
+            continue;
+        }
+        let Some((p, _)) = pose(*id) else { continue };
+        let d = near(p);
+        if d > TABLE_REACH || best.is_some_and(|b| b.0 <= d) {
+            continue;
+        }
+        let Some(base) = sim.world.peek(*id).map(|r| r.base).or_else(|| sim.base_of(id.0)) else { continue };
+        if crate::dropped::model_path(&play.0, base, 0).is_some_and(|m| same_model(&m, model) || table_model(&m, game)) {
+            best = Some((d, *id));
+        }
+    }
+    best.map(|b| b.1)
+}
+
+/// The table references standing where `table` does (within [`TWIN_REACH`], itself first):
+/// a casino can place a static table under the activator [observed: FalloutNV.esm
+/// `VVBlackjackTableSTATIC` 0x00162079 at Vikki and Vance's 0x000A58D6]; all are hidden
+/// while the menu's table stands in for them.
+pub fn table_twins(sim: &SimState, play: Option<&crate::PlayWorld>, table: FormId, game: &str) -> Vec<FormId> {
+    let mut out = vec![table];
+    let Some(play) = play else { return out };
+    let pose = |id: FormId| sim.world.peek(id).map(|r| (r.pos, r.cell)).or_else(|| sim.refs.get(id).map(|r| (r.pos, r.stored_in)));
+    let Some((at, Some(cell))) = pose(table) else { return out };
+    for id in sim.refs.by_cell.get(&cell).into_iter().flatten() {
+        let Some((p, _)) = pose(*id).filter(|_| *id != table) else { continue };
+        if (0..3).map(|i| (p[i] - at[i]).powi(2)).sum::<f32>().sqrt() > TWIN_REACH {
+            continue;
+        }
+        let Some(base) = sim.world.peek(*id).map(|r| r.base).or_else(|| sim.base_of(id.0)) else { continue };
+        if crate::dropped::model_path(&play.0, base, 0).is_some_and(|m| table_model(&m, game)) {
+            out.push(*id);
+        }
+    }
+    out
+}
+
+/// Whether a world model is a table of `game`: its path names the game and a table; a
+/// blackjack table may be a card table [observed: FalloutNV.esm ACTI
+/// `BlackjackTableUltraLuxe`: `clutter\casino\CardTable01.NIF`].
+pub fn table_model(path: &str, game: &str) -> bool {
+    let m = path.to_ascii_lowercase();
+    m.contains("table") && (m.contains(game) || (game == "blackjack" && m.contains("cardtable")))
+}
+
+/// How near another table reference must stand to be the same table, game units [design].
+pub const TWIN_REACH: f32 = 30.0;
+/// How near the table an actor stands to be in the menu camera's way, game units: the
+/// croupier behind the wheel, players leaning on the rail [design: the table's camera
+/// flies low over the felt and the wheel; an Ultra-Luxe croupier's arm filled the left of
+/// the view, 2026-11-04].
+pub const STAFF_REACH: f32 = 160.0;
+
+/// What stands at a table (not the table, not the player): the actors and the furniture
+/// (stools, chairs) the menu's camera, low over the felt, would look through while the
+/// table is drawn in the world; the engine keeps the small ones and the actors [design].
+pub fn table_staff(sim: &SimState, table: FormId) -> Vec<FormId> {
+    let pose = |id: FormId| sim.world.peek(id).map(|r| (r.pos, r.cell)).or_else(|| sim.refs.get(id).map(|r| (r.pos, r.stored_in)));
+    let Some((at, Some(cell))) = pose(table) else { return Vec::new() };
+    sim.refs
+        .by_cell
+        .get(&cell)
+        .into_iter()
+        .flatten()
+        .copied()
+        .filter(|id| *id != FormId::PLAYER_REF && *id != table)
+        .filter(|id| pose(*id).is_some_and(|(p, _)| (0..3).map(|i| (p[i] - at[i]).powi(2)).sum::<f32>().sqrt() <= STAFF_REACH))
+        .collect()
 }
 
 /// The keys.
@@ -705,6 +818,7 @@ pub fn report_progress_fixture(step: usize) -> RouletteScreen {
         banned: false,
         forced: None,
         rng: ChaCha8Rng::seed_from_u64(step as u64),
+        table_ref: None,
     }))
 }
 

@@ -39,7 +39,7 @@ GAME, TOOL = "game", "tool"
 PLATFORMS = ("linux", "windows", "macos")  # what a scenario's `platforms` may name
 SCENARIO_KEYS = {
     "name", "kind", "source", "areas", "paths", "args", "run_seconds", "env", "launch", "offset",
-    "expect", "expect_file", "order", "forbid", "manual", "requires", "platforms", "commands", "exit", "note",
+    "expect", "expect_file", "order", "forbid", "manual", "requires", "data_files", "platforms", "commands", "exit", "note",
     "timeout", "ends", "front", "serve", "messages",
 }
 NO_MESSAGES = "--no-messages"  # added to every `--play` game scenario without `messages = true`
@@ -76,7 +76,8 @@ class Scenario:
     order: list[list[Expect]] = field(default_factory=list)
     forbid: list[Expect] = field(default_factory=list)
     manual: str = ""  # what a person must still compare by hand (printed, not checked)
-    requires: list[str] = field(default_factory=list)  # env vars needed (else skipped)
+    requires: list[str] = field(default_factory=list)  # env vars needed, or with "!" needed unset (else skipped)
+    data_files: list[str] = field(default_factory=list)  # files the Data folder must hold (else skipped)
     platforms: list[str] = field(default_factory=list)  # systems it runs on (empty: any)
     commands: list[list[str]] = field(default_factory=list)  # tool scenarios: fnvtool arguments
     exit: int = 0
@@ -174,6 +175,7 @@ def parse_scenario(d: dict, base: Path | None = None) -> Scenario:
     s.ends = str(d.get("ends", s.ends))
     s.offset = float(d.get("offset", 0))
     s.requires = list(d.get("requires", []))
+    s.data_files = [str(f) for f in d.get("data_files", [])]
     s.platforms = list(d.get("platforms", []))
     bad = [p for p in s.platforms if p not in PLATFORMS]
     if bad:

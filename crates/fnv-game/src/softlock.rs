@@ -25,7 +25,11 @@
 //!
 //! The clock is the caller's: seconds in which the game ran (not the pause menu, not a
 //! loading screen). One finding per hold; it is armed again when anything of the hold
-//! changes.
+//! changes. A `controls_held` finding is made once until the player is free again (the
+//! movement controls back and not restrained): a story event or a menu part way through
+//! one hold starts the wait again but makes no second finding for it, so a DLC's load
+//! message box answered while the controls stay off is not a second soft lock [design,
+//! #3676].
 
 use crate::game::Game;
 use crate::trace::EventKind;
@@ -190,6 +194,8 @@ pub struct Watchdog {
     hold: Option<Hold>,
     held: f64,
     fired: bool,
+    /// A `controls_held` finding was made and the player has not been free since.
+    controls_reported: bool,
 }
 
 impl Watchdog {
@@ -200,6 +206,9 @@ impl Watchdog {
     /// One frame of `dt` seconds in which the game ran. A finding once per hold, when it
     /// has lasted its limit.
     pub fn step(&mut self, g: &Game, dt: f64, outside: Outside) -> Option<Finding> {
+        if g.is_dead(FormId::PLAYER_REF) || !(g.controls_locked()[0] || player_restrained(g)) {
+            self.controls_reported = false;
+        }
         let now = hold(g, outside);
         if now != self.hold {
             (self.hold, self.held, self.fired) = (now, 0.0, false);
@@ -211,6 +220,12 @@ impl Watchdog {
             return None;
         }
         self.fired = true;
+        if kind == Kind::ControlsHeld {
+            if self.controls_reported {
+                return None;
+            }
+            self.controls_reported = true;
+        }
         Some(Finding { kind, seconds: self.held, text: describe(g, kind) })
     }
 }

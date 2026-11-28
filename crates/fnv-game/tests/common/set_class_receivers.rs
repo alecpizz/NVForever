@@ -123,13 +123,12 @@ fn nonactor_and_unknown_receivers_do_not_receive_class_overrides() {
     // Integer-token literals saturate at i32::MAX (vm::literal). A decimal point
     // preserves this unknown positive FormID for the receiver control below.
     assert_eq!(query(&mut g, "let r := 3735928559.0\nSetFunctionValue r", Some(NPC_REF)), XVal::Ref(0xDEAD_BEEF));
-    // These receivers reach the host: none is an empty/non-form VM error. Keep the
-    // reachable nonactor boundary independent of the refusal controls below.
+    // Non-actor and unknown receivers with a valid CLAS argument continue safely without
+    // mutating any base (w4g_05_isactordetected_and_setclass_invalid).
     for body in [
         "MiscRef.SetClass ClassB",
         "TestMisc.SetClass ClassB",
         "let r := 3735928559.0\nr.SetClass ClassB",
-        "NpcRef.SetClass TestMisc",
     ] {
         assert_eq!(query(&mut g, &format!("{body}\nSetFunctionValue 91"), Some(NPC_REF)), XVal::Num(91.0), "continues: {body}");
         assert!(g.forms.classes.is_empty(), "invalid SetClass must not mutate any base: {body}");
@@ -143,23 +142,43 @@ fn nonactor_and_unknown_receivers_do_not_receive_class_overrides() {
 }
 
 #[test]
-fn explicit_empty_and_nonform_receivers_preserve_vm_refusal_and_class_state() {
+fn explicit_null_receivers_continue_and_invalid_class_args_abort_in_strict_and_default_modes() {
     let f = fixture();
-    let mut g = game(&f, 1);
-    query(&mut g, "NpcRef.SetClass ClassB", None);
-    let before = g.forms.classes.clone();
-    assert_eq!(g.services(NPC_REF), services::ARMOR);
-    assert_eq!(query(&mut g, "let n := 4294967296.0\nSetFunctionValue n", Some(NPC_REF)), XVal::Num(4_294_967_296.0));
-    for body in [
-        "r.SetClass ClassA",
-        "let n := 0.5\nn.SetClass ClassA",
-        "let n := -1\nn.SetClass ClassA",
-        "let n := 4294967296.0\nn.SetClass ClassA",
-    ] {
-        assert_eq!(try_query(&mut g, &format!("{body}\nSetFunctionValue 91"), Some(NPC_REF)), Err("setclass called on no reference".into()), "VM refusal: {body}");
-        assert_eq!(g.forms.classes, before, "refusal must not mutate any base: {body}");
-        assert_eq!(g.services(NPC_REF), services::ARMOR, "refusal must not fall back to implicit self: {body}");
-        assert_eq!(g.services(SIBLING_REF), services::ARMOR, "shared base state remains intact: {body}");
+    for strict in [true, false] {
+        let world = World::new(&f.forms, &f.refs, SimConfig::default());
+        let mut g = Game::new(&f.data, world, GameConfig { strict, ..Default::default() });
+        g.player.level = Some(1);
+        g.player_entered(Some(FormId(CELL)));
+        query(&mut g, "NpcRef.SetClass ClassB", None);
+        let before = g.forms.classes.clone();
+        assert_eq!(g.services(NPC_REF), services::ARMOR);
+        assert_eq!(query(&mut g, "let n := 4294967296.0\nSetFunctionValue n", Some(NPC_REF)), XVal::Num(4_294_967_296.0));
+        // Null/non-form receivers continue safely without falling back to implicit self (w4g_05).
+        for body in [
+            "r.SetClass ClassA",
+            "let n := 0.5\nn.SetClass ClassA",
+            "let n := -1\nn.SetClass ClassA",
+            "let n := 4294967296.0\nn.SetClass ClassA",
+        ] {
+            assert_eq!(query(&mut g, &format!("{body}\nSetFunctionValue 91"), Some(NPC_REF)), XVal::Num(91.0), "null receiver continues (strict={strict}): {body}");
+            assert_eq!(g.forms.classes, before, "null receiver must not mutate any base: {body}");
+            assert_eq!(g.services(NPC_REF), services::ARMOR, "null receiver must not fall back to implicit self: {body}");
+            assert_eq!(g.services(SIBLING_REF), services::ARMOR, "shared base state remains intact: {body}");
+        }
+        // Non-CLAS form argument and null class argument BOTH abort the script at runtime
+        // in both strict and default modes, leaving the actor's class unchanged (w4g_05).
+        for body in [
+            "NpcRef.SetClass TestMisc",
+            "NpcRef.SetClass r",
+        ] {
+            assert_eq!(
+                try_query(&mut g, &format!("{body}\nSetFunctionValue 91"), Some(NPC_REF)),
+                Err("setclass requires a CLAS form".into()),
+                "invalid class arg aborts (strict={strict}): {body}",
+            );
+            assert_eq!(g.forms.classes, before, "aborted call must not mutate any base: {body}");
+            assert_eq!(g.services(NPC_REF), services::ARMOR, "aborted call leaves services unchanged: {body}");
+        }
     }
 }
 
@@ -208,7 +227,9 @@ fn source_class_change_still_drives_services_after_json_restore() {
     }
     assert_eq!(class_of(&mut restored, "LeveledNpcRef"), XVal::Ref(CLASS_B));
     let before = restored.forms.classes.clone();
-    assert_eq!(try_query(&mut restored, "r.SetClass ClassA", Some(NPC_REF)), Err("setclass called on no reference".into()));
-    assert_eq!(restored.forms.classes, before, "refusal after load preserves all class overrides");
-    assert_eq!(restored.services(NPC_REF), services::ARMOR, "explicit null is still refused after load");
+    assert_eq!(query(&mut restored, "r.SetClass ClassA\nSetFunctionValue 91", Some(NPC_REF)), XVal::Num(91.0));
+    assert_eq!(try_query(&mut restored, "NpcRef.SetClass TestMisc\nSetFunctionValue 91", Some(NPC_REF)), Err("setclass requires a CLAS form".into()));
+    assert_eq!(try_query(&mut restored, "NpcRef.SetClass r\nSetFunctionValue 91", Some(NPC_REF)), Err("setclass requires a CLAS form".into()));
+    assert_eq!(restored.forms.classes, before, "null receiver and invalid class aborts after load preserve all class overrides");
+    assert_eq!(restored.services(NPC_REF), services::ARMOR, "explicit null does not fall back to self after load");
 }

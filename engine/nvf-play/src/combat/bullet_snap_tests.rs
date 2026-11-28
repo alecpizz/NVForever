@@ -151,6 +151,7 @@ fn combat_snap_app(snap: BulletSnap) -> App {
         spent_rng: SplitMix(4),
         blood_rng: SplitMix(6),
         blood_chance_logged: false,
+        localized_dt_dr: false,
     };
     let mut app = App::new();
     app.insert_resource(SimState { forms: sim_forms, refs: sim_refs, world: World::new(sim_forms, sim_refs, SimConfig::default()) })

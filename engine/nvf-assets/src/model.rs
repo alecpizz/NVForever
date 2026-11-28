@@ -14,7 +14,7 @@ use crate::anim_play::{Clip, MaterialTarget, MaterialTrack, OwnCycle, Playing};
 use crate::material_anim::{MaterialSlot, RigMaterials};
 use crate::data::GameData;
 use crate::nif_material::NifMaterial;
-use crate::nif_spawn::{affine, build_mesh, is_editor_marker, shaded_model, shape_material_with, shape_props, shape_skin, to_bevy, StoreTextures, TextureSource};
+use crate::nif_spawn::{affine, is_editor_marker, shaded_model, shape_material_with, shape_props, to_bevy, AdmittedShape, NumericRejections, StoreTextures, TextureSource};
 use crate::texture::{worker_texture, worker_texture_exact, TextureCache, TextureSnapshot, TextureUsage, WorkerTextures};
 use bevy::asset::AssetHandleProvider;
 use bevy::image::CompressedImageFormats;
@@ -35,6 +35,7 @@ use std::sync::Arc;
 
 pub use fnv_world::alt_textures::AltTexture;
 mod attachment;
+pub mod geometry;
 pub use attachment::ModelObject;
 
 #[derive(Debug, Clone)]
@@ -70,6 +71,9 @@ pub struct PreparedShape {
     /// The diffuse texture the shape names when it could not be loaded (as the NIF names
     /// it), so its material has no base texture: nvforever's distant LOD logs it (#3096).
     pub missing_diffuse: Option<String>,
+    /// The number of its block in the file, the same in every variant of the model
+    /// ([`geometry`]).
+    pub block: u32,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -338,6 +342,8 @@ pub struct RigShape {
     pub animated: bool,
     /// [design, #2685] Manager morphs bound by sequence name, sampled per instance.
     pub morph: Option<Arc<crate::morph::SequenceMorph>>,
+    /// As [`PreparedShape::block`].
+    pub block: u32,
 }
 
 impl RigShape {
@@ -1823,6 +1829,7 @@ fn prepare_unguarded(sink: &mut impl ModelSink, path: &str, keep_cpu: bool, firs
     // Shapes without any property beside shaded ones: editor geometry (`Props::is_helper`).
     let shaded = shaded_model(&file, &dec);
     let mut editor_shapes: Vec<String> = Vec::new();
+    let mut rejected = NumericRejections::default();
     // Shapes drawn with a window environment map, and how (nif.md §6 "Window glass and
     // environment maps").
     let mut env_shapes: Vec<String> = Vec::new();
@@ -1883,7 +1890,7 @@ fn prepare_unguarded(sink: &mut impl ModelSink, path: &str, keep_cpu: bool, firs
             first_textures += props.use_first_person_textures(|p| game.vfs.exists(p));
             first_worn += props.first_person_texture_count();
         }
-        let Some((mut mesh, tris, stored)) = build_mesh(data) else { continue };
+        let Some(AdmittedShape { mut mesh, triangles: tris, skin, stored }) = rejected.admit(o.block, &dec, shape, data) else { continue };
         let managed_morph = managed_morphs.get(&o.block).filter(|m| m.num_vertices() == mesh.count_vertices()).cloned();
         if managed_morph.is_some() {
             // [design, #2685] Keep the source available for private rig mesh copies.
@@ -1904,6 +1911,9 @@ fn prepare_unguarded(sink: &mut impl ModelSink, path: &str, keep_cpu: bool, firs
         });
         // The normal map's tangents: those the file stores (crate::tangents).
         let (material, missing_diffuse) = shape_material_with(&props, &mut mesh, sink, crate::tangents::Tangents::Stored(&stored));
+        if !rejected.accept_mesh(o.block, &mesh) {
+            continue;
+        }
         if material.extension.env.x > 0.0 && material.extension.env_how.z > 0.5 {
             let over = if matches!(material.base.alpha_mode, AlphaMode::Premultiplied) { "over the blend" } else { "added" };
             // Scaled by light only under a debug switch (env_map.rs `LIGHT_WINDOW`); the
@@ -1927,7 +1937,6 @@ fn prepare_unguarded(sink: &mut impl ModelSink, path: &str, keep_cpu: bool, firs
                 });
             }
         }
-        let skin = shape_skin(&dec, shape, mesh.count_vertices());
         if skin.is_some() {
             out.skinned += 1;
         }
@@ -1968,7 +1977,7 @@ fn prepare_unguarded(sink: &mut impl ModelSink, path: &str, keep_cpu: bool, firs
                 let animated = animated_shapes.contains(&shape_name);
                 let (e, m) = props.emissive_parts();
                 let look = (shape_name.clone(), e, m, props.alpha_part());
-                r.shapes.push(RigShape { node, mesh, material: material.clone(), skin, look, refraction: props.refraction_part(), animated, morph: managed_morph });
+                r.shapes.push(RigShape { node, mesh, material: material.clone(), skin, look, refraction: props.refraction_part(), animated, morph: managed_morph, block: o.block as u32 });
             }
         }
         // A shape only a visibility track shows is the rig's alone.
@@ -1992,6 +2001,7 @@ fn prepare_unguarded(sink: &mut impl ModelSink, path: &str, keep_cpu: bool, firs
                 crate::material_anim::Look::stored(e, m, props.alpha_part())
             },
             missing_diffuse,
+            block: o.block as u32,
         });
         out.triangles += tris;
     }
@@ -2011,6 +2021,7 @@ fn prepare_unguarded(sink: &mut impl ModelSink, path: &str, keep_cpu: bool, firs
         info!("{path}: texture swap: {} entr(ies), {} shape(s) retextured: {}", swaps.len(), swapped.len(), swapped.join(", "));
     }
     if attachments { out.objects = attachment::objects(&objects, &dec, &shape_objects, rig.as_ref().map(|(_, index)| index)); }
+    rejected.report(path);
     out.rig = rig.map(|(r, _)| r);
     Ok(out)
 }
@@ -2118,6 +2129,7 @@ mod tests {
             external_emittance: false,
             look: crate::material_anim::Look::stored([0.0; 3], 1.0, 1.0),
             missing_diffuse: None,
+            block: 0,
         };
         let mut cache = ModelCache::default();
         cache.map.insert("a.nif".into(), Some(Arc::new(PreparedModel { shapes: vec![shape.clone()], ..default() })));

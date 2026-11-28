@@ -1,0 +1,23 @@
+[package]
+name = "nvf-rtgi-live"
+description = "A cell's bounce light solved on the GPU with ray queries, held against nvf-rtgi's CPU solve"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# Bevy-independent: the device and the queue come from outside. wgpu and bytemuck are in the lock already.
+[dependencies]
+nvf-rtgi.workspace = true
+wgpu = { version = "30", default-features = false, features = ["std", "vulkan", "wgsl"] }
+bytemuck = "1"
+
+# The kernel's parse and validation; the version engine/vendor/naga patches.
+[dev-dependencies]
+naga = { version = "=30.0.1", features = ["wgsl-in", "spv-out"] }
+# The check's logger (examples/rtgi-live-check).
+log = "0.4"
+# Read room dumps and write the runner's summary.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+texpresso.workspace = true

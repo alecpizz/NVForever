@@ -348,14 +348,18 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
         }
         // ---- messages [documented: the pages; flags 1 Is Message Box, 2 Auto-display].
         "getmessageflags" => XVal::Num(of_sig(g, form(args, 0), b"MESG").map_or(0, |m| g.message_flags(m)) as f64),
+        // Values > 3 (`7`) are ignored without mutating DNAM [observed:
+        // `w6d2p3_47_jip6_messages_creatures_and_bptd`]; `< 0` (`-1`) rejection and `.trunc()`
+        // are [hypothesis], and ignoring omitted/non-finite args is [design].
         "setmessageflags" => {
-            if let Some(m) = of_sig(g, form(args, 0), b"MESG") {
-                g.field_overrides.insert((m, "DNAM/".into()), XVal::Num(f64::from(num(args, 1, 0.0).max(0.0) as u32 & 3)));
+            let v = num(args, 1, f64::NAN).trunc();
+            if let Some(m) = of_sig(g, form(args, 0), b"MESG").filter(|_| (0.0..=3.0).contains(&v)) {
+                g.field_overrides.insert((m, "DNAM/".into()), XVal::Num(v));
             }
             zero
         }
         // TNAM is a u32 of seconds (xEdit MESG): a negative value, one past it, NaN or
-        // infinity is not set [hypothesis].
+        // infinity is not set (see docs/spec-notes/jip-records-6.md §3).
         "setmessagedisplaytime" => {
             let v = num(args, 1, f64::NAN).trunc();
             if let Some(m) = of_sig(g, form(args, 0), b"MESG").filter(|_| (0.0..=f64::from(u32::MAX)).contains(&v)) {

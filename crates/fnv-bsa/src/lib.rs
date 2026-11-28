@@ -619,6 +619,19 @@ impl StoredBlock {
         self.decode_checked().map(|(d, _)| d)
     }
 
+    /// How long the decoded contents say they are, without decoding: the size declared before
+    /// a compressed stream ([`StoredBlock::decode`] gives no more), the stored bytes of an
+    /// uncompressed one. `None` for a block too short to say, which does not decode either.
+    pub fn contents_len(&self) -> Option<usize> {
+        let name = if self.embedded_name { 1 + usize::from(*self.raw.first()?) } else { 0 };
+        let body = self.raw.get(name..)?;
+        if self.compressed {
+            Some(u32::from_le_bytes(*body.first_chunk()?) as usize)
+        } else {
+            Some(body.len())
+        }
+    }
+
     /// Like [`StoredBlock::decode`], also returning the zlib trailer status.
     pub fn decode_checked(&self) -> Result<(Vec<u8>, fnv_inflate::Trailer), BsaError> {
         decode_block_checked(&self.raw, self.compressed, self.embedded_name, &fnv_util::text::decode(&self.name))

@@ -1,0 +1,70 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6d2-set-activator-sound-null-noop",
+  "description": "Wave 6D-2 read-only clean-room JIP LN 57.30 probe for SetActivatorSoundActivate (SOUN validation and explicit 0 no-op).",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "jip_nvse": "57.30"
+  },
+  "batches": [
+    {
+      "id": "w6d2_set_activator_sound_null_noop",
+      "title": "SetActivatorSoundActivate SOUN validation and explicit 0 no-op",
+      "extender": "jip_nvse",
+      "required_plugins": [
+        "jip_nvse.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6d2p5_02_activator_sound_null_noop",
+          "bucket": "A",
+          "extender": "JIP LN 57.30",
+          "required_plugins": [
+            "jip_nvse.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-lutana.md",
+          "spec_line": 102,
+          "functions_tested": [
+            "GetActivatorSoundActivate",
+            "SetActivatorSoundActivate"
+          ],
+          "claim": "Verify SetActivatorSoundActivate rejects non-SOUN and treats explicit null 0 as no-op.",
+          "expected": "set=1, badEqS=1, nullZ=0.",
+          "script_lines": [
+            "ref rAct = GetFormFromMod \"FalloutNV.esm\" \"81932\"",
+            "ref rSnd = GetFormFromMod \"FalloutNV.esm\" \"174325\"",
+            "ref rStim = GetFormFromMod \"FalloutNV.esm\" \"15169\"",
+            "ref rNull = 0",
+            "ref sa0 = GetActivatorSoundActivate rAct",
+            "SetActivatorSoundActivate rSnd rAct",
+            "ref saSet = GetActivatorSoundActivate rAct",
+            "SetActivatorSoundActivate rStim rAct",
+            "ref saBad = GetActivatorSoundActivate rAct",
+            "SetActivatorSoundActivate rNull rAct",
+            "ref saNull = GetActivatorSoundActivate rAct",
+            "SetActivatorSoundActivate sa0 rAct",
+            "PrintToConsole \"PROBE|w6d2p5_02_activator_sound_null_noop|set=%g,badEqS=%g,badZ=%g,nullZ=%g\" (saSet == rSnd) (saBad == rSnd) (saBad == 0) (saNull == 0)"
+          ]
+        }
+      ]
+    }
+  ]
+}

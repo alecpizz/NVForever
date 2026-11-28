@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Original NVForever geometry; Precise line family. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="currentColor" color="#ffffff" fill-rule="evenodd" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+  <title>Pip-Boy</title>
+  <path d="M 11 9 L 11 4 L 21 4 L 21 9 M 11 23 L 11 28 L 21 28 L 21 23 M 8 9 L 24 9 Q 26 9 26 11 L 26 21 Q 26 23 24 23 L 8 23 Q 6 23 6 21 L 6 11 Q 6 9 8 9 Z M 10 13 L 21 13 M 10 17 L 17 17 M 10 20 L 20 20"/>
+</svg>

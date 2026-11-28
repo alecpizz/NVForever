@@ -431,9 +431,10 @@ pub fn layout(view: &MenuView, first: usize, selected: usize, width: f32, hint: 
 const BODY_FONT: &str = "textures\\fonts\\glow_monofonto_vl_dialogs.fnt";
 const NAME_FONT: &str = "textures\\fonts\\baked-in_monofonto_large.fnt";
 
-struct Kit {
-    body: Face,
-    name: Face,
+#[derive(Clone)]
+pub(crate) struct Kit {
+    pub(crate) body: Face,
+    pub(crate) name: Face,
     band: Option<Picture>,
     fade_down: Option<Picture>,
     fade_up: Option<Picture>,
@@ -442,7 +443,7 @@ struct Kit {
     marker: Option<Picture>,
 }
 
-fn load_kit(data: Option<&GameData>, images: &mut Assets<Image>, bc: bool) -> Kit {
+pub(crate) fn load_kit(data: Option<&GameData>, images: &mut Assets<Image>, bc: bool) -> Kit {
     let mut pictures = Pictures::load(data);
     let mut picture = |path: &str| pictures.picture(path, data, images, bc);
     let band = picture("interface\\shared\\background\\solid_black.dds");
@@ -469,6 +470,7 @@ pub struct DialogueMenuPlugin;
 
 impl Plugin for DialogueMenuPlugin {
     fn build(&self, app: &mut App) {
+        crate::dialogue_touch::install(app);
         app.init_resource::<DialogueMenu>().init_resource::<GoodbyeHint>().add_systems(Update, draw.in_set(crate::PlaySet::Ui).in_set(DrawMenu));
         crate::settings::add_setting(
             app,
@@ -493,6 +495,9 @@ pub struct DrawMenu;
 #[derive(Component)]
 struct MenuRoot;
 
+#[derive(Component)]
+pub(crate) struct TouchNativeRoot;
+
 /// The frame of a choice, shown while it is the selected one.
 #[derive(Component)]
 struct Frame(usize);
@@ -507,11 +512,24 @@ fn image(p: Option<&Picture>, color: Color) -> Option<ImageNode> {
 }
 
 fn spawn_menu(commands: &mut Commands, view: &MenuView, l: &Layout, kit: &Kit, selected: usize, on_screen: Option<&ListId>, glyphs: &crate::pad::PadGlyphs) {
+    spawn_menu_on(commands, view, l, kit, selected, on_screen, glyphs, false, None, None);
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn spawn_touch_menu(commands: &mut Commands, view: &MenuView, l: &Layout, kit: &Kit, selected: usize, on_screen: Option<&ListId>, glyphs: &crate::pad::PadGlyphs, confirm: Option<(&str,f32)>, camera: Entity) {
+    spawn_menu_on(commands, view, l, kit, selected, on_screen, glyphs, true, confirm, Some(camera));
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_menu_on(commands: &mut Commands, view: &MenuView, l: &Layout, kit: &Kit, selected: usize, on_screen: Option<&ListId>, glyphs: &crate::pad::PadGlyphs, touch: bool, confirm: Option<(&str,f32)>, camera: Option<Entity>) {
     let screen = Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() };
     // At the UI scale the menu keeps to the view's bottom, in its middle (#1631).
-    let screen = crate::interface::framed_root(screen, crate::interface::BOTTOM_MIDDLE);
+    let screen = if touch { screen } else { crate::interface::framed_root(screen, crate::interface::BOTTOM_MIDDLE) };
     let bright = amber(255.0);
-    commands.spawn((MenuRoot, screen, GlobalZIndex(90))).with_children(|s| {
+    let mut root = commands.spawn((screen, GlobalZIndex(if touch {2400} else {90})));
+    if touch {root.insert((TouchNativeRoot,crate::dialogue_touch::PaletteRoot));} else {root.insert(MenuRoot);}
+    if let Some(camera)=camera {root.insert(UiTargetCamera(camera));}
+    root.with_children(|s| {
         if let Some([x, y, w, h]) = l.band {
             let shade = Color::srgba(0.0, 0.0, 0.0, SHADE);
             match image(kit.band.as_ref(), shade) {
@@ -535,6 +553,11 @@ fn spawn_menu(commands: &mut Commands, view: &MenuView, l: &Layout, kit: &Kit, s
         for t in &l.text {
             set_line(s, &kit.body, &t.line, t.x, t.base, bright);
         }
+        if touch && view.choices.is_empty() {
+            if let Some([x,y,w,h]) = l.band {
+                s.spawn((Button, crate::dialogue_touch::native_skip(on_screen.cloned()), at(x,y,w,h)));
+            }
+        }
         let Some(list) = &l.list else { return };
         // The brackets: a line with an upright at each end that fades out, down from the
         // top one and up from the bottom one.
@@ -556,15 +579,33 @@ fn spawn_menu(commands: &mut Commands, view: &MenuView, l: &Layout, kit: &Kit, s
                 };
             }
         }
+        if let Some((caption,minimum)) = confirm {
+            let [x,_,w,_] = list.area;
+            let y = list.bottom_line + 15.0;
+            let height = minimum.max(kit.body.font.size * 1.6);
+            s.spawn((Button,crate::dialogue_touch::native_confirm(on_screen.cloned()),
+                at(x,y,w,height),BackgroundColor(amber(128.0).with_alpha(0.1))))
+                .with_children(|p| {
+                    for (index,line) in kit.body.font.lines(caption,Some(w-40.0)).iter().enumerate() {
+                        set_line(p,&kit.body,line,20.0,crate::interface::line_base(&kit.body)
+                            + index as f32 * kit.body.font.size * 1.2,bright);
+                    }
+                });
+        }
         // The choices, cut at the brackets' lines.
         let clip_top = list.top_line + THICK;
         let mut window = at(0.0, clip_top, 0.0, list.bottom_line - clip_top);
-        (window.width, window.overflow) = (Val::Percent(100.0), Overflow::clip());
-        s.spawn(window).with_children(|w| {
+        (window.width, window.overflow) = (Val::Percent(100.0),
+            if touch { Overflow::scroll_y() } else { Overflow::clip() });
+        let mut clip = s.spawn(window);
+        if touch {clip.insert(crate::dialogue_touch::native_viewport());}
+        clip.with_children(|w| {
             for c in &list.choices {
                 let [x, y, cw, ch] = c.area;
                 let row = &view.choices[c.index];
-                w.spawn((Button, ChoiceButton(c.index, on_screen.cloned()), at(x, y - clip_top, cw, ch))).with_children(|r| {
+                let mut choice = w.spawn((Button, ChoiceButton(c.index, on_screen.cloned()), at(x, y - clip_top, cw, ch)));
+                if touch {choice.insert(crate::dialogue_touch::native_choice(c.index,on_screen.cloned(),row.short));}
+                choice.with_children(|r| {
                     // [documented: the list's highlight box] One unit short of the row; a
                     // faint fill and a line around it, red for a check the player falls
                     // short of [observed].
@@ -589,6 +630,7 @@ fn spawn_menu(commands: &mut Commands, view: &MenuView, l: &Layout, kit: &Kit, s
         });
     });
 }
+
 
 /// What the drawn menu was made from: the menu's view, the first choice shown, the width
 /// in units, the "Goodbye hint" switch, the button labels and the current font revision.
@@ -615,7 +657,13 @@ fn draw(
     mut buttons: Query<&mut ChoiceButton>,
     hint: Res<GoodbyeHint>,
     glyphs: Res<crate::pad::PadGlyphs>,
+    touch: Res<crate::dialogue_touch::TouchDialogue>,
 ) {
+    if touch.enabled {
+        for e in &roots { commands.entity(e).despawn(); }
+        *shown = None;
+        return;
+    }
     // Drawn from its file: all of the menu, none of it here (`crate::tiles::dialog_menu`).
     if tiles.is_some_and(|t| t.by_tiles()) {
         for e in &roots {

@@ -39,7 +39,7 @@ use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use fnv_install::reports::Reports;
 use fnv_install::EngineHome;
 use nvf_play::interface::{amber, font_units, u};
-use nvf_play::pause::{FormOver, Paused, ReportEntry};
+use nvf_play::pause::{FormOver, FormTextInput, Paused, ReportEntry};
 use nvf_play::ui_pointer::{Button as UiButton, PointerState};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -251,10 +251,13 @@ fn in_game(paused: Option<&Paused>, script: Option<&nvf_play::script::ScriptStat
     paused.is_some_and(|p| p.0) && script.is_some_and(|s| s.rt.is_some())
 }
 
-fn clear_form_over(mut form: ResMut<Form>, mut over: ResMut<FormOver>) {
+fn clear_form_over(mut form: ResMut<Form>, mut over: ResMut<FormOver>, text_input: Option<ResMut<FormTextInput>>) {
     if form.closing {
         form.closing = false;
         over.set_if_neq(FormOver(false));
+        if let Some(mut text) = text_input {
+            text.set_if_neq(FormTextInput(false));
+        }
     }
 }
 
@@ -283,6 +286,7 @@ fn open(
     mut entry: ResMut<ReportEntry>,
     mut form: ResMut<Form>,
     mut over: ResMut<FormOver>,
+    text_input: Option<ResMut<FormTextInput>>,
     frame: Res<bevy::diagnostic::FrameCount>,
     roots: Query<(Entity, &Visibility), WindowRoots>,
     paused: Option<Res<Paused>>,
@@ -298,6 +302,9 @@ fn open(
     SNAPSHOT_NOW.store(true, Ordering::Relaxed);
     form.reset();
     over.set_if_neq(FormOver(true));
+    if let Some(mut text) = text_input {
+        text.set_if_neq(FormTextInput(true));
+    }
     OPEN.store(true, Ordering::Relaxed);
     form.hidden = roots.iter().filter(|(_, v)| **v != Visibility::Hidden).map(|(e, v)| (e, *v)).collect();
     for (e, _) in &form.hidden {

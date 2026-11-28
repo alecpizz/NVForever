@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Original NVForever geometry; Bold filled family. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="currentColor" stroke="none" color="#ffffff" fill-rule="evenodd" stroke-width="0" stroke-linecap="round" stroke-linejoin="round">
+  <title>Page down</title>
+  <path d="M 4 25 L 28 25 L 28 29 L 4 29 Z M 10 3 L 22 3 L 22 13 L 27 13 L 16 24 L 5 13 L 10 13 Z"/>
+</svg>

@@ -249,7 +249,11 @@ impl RigMaterials {
             }
             // [design, #2557] Keep animating the bound private plain source. Another
             // owner's replacement (e.g. a fade) keeps ownership until it restores us.
-            let publish = source == &slot.handle;
+            // Only re-insert `MeshMaterial3d` when an override (e.g. stealth cloak)
+            // currently shadows `slot.handle`; re-inserting the already-bound handle on
+            // uncloaked meshes dirties `MeshMaterial3d` and triggers unnecessary render
+            // specialization every frame [design].
+            let publish = current.0 != slot.handle && source == &slot.handle;
             let Some(mut m) = drawing.materials.get_mut(&slot.handle) else { continue };
             let unlit = m.base.unlit && !matches!(m.base.alpha_mode, AlphaMode::Multiply);
             if unlit && slot.unlit_base.is_none() {
@@ -289,17 +293,39 @@ pub struct RigMaterialDrawing<'w, 's> {
     materials: ResMut<'w, Assets<NifMaterial>>,
 }
 
-/// Give each newly drawn rig's driven shapes their own copy of their material.
+/// On a mesh wearing a see-through copy of its material that is given back when it ends
+/// (a reference's fade, `nvf_play::fade`): the material given back, and the copy worn. A
+/// rig that binds its shape's material meanwhile copies `source`, not the copy, and puts
+/// its own copy here, so the fade goes on from it and gives it back (#3919: the Hidden
+/// Valley storm, enabled with a fade, copied the fade's copy and was given back the model's
+/// material, its scroll going on in a material nothing drew).
+#[derive(Component, Debug, Clone)]
+pub struct HeldCopy {
+    pub source: Handle<NifMaterial>,
+    pub copy: Handle<NifMaterial>,
+}
+
+/// Give each newly drawn rig's driven shapes their own copy of their material. A shape
+/// wearing a [`HeldCopy`] keeps it: the rig's own copy is made from its source and becomes
+/// that source.
 pub fn bind_rig_materials(
     mut rigs: Query<&mut RigMaterials, Added<RigMaterials>>,
+    mut held: Query<&mut HeldCopy>,
     mut drawing: RigMaterialDrawing,
 ) {
     for mut rig in &mut rigs {
         for slot in &mut rig.slots {
             let Ok((current, override_)) = drawing.shapes.get(slot.entity) else { continue };
-            let Some(copy) = drawing.materials.get(plain_material(&current.0, override_)).cloned() else { continue };
+            let mut held = held.get_mut(slot.entity).ok().filter(|h| h.copy == current.0);
+            let from = held.as_ref().map_or_else(|| plain_material(&current.0, override_).clone(), |h| h.source.clone());
+            let Some(copy) = drawing.materials.get(&from).cloned() else { continue };
             let own = drawing.materials.add(copy);
-            drawing.commands.entity(slot.entity).insert(MeshMaterial3d(own.clone()));
+            match held.as_mut() {
+                Some(h) => h.source = own.clone(),
+                None => {
+                    drawing.commands.entity(slot.entity).insert(MeshMaterial3d(own.clone()));
+                }
+            }
             slot.handle = own;
             slot.own = true;
         }
@@ -377,6 +403,10 @@ pub fn animator_material_values<'a>(animator: &'a Animator, out: &mut Vec<(&'a s
         }
     }
 }
+
+#[cfg(test)]
+#[path = "material_anim_publish_tests.rs"]
+mod material_anim_publish_tests;
 
 #[cfg(test)]
 mod tests {

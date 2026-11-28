@@ -21,6 +21,11 @@
 //!
 //! - `NVF_PLAY_TEST_SHOT_FLATNESS=1`: each of those shots also logs how much of the view is
 //!   one colour ([`one_colour_percent`]), for a scenario to check without reading the file.
+//! - `NVF_PLAY_TEST_SHOT_DIFF=1`: each of those shots also logs how far it is from the one before
+//!   and from the one before that ([`picture_difference`]), with the tolerance that gives another
+//!   pair as far apart in time ([`difference_tolerance`]), for a scenario that switches something
+//!   between shots of one still view. Only in tests, debug builds and builds with the `dev-aids`
+//!   feature (nvforever dev_aids.rs).
 //! - `NVF_PLAY_TEST_SHOTS=<seconds>[:<path.png>][,...]`: save a screenshot at each time,
 //!   to the path given, else as `play-<seconds>s.png` in `NVF_PLAY_TEST_SHOT_DIR`
 //!   (default: the current folder).
@@ -109,7 +114,12 @@
 //!   of the run under an explicit `NVFOREVER_HOME` and mounted over every other loose layer
 //!   for that run only; the ground pack gives every landscape texture the load order names a
 //!   height-only set (a ridged `_p` from a formula, depth 0.08) for the terrain parallax
-//!   (#3322).
+//!   (#3322), and with `=alpha` a diffuse too: one flat colour a texture, a checkerboard in
+//!   the alpha (#3789); `=alpha-height`: no sets, and a diffuse with the height map in its
+//!   alpha (#3486).
+//! - `NVF_PLAY_TEST_TONE_PRESET=1` (nvforever tone_presets.rs, #4690): the tonemapping
+//!   preset "Smoke Dusk" written into the `Tonemapping` folder of an explicit
+//!   `NVFOREVER_HOME` before the folder is read.
 //! - `NVF_PLAY_TEST_TERRAIN_PARALLAX_AB=<seconds>[:hold][:grazing|head-on][,...]` (nvforever
 //!   terrain_parallax_ab.rs): three screenshots at each time, the Terrain parallax switch
 //!   off, on, off (or left alone with `hold`), optionally from its own pose on a spot of
@@ -152,6 +162,8 @@ use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot, ScreenshotCaptured};
 use fnv_sim::FormId;
 use std::path::{Path, PathBuf};
+#[cfg(any(test, debug_assertions, feature = "dev-aids"))]
+use std::sync::Mutex;
 
 pub mod melee_knockback;
 pub(crate) mod activation_sweep;
@@ -646,6 +658,7 @@ fn keys_and_controls(
         aids.held = Some(m);
     }
     if let Some(m) = aids.held {
+        intent.analog_scale = m.analog_scale;
         (intent.forward, intent.right, intent.walk) = (m.forward, m.right, m.walk);
     }
     let presses = take_due(&mut aids.presses, now);
@@ -787,6 +800,26 @@ fn take_shots(time: crate::pause::AidTime, mut aids: ResMut<Aids>, mut commands:
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let mut shot = commands.spawn(Screenshot::primary_window());
         shot.observe(save_to_disk(path));
+        #[cfg(any(test, debug_assertions, feature = "dev-aids"))]
+        if std::env::var_os("NVF_PLAY_TEST_SHOT_DIFF").is_some() {
+            let name = name.clone();
+            shot.observe(move |ev: On<ScreenshotCaptured>| {
+                let size = ev.image.texture_descriptor.size;
+                let Some(data) = ev.image.data.as_deref() else { return };
+                let shot: Shot = ((size.width, size.height), data.to_vec());
+                let mut last = LAST_SHOTS.lock().expect("the last shots");
+                for ((was, pixels), which) in last.iter().rev().zip(["the shot before", "two shots before"]) {
+                    if *was == shot.0 {
+                        let (levels, changed) = picture_difference(pixels, data, was.0 as usize, was.1 as usize);
+                        info!("test aid: {name}: {levels:.2} levels of 255 from {which} (tolerance {:.2}), {changed:.1} % of the view changed", difference_tolerance(levels));
+                    }
+                }
+                if last.len() == 2 {
+                    last.remove(0);
+                }
+                last.push(shot);
+            });
+        }
         if std::env::var_os("NVF_PLAY_TEST_SHOT_FLATNESS").is_some() {
             shot.observe(move |ev: On<ScreenshotCaptured>| {
                 let size = ev.image.texture_descriptor.size;
@@ -796,6 +829,40 @@ fn take_shots(time: crate::pause::AidTime, mut aids: ResMut<Aids>, mut commands:
             });
         }
     }
+}
+
+/// A shot's size and pixels.
+#[cfg(any(test, debug_assertions, feature = "dev-aids"))]
+type Shot = ((u32, u32), Vec<u8>);
+
+/// The last two shots, the older first (`NVF_PLAY_TEST_SHOT_DIFF`; pictures of the window, kept
+/// while the aid is on).
+#[cfg(any(test, debug_assertions, feature = "dev-aids"))]
+static LAST_SHOTS: Mutex<Vec<Shot>> = Mutex::new(Vec::new());
+
+/// How far a picture may be from one it should equal, where two of the same kind as far apart in
+/// time differ by `levels` [engineering choice: half as much again, and a tenth of a level for a
+/// view that stood still].
+#[cfg(any(test, debug_assertions, feature = "dev-aids"))]
+fn difference_tolerance(levels: f64) -> f64 {
+    1.5 * levels + 0.1
+}
+
+/// Test aid `NVF_PLAY_TEST_SHOT_DIFF`: the mean absolute difference of two pictures of one size
+/// over the view, its lower fifth left out (the HUD), in levels of 255 over the three colour
+/// channels, and the share of its pixels (percent) with a channel that moved by 4 levels or more.
+/// Four bytes a pixel, row by row.
+#[cfg(any(test, debug_assertions, feature = "dev-aids"))]
+fn picture_difference(a: &[u8], b: &[u8], width: usize, height: usize) -> (f64, f64) {
+    let (mut sum, mut changed, mut seen) = (0u64, 0u64, 0u64);
+    for (p, q) in a.as_chunks::<4>().0.iter().zip(b.as_chunks::<4>().0).take(width * (height * 4 / 5)) {
+        let d = [0, 1, 2].map(|i| p[i].abs_diff(q[i]));
+        sum += d.iter().map(|&d| u64::from(d)).sum::<u64>();
+        changed += u64::from(d.iter().any(|&d| d >= 4));
+        seen += 1;
+    }
+    let seen = seen.max(1) as f64;
+    (sum as f64 / (3.0 * seen), 100.0 * changed as f64 / seen)
 }
 
 /// Test aid `NVF_PLAY_TEST_SHOT_FLATNESS`: the share of the view, its lower fifth left out

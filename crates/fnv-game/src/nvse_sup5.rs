@@ -87,7 +87,7 @@ fn name_of(g: &Game, f: FormId) -> String {
 
 /// A cell's text as ExcelArrayFromFile gives it: `*Plugin.esm:hex` is that plugin's form
 /// [documented: ExcelArrayFromFile, "All to-build references must be prefixed with '*'"];
-/// anything else stays text [hypothesis: an unknown plugin or form too].
+/// anything else stays text (see docs/spec-notes/ext-sup5.md §1).
 fn form_text(g: &Game, s: &str) -> XVal {
     let parsed = s.strip_prefix('*').and_then(|r| r.rsplit_once(':')).and_then(|(plugin, hex)| {
         let i = g.data.load_order.iter().position(|p| p.eq_ignore_ascii_case(plugin.trim()))?;
@@ -170,7 +170,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         // ---- Excel workbooks under the game's folder ----
         // `file sheet row col value`: 1 written, -1 when the file is no workbook; the
         // file and the sheet are made when missing [documented: ExcelWriteFloat,
-        // ExcelWriteString]. A number is written as a float (type 2) [hypothesis].
+        // ExcelWriteString]. A number is written as a float (type 2; see docs/spec-notes/ext-sup5.md §1).
         "excelwritefloat" | "excelwritestring" => {
             let (Some(path), Some(sheet), Some(at)) = (xls_path(args), index(args, 1), cell_at(args, 2)) else { return Some(Ok(minus)) };
             let Ok(mut b) = book_for_write(g, &path) else { return Some(Ok(minus)) };
@@ -181,7 +181,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         // `file sheet row col`: the number in the cell, the text [documented:
         // ExcelReadFloat, ExcelReadString]; -1 for a missing file [documented], the
         // number -1 from ReadString too [observed: sup5 xl.missing.string, a runtime
-        // error where `%z` was given it]; an empty cell 0 and "" [hypothesis], a text
+        // error where `%z` was given it]; an empty cell 0 and "" (see docs/spec-notes/ext-sup5.md §1), a text
         // cell's number 0 and a number cell's text "" [observed: sup5 xl.cross].
         "excelreadfloat" | "excelreadstring" | "excelgetcellvaluetype" => {
             let book = xls_path(args).ok_or(()).and_then(|p| load_book(g, &p));
@@ -195,7 +195,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
             }
         }
         // `file`: the sheets [documented: ExcelGetWorkSheetCount]; `file sheet`: the rows
-        // and columns in use, -1 for a missing file [documented] or sheet [hypothesis].
+        // and columns in use, -1 for a missing file [documented] or sheet (see docs/spec-notes/ext-sup5.md §1).
         "excelgetworksheetcount" => match xls_path(args).ok_or(()).and_then(|p| load_book(g, &p)) {
             Ok(b) => XVal::Num(b.sheets.len() as f64),
             Err(()) => minus,
@@ -210,7 +210,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         // `file sheet row col` / `file sheet`: the cell emptied, the sheet's cells all
         // emptied (the sheet kept) [documented: ExcelEraseCell; ExcelEraseSheet, "Will
         // erase all cells in Sheet"]; 1 done, -1 for a missing file [documented] or sheet
-        // [hypothesis].
+        // (see docs/spec-notes/ext-sup5.md §1).
         "excelerasecell" | "excelerasesheet" => {
             let Some(path) = xls_path(args) else { return Some(Ok(minus)) };
             let Ok(mut b) = load_book(g, &path) else { return Some(Ok(minus)) };
@@ -225,8 +225,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         // `file sheet [name]`: renames the sheet, cut to 31 characters, and returns the
         // name; without a name returns it [documented: ExcelSetSheetName]. A missing file
         // gives the number -1 [documented]; a missing sheet too, and a rename returns a
-        // number, 1 [hypothesis: sup5 xl.missing.sheet and xl.rename stopped at a runtime
-        // error in the original where `%z` was given the return, as xl.missing.string].
+        // number, 1 (see docs/spec-notes/ext-sup5.md §1).
         "excelsetsheetname" => {
             let Some(path) = xls_path(args) else { return Some(Ok(minus)) };
             let Ok(mut b) = load_book(g, &path) else { return Some(Ok(minus)) };
@@ -240,7 +239,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         // `file sheet startRow startCol array [horizontal]`: the array's values down a
         // column, or along a row; a form is written as its name [documented:
         // ExcelArrayToFile, PlayerRef as "Courier"]; nested arrays are passed over
-        // [hypothesis]. 1 written, -1 not.
+        // (see docs/spec-notes/ext-sup5.md §1). 1 written, -1 not.
         "excelarraytofile" => {
             let (Some(path), Some(sheet), Some((r0, c0))) = (xls_path(args), index(args, 1), cell_at(args, 2)) else { return Some(Ok(minus)) };
             let Some(XVal::Array(id)) = args.get(4) else { return Some(Ok(minus)) };
@@ -266,9 +265,8 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
             XVal::Num(if save_book(g, &path, &b) { 1.0 } else { -1.0 })
         }
         // `file sheet n readRow`: column n's values (row n's with readRow 1), `*Plugin:hex`
-        // as forms [documented: ExcelArrayFromFile]; empty cells passed over
-        // [hypothesis]. A missing file gives no array [hypothesis: the page's -1 cannot be
-        // an array].
+        // as forms [documented: ExcelArrayFromFile]; empty cells passed over; a missing
+        // file gives no array (see docs/spec-notes/ext-sup5.md §1).
         "excelarrayfromfile" => {
             let book = xls_path(args).ok_or(()).and_then(|p| load_book(g, &p));
             let (Ok(b), Some(sheet), Some(n)) = (book, index(args, 1), index(args, 2)) else { return Some(Ok(zero)) };
@@ -321,7 +319,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         }
         // ---- file sizes and times, under the game's folder ----
         // [documented: GetFileSize, "relative to Fallout root folder", in bytes]; a
-        // missing file -1 [hypothesis].
+        // missing file -1 (see docs/spec-notes/ext-sup5.md §3).
         "getfilesize" => XVal::Num(safe_path(&text(args, 0).unwrap_or_default()).and_then(|p| g.mod_files.root_file(&p)).map_or(-1.0, |(n, _)| n as f64)),
         // `file request`: 5-element StringMap in local time on existing files (game-root-
         // relative) with keys `"Day"`, `"Hour"`, `"Minute"`, `"Month"`, `"Year"` and
@@ -362,7 +360,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         }
         // The load order into SUPNVSE.log in the game's folder [documented: DumpLoadOrder]
         // (NVForever's copy of it, appended to this session's lines): one line a plugin,
-        // its index in hex and its name [hypothesis: the page shows no line].
+        // its index in hex and its name (see docs/spec-notes/ext-sup5.md §3).
         "dumploadorder" => {
             let old = g.mod_files.read_root_text("SUPNVSE.log").unwrap_or_default();
             let mut out = old;
@@ -438,7 +436,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         }
         // `folder file`: a screenshot of CaptureScreenshotAlt removed, the extension
         // given [documented: DeleteScreenshot]: -1 no such file, -2 a folder that leaves
-        // SUPScreenshots [documented], 1 removed [hypothesis]. Only NVForever's layer
+        // SUPScreenshots [documented], 1 removed (see docs/spec-notes/ext-sup5.md §4). Only NVForever's layer
         // holds them.
         "deletescreenshot" => {
             let (Some(folder), Some(file)) = (text(args, 0).and_then(|f| safe_path(&f)), text(args, 1)) else { return Some(Ok(XVal::Num(-2.0))) };

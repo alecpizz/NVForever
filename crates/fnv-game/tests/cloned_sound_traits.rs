@@ -151,4 +151,10 @@ fn temp_cloned_sounds_inherit_isolate_and_chain_source_and_numeric_traits() {
     };
     assert!(g.sound_requests.iter().any(|r| r.sound == FormId(played_clone) && r.system));
     assert_eq!(g.sound_source_override(FormId(played_clone)), Some("fx\\owned\\inject.wav"));
+
+    // Trait 12 is ignored/unwritable by SetSoundTraitNumeric [observed: w4c_b1_21_sound_and_diff_bounds].
+    let p0 = call(&mut g, "getsoundtraitnumeric", &[XVal::Ref(orig.0), XVal::Num(12.0)]);
+    call(&mut g, "setsoundtraitnumeric", &[XVal::Ref(orig.0), XVal::Num(12.0), XVal::Num(77.0)]);
+    assert_eq!(call(&mut g, "getsoundtraitnumeric", &[XVal::Ref(orig.0), XVal::Num(12.0)]), p0);
+    assert_eq!(g.sound_trait_override(orig, 12), None);
 }

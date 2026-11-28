@@ -1,0 +1,11 @@
+[package]
+name = "nvf-relay"
+description = "A co-op relay a player hosts for friends whose networks cannot reach each other directly: one UDP port, forwards end-to-end encrypted game datagrams between the two sides of a session, never run by the project (#3795 section 9)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# Rotating cookie secrets from the operating system's random source (#3908). MIT/Apache-2.0.
+getrandom = "0.3"
+nvf-nat = { path = "../nvf-nat" }

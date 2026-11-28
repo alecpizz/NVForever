@@ -139,16 +139,127 @@ pub struct BarterTiles {
     pub(super) view: MenuTiles,
     shown: Option<Snapshot>,
     last_focus: Option<Side>,
+    normal_quote: Option<crate::menu::model::Trade>,
 }
 
 impl Default for BarterTiles {
-    fn default() -> Self { Self { view: MenuTiles::new(&PATHS), shown: None, last_focus: None } }
+    fn default() -> Self { Self { view: MenuTiles::new(&PATHS), shown: None, last_focus: None, normal_quote: None } }
 }
 
 impl BarterTiles {
     pub fn menu(&self) -> Option<fnv_ui::TileId> { self.view.menu }
+    pub(crate) fn normal_text_scale(&self)->f32 {self.view.text_scale()}
+
+    #[cfg(test)]
+    pub(crate) fn normal_touch_value(&self,side:Side)->f64 {self.view.value(side)}
+
+    pub(crate) fn normal_touch_quantity(&self, ui: &Ui) -> bool {
+        super::menus::normal_touch_quantity_shown(ui)
+    }
+
+    /// The ordinary native list's painted/clipped hit data. Disabled-side focus
+    /// rectangles do not steal the row: the physical adapter already resolves a
+    /// cross-column row through pointer_candidates. No file traits are changed here.
+    pub(crate) fn normal_touch_hit(&self, ui: &Ui, m: &MenuModel, point: Vec2, window: Vec2)
+        -> Option<crate::menu::normal_touch::Hit> {
+        use crate::menu::{model::Command, normal_touch::{Hit, Source, Target}};
+        use fnv_ui::input::{hit_candidates, no_measure, top_hit};
+        if self.normal_quote.as_ref()!=m.trade.as_ref(){return None}
+        if m.quantity.is_some() {
+            return super::menus::normal_touch_quantity_hit(ui, point, window);
+        }
+        let at=super::input::to_menu_units(point,window,Vec2::splat(0.5));
+        let menu=self.menu()?;
+        let mut candidates=hit_candidates(ui,menu,&no_measure);
+        for c in &mut candidates {
+            match self.view.clicked(ui,c.under) {
+                Some(MenuTile::Focus(_))=>c.event=None,
+                Some(MenuTile::Row(..))=>c.event=Some(c.under),
+                _=>{}
+            }
+        }
+        if let Some(picked)=top_hit(ui,&candidates,at) {
+            if let Some(what)=self.view.clicked(ui,picked.tile) {
+                let (target,pane,key)=match what {
+                    MenuTile::Row(side,index)=>{
+                        let index=self.view.row_at(m,side,index)?;
+                        let shown=self.shown.as_ref()?;
+                        let painted=shown.common.lists[side as usize].rows.get(index)?;
+                        let now=m.list(side).rows.get(index)?;
+                        let price=now.price.map_or_else(||"--".into(),barter::price_text);
+                        if painted.text!=crate::menu::look::row_text(now)
+                            || shown.rows[side as usize].get(index)!=Some(&(price,now.bartered)) {return None}
+                        (Target::Row(side,index),Some(side),self.view.rows[side as usize].get(index)?.tile)
+                    }
+                    MenuTile::Arrow(side,by)=>(Target::Command(Command::Category(side,by)),None,picked.tile),
+                    MenuTile::Title(side)=>(Target::CategoryHeader(side),None,picked.tile),
+                    MenuTile::Accept=>(Target::Command(Command::Accept),None,picked.tile),
+                    MenuTile::Exit=>(Target::Command(Command::Close),None,picked.tile),
+                    MenuTile::Focus(side)=>(Target::Pane(side),Some(side),picked.tile),
+                    _=>return None,
+                };
+                return Some(Hit {source:Source::Tile(menu,key),target,pane,row_step:0.0});
+            }
+        }
+        // Padded finger targets around category arrows and titles so small header
+        // arrows and labels are easy to tap or swipe without resizing the artwork.
+        const HEADER_PAD: f64 = 16.0;
+        for c in candidates.iter().rev() {
+            let r = c.region();
+            if r.width <= 0.0 || r.height <= 0.0 {
+                continue;
+            }
+            if at.0 < r.left - HEADER_PAD || at.0 >= r.left + r.width + HEADER_PAD
+                || at.1 < r.top - HEADER_PAD || at.1 >= r.top + r.height + HEADER_PAD {
+                continue;
+            }
+            match self.view.clicked(ui, c.under) {
+                Some(MenuTile::Arrow(side, by)) => {
+                    return Some(Hit {
+                        source: Source::Direct(menu, c.under),
+                        target: Target::Command(Command::Category(side, by)),
+                        pane: None,
+                        row_step: 0.0,
+                    });
+                }
+                Some(MenuTile::Title(side)) => {
+                    return Some(Hit {
+                        source: Source::Direct(menu, c.under),
+                        target: Target::CategoryHeader(side),
+                        pane: None,
+                        row_step: 0.0,
+                    });
+                }
+                _ => {}
+            }
+        }
+        // The ordinary inactive-column focus rectangle can also be empty.
+        // Its actual clipped area remains a browse pane, never an action.
+        let c=candidates.iter().rev().find(|c|{
+            let r=c.region();
+            r.width>0.0 && r.height>0.0 && at.0>=r.left && at.0<r.left+r.width
+                && at.1>=r.top && at.1<r.top+r.height
+                && matches!(self.view.clicked(ui,c.under),Some(MenuTile::Focus(_)))
+        })?;
+        let Some(MenuTile::Focus(side))=self.view.clicked(ui,c.under) else{return None};
+        Some(Hit {source:Source::Tile(menu,c.under),target:Target::Pane(side),pane:Some(side),row_step:0.0})
+    }
+
+    /// Scroll this exact native view, without changing focus or selected item.
+    pub(crate) fn normal_touch_scroll(&mut self, ui: &mut Ui, side: Side, pixels: f64, window: Vec2) {
+        let Some(list)=self.view.list_tile(ui,side) else{return};
+        let Some(delta)=ui.tile(list).get("_scroll_delta").map(Value::num).filter(|d|d.is_finite() && *d>0.0) else{return};
+        let a=super::input::to_menu_units(Vec2::ZERO,window,Vec2::splat(0.5));
+        let b=super::input::to_menu_units(Vec2::Y,window,Vec2::splat(0.5));
+        let value=self.view.value(side)+pixels*(b.1-a.1)/delta;
+        if value.is_finite() && self.view.scroll_to(side,value) {
+            self.view.rewrite(ui);
+            ui.update();
+        }
+    }
 
     fn close(&mut self) {
+        self.normal_quote = None;
         self.view.close();
         self.shown = None;
         self.last_focus = None;
@@ -219,8 +330,11 @@ pub(super) fn write_system(
     (combat, play): (Option<Res<crate::combat::Combat>>, Option<Res<crate::PlayWorld>>),
     mut forms: Local<Option<crate::pipboy::stats::read::Forms>>, mut fonts: super::draw::FontKit,
     mut st: ResMut<BarterTiles>,
+    readability:Option<Res<crate::menu_readability::MenuReadability>>,
 ) {
     if !switch.barter { return; }
+    let scale=crate::menu::readability::size(readability.as_deref(),crate::menu_readability::MenuKind::Barter);
+    st.view.set_text_scale(scale);
     let model = active.0.as_ref().filter(|_| is_barter(active.0.as_ref()));
     let Some(rt) = script.rt.as_ref() else { return };
     let game = &rt.game;
@@ -256,13 +370,19 @@ pub(super) fn write_system(
         if changed_menu || st.shown.as_ref() != Some(&s) {
             write(ui, &s, &mut st);
             told = true;
-            st.shown = Some(s);
+                st.shown = Some(s);
         }
+            // A changed exact price can round to the same drawn text. The writer
+            // has still established that this current quote is what the view shows.
+            if st.normal_quote.as_ref() != m.trade.as_ref() {
+                st.normal_quote = m.trade.clone();
+            }
     }
     let texts = super::menus::texts(ui, menu);
     st.view.settle_shown(ui, &mut |ui, sizes| {
         let size = fonts.menu_measure(&super::menus::fonts_of(ui, &texts));
-        super::menus::write_text_sizes_of(ui, &texts, sizes, &size)
+        super::menus::write_text_sizes_of(ui,&texts,sizes,&|font,text,wrap|
+            crate::menu::readability::measured(&size,scale,font,text,wrap))
     });
     mark_tiles(ui);
     if let (true, Some(s)) = (told, st.shown.as_ref()) {
@@ -301,6 +421,13 @@ pub(crate) mod tests {
     use crate::menu::model::RowKey;
     use fnv_sim::FormId;
     use fnv_ui::MemSource;
+
+    /// Install the actual writer in lean, authored normal-input Apps. This is a
+    /// provider seam, not a replacement snapshot/effect writer.
+    pub(crate) fn install_normal_writer(app: &mut App) {
+        app.init_resource::<super::super::draw::TileFonts>()
+            .add_systems(Update, write_system.after(crate::menu::MenuSystems));
+    }
 
     /// [design] A fixture written for these tests, with its own dimensions and simple
     /// dependencies. No expressions or values were taken from the game menu file.
@@ -347,7 +474,7 @@ pub(crate) mod tests {
     pub(crate) fn snapshot() -> Snapshot {
         let row = |id, equipped| item_menu::RowShown {
             key: RowKey { units: (FormId(id), None, 0), reference: None, nth: 0 },
-            name: format!("Item {id}"), text: format!("Item {id}"), equipped, ysi: None,
+            name: format!("Item {id}"), text: format!("Item {id}"), equipped, dim: false, ysi: None,
         };
         Snapshot {
             common: item_menu::Snapshot {

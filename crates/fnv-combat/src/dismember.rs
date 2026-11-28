@@ -312,7 +312,7 @@ mod tests {
             assert_eq!(decide(&crow_torso, &b, &s, 0.0), None);
         }
         // With Bloody Mess, No Dismember/Explode uses half odds, Dismember Only explodes,
-        // and odds take max(explodable_chance_percent, torso_odds) [hypothesis / design].
+        // and odds take max(explodable_chance_percent, torso_odds) (see production `chances` above).
         let mut bm_neither = Blow { on_hit: OnHit::Neither, crippled: true, overkill: 12.0, max_health: 6.0, bloody_mess: true, corpse: false, sole_part: true };
         assert_eq!(chances(&crow_torso, &bm_neither, &s), (50.0, 0.0));
         bm_neither.on_hit = OnHit::DismemberOnly;

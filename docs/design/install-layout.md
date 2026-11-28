@@ -35,7 +35,9 @@ The game's folder comes from, in order:
 
 1. `--data` / `NVFOREVER_DATA` (developers and the smoke tests): never stored, never a
    dialog, so a scripted run fails instead of waiting.
-2. `NVForever.ini` in the home:
+2. `NVForever.ini` in the home (an existing file whose name differs only in case, such as
+   `nvforever.ini` on a case-sensitive system, is the one read and written;
+   `EngineHome::config_file`):
    ```ini
    [Game]
    Path=F:\SteamLibrary\steamapps\common\Fallout New Vegas

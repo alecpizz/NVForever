@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Original NVForever geometry; Industrial family. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="currentColor" color="#ffffff" fill-rule="evenodd" stroke-width="1.8" stroke-linecap="square" stroke-linejoin="bevel">
+  <title>Close</title>
+  <path d="M 6 8 L 8 6 L 16 14 L 24 6 L 26 8 L 18 16 L 26 24 L 24 26 L 16 18 L 8 26 L 6 24 L 14 16 Z"/>
+</svg>

@@ -4601,7 +4601,7 @@ mod tests {
     #[test]
     fn parse_ref_extras_skips_all_listed_auxiliary_types() {
         let mut f = Fos::parse(&save()).unwrap();
-        // Exercise all 18 skipped auxiliary reference extras listed as [hypothesis] in save-files.md §6.2
+        // Exercise all 18 skipped auxiliary reference extras listed in docs/spec-notes/save-files.md §6.2
         // followed by actionable 0x2A lock + 0x21 owner + 0x0D script vars.
         let mut re = Build { b: Vec::new() };
         re.vs(21).bar();

@@ -61,7 +61,8 @@
 //! plugin knows only [`draw`]).
 
 pub mod marker;
-mod model;
+pub mod touch_map;
+pub(crate) mod model;
 pub(crate) mod outline;
 pub(crate) mod read;
 pub mod travel;
@@ -91,7 +92,7 @@ use travel::{Ask, FastTravelAsk, FastTravelGo, Popup};
 pub(crate) use view::MapView;
 use nvf_assets::GameData;
 use std::collections::hash_map::Entry;
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
 
 // ---- the tabs ---------------------------------------------------------------------------
@@ -396,6 +397,8 @@ pub struct DataState {
     /// Each tab's selected row and first row shown, and how many rows fit when last drawn.
     sel: [usize; 5],
     first: [usize; 5],
+    /// Direct scrollbar view movement, independent of the selected gameplay row.
+    manual_list: Option<(usize, usize)>,
     fit: [usize; 5],
     /// The selected row is boxed (the pointer is on it, or a key moved it).
     boxed: bool,
@@ -420,6 +423,8 @@ pub struct DataState {
     /// When each quest was first seen listed (a running count).
     seen: HashMap<u32, u64>,
     seen_count: u64,
+    /// A co-op guest's quest list as last logged (`track`).
+    guest_listed: Vec<u32>,
     /// The notes' filter is on: only the active quest's notes (`sShowActiveNotes`).
     notes_of_active: bool,
     /// The note whose page was last shown, so it is marked read once (GetNoteRead).
@@ -434,7 +439,7 @@ pub struct DataState {
     cursor: [Option<Vec2>; 2],
     /// Map markers the player has been within the radius of.
     discovered: BTreeSet<u32>,
-    /// Markers found since `crate::compass` last took them (for "You have discovered").
+    /// Markers found since `crate::compass` last took them (for "Place found").
     newly_found: Vec<u32>,
     /// Markers found since this run started, not saved (the Color Recently Added Map
     /// Markers tweak) [design: docs/design/tweaks.md].
@@ -822,6 +827,13 @@ pub struct Game<'w> {
 pub struct Input<'w, 's> {
     keys: crate::pad::ActionButtons<'w, KeyCode>,
     wheel: MessageReader<'w, 's, MouseWheel>,
+    touch_wheel: Option<Res<'w,super::touch_scroll::WheelFrame>>,
+    physical:Option<Res<'w,super::touch_scroll::PhysicalPriority>>,
+    touch_pip: Option<Res<'w,super::PipBoy>>,
+    touch_map: Option<ResMut<'w,touch_map::TouchMap>>,
+    map_gate: touch_map::Gate<'w,'s>,
+    // Separate from the raw bridge's shared gate: its parent owns this overlay mutably.
+    map_overlay: Option<Res<'w, super::touch_items::OverlayCapture>>,
     menu: MessageReader<'w, 's, MenuInput>,
     pip_out: MessageWriter<'w, PipBoyInput>,
     time: Res<'w, Time<Real>>,
@@ -1016,6 +1028,7 @@ fn step(st: &mut DataState, open: Option<usize>, screen: Option<&PipBoyScreen>, 
         track(st, game);
     }
     let Some(tab) = open else {
+        if let Some(touch)=input.touch_map.as_deref_mut() {touch.cancel();}
         st.was_open = false;
         st.popup = None;
         st.note_shown = None;
@@ -1049,10 +1062,13 @@ fn step(st: &mut DataState, open: Option<usize>, screen: Option<&PipBoyScreen>, 
     }
     // With Controller chosen the controls answer the controller only (pad.rs): the mouse
     // pointer is ignored so it cannot take the highlight box back from the stick.
-    let pointer = screen.and_then(|s| s.pointer).filter(|_| !input.bindings.as_ref().is_some_and(|b| b.device == InputDevice::Controller));
-    st.pointer_now = screen.and_then(|s| s.pointer);
-    st.aiming = pointer.is_some();
+    let mouse_pointer = screen.and_then(|s| s.pointer).filter(|_| !input.bindings.as_ref().is_some_and(|b| b.device == InputDevice::Controller));
     let e = early.unwrap_or_default();
+    let map_allowed = !e.hold && touch_map::source_allows(game.script.as_deref());
+    let direct_map = touch_map::take(st,tab,screen,input,map_allowed);
+    let pointer = direct_map.map(|frame|frame.0).or(mouse_pointer);
+    st.pointer_now = pointer.or_else(||screen.and_then(|s|s.pointer));
+    st.aiming = pointer.is_some();
     if e.hold {
         hold_input(st, tab, &lists, input);
     } else {
@@ -1071,6 +1087,7 @@ fn step(st: &mut DataState, open: Option<usize>, screen: Option<&PipBoyScreen>, 
     // it was, and with it the Travel hint's marker (#1897).
     let on_map = pointer.filter(|_| !on_button(st, tab, pointer));
     let mut view = build(st, tab, &lists, game, on_map, pointer.is_some());
+    touch_map::finish(st, &view, direct_map.and_then(|frame| frame.1));
     // A click on a map is resolved against the highlight box as drawn for good (#3324): here for
     // the hand-built page; the page drawn from the file may lay the map out again (its refit,
     // `DataState::refit_map`, or the fall back to the hand-built window), so with the early
@@ -1201,6 +1218,25 @@ fn hold_input(st: &mut DataState, tab: usize, l: &Lists, input: &mut Input) {
 /// Note the order quests are listed in, the markers the player finds, and where the
 /// player was last outdoors.
 impl DataState {
+    #[cfg(test)]
+    pub(crate) fn take_touch_test_actions(&mut self) -> Vec<Act> { std::mem::take(&mut self.acts) }
+
+    /// Identity of actions deferred by a native touch contact. No action or state changes here.
+    pub(crate) fn touch_action_context(&self, tab: usize) -> super::touch_scroll::DataActionContext {
+        let marker = |m: CustomMarker| (m.space, m.pos.map(f32::to_bits));
+        let selection = self.sel.get(tab).copied().unwrap_or(0);
+        super::touch_scroll::DataActionContext {
+            selection,
+            key: self.prepared.as_ref().filter(|p| p.view.tab == tab).and_then(|p| p.keys.get(selection)).copied(),
+            challenges: self.challenges,
+            filtered: self.notes_of_active,
+            quest: self.active_quest,
+            travel: self.travel_marker,
+            custom: self.custom.map(marker),
+            spot: self.spot.get(tab).copied().flatten().map(marker),
+        }
+    }
+
     /// What the page shows as last prepared, for the drawing from the file
     /// (`crate::tiles::map_menu`).
     pub(crate) fn prepared(&self) -> Option<&Prepared> {
@@ -1272,6 +1308,9 @@ impl DataState {
         }
     }
 
+    /// Whether the DATA page currently owns a popup; external input must leave it in control.
+    pub fn has_popup(&self) -> bool { self.popup().is_some() }
+
     /// The question box over the map (fast travel's or Place Marker's), while it is up.
     pub(crate) fn popup(&self) -> Option<&Popup> {
         self.popup.as_ref()
@@ -1293,6 +1332,20 @@ impl DataState {
     /// (`super::sounds`).
     pub fn selection(&self, tab: usize) -> (usize, bool) {
         (self.sel.get(tab).copied().unwrap_or(0), self.challenges)
+    }
+    pub fn list_scroll(&self, tab: usize) -> Option<usize> {
+        (tab >= QUESTS && tab < self.first.len()).then(|| self.first[tab])
+    }
+    pub(crate) fn scroll_list_by(&mut self, tab: usize, by: super::scrollbar::ScrollBy) -> bool {
+        let Some(view) = self.shown.as_ref().filter(|v| v.tab == tab).or_else(|| self.prepared.as_ref().map(|p|&p.view).filter(|v|v.tab==tab)) else { return false };
+        let Body::List { rows, .. } = &view.body else { return false };
+        let now = self.first[tab];
+        let page = self.fit[tab].max(1);
+        let Some(to) = by.value(now as f64, rows.len().saturating_sub(page) as f64, page as f64) else { return false };
+        self.first[tab] = to as usize;
+        self.manual_list = Some((tab, self.sel[tab]));
+        self.pointer_pick = true;
+        now != self.first[tab]
     }
 
     /// [design, #2403 / file refs] Read-only logical list/pane/map progress. Excludes
@@ -1338,7 +1391,7 @@ impl DataState {
         self.target_checks.iter().filter(|c| c.shown && Some(c.quest) == self.target_quest).copied().collect()
     }
 
-    /// A save's found markers: found already, so no "You have discovered" for them.
+    /// A save's found markers: found already, so no "Place found" for them.
     pub fn restore_discovered(world: &mut bevy::prelude::World, found: BTreeSet<u32>) {
         if !world.contains_resource::<DataState>() {
             world.init_resource::<DataState>();
@@ -1471,10 +1524,28 @@ fn discovery_radius(radius: f32, reveal: f32) -> f32 {
 
 fn track(st: &mut DataState, game: &Game) {
     if let Some(rt) = game.script.as_ref().and_then(|s| s.rt.as_ref()) {
-        let mut new: Vec<u32> = rt.game.quests.iter().filter(|(q, s)| listed(&rt.game, **q, s) && !st.seen.contains_key(&q.0)).map(|(q, _)| q.0).collect();
+        // A co-op guest's list as it changes (the host's quests in, and out with why).
+        if rt.game.coop_guest {
+            let now: Vec<u32> = guest_quests(&rt.game).into_iter().map(|k| k.form).collect();
+            for q in st.guest_listed.iter().filter(|q| !now.contains(q)) {
+                let story = rt.game.coop_host_story.quests.get(&FormId(*q)).map(|s| format!("story: ended {} failed {} objectives {:?}", s.ended, s.failed, s.objectives)).unwrap_or_else(|| "not in the story".into());
+                info!("pipboy data: the host's quest {} left this guest's list ({story})", rt.game.data.name(FormId(*q)));
+            }
+            st.guest_listed = now;
+        }
+        // A co-op guest lists the host's quests (`guest_quests`), as they first come.
+        let mut new: Vec<u32> = if rt.game.coop_guest {
+            guest_quests(&rt.game).into_iter().map(|k| k.form).filter(|q| !st.seen.contains_key(q)).collect()
+        } else {
+            rt.game.quests.iter().filter(|(q, s)| listed(&rt.game, **q, s) && !st.seen.contains_key(&q.0)).map(|(q, _)| q.0).collect()
+        };
         if !new.is_empty() {
             st.seen_count += 1;
             new.sort_unstable();
+            if rt.game.coop_guest {
+                let names: Vec<String> = new.iter().map(|q| rt.game.data.name(FormId(*q))).collect();
+                info!("pipboy data: the host's quests listed here now: {}", names.join(", "));
+            }
             for q in new {
                 st.seen.insert(q, st.seen_count);
             }
@@ -1522,6 +1593,73 @@ fn markers<'a>(st: &'a mut DataState, game: &Game) -> Option<&'a Vec<read::Marke
     st.markers.as_ref()
 }
 
+/// The player's quest list, in order ([`model::sort_quests`]; `st` gives when each was
+/// first seen).
+fn player_quests(st: Option<&DataState>, g: &fnv_game::game::Game) -> Vec<QuestKey> {
+    let seen = |q: u32| st.map_or(0, |st| st.seen.get(&q).copied().unwrap_or(st.seen_count + 1));
+    let mut out: Vec<QuestKey> = g.quests.iter().filter(|(q, s)| listed(g, **q, s) && !(g.tweaks.hide_completed_quests && (s.completed || s.failed))).map(|(q, s)| QuestKey { seen: seen(q.0), form: q.0, done: s.completed || s.failed }).collect();
+    model::sort_quests_with_top(&mut out, g.top_ui_quest().map(|q| q.0));
+    out
+}
+
+/// The quest the player has active, as the DATA page has it whether open or not: the
+/// player's pick, else a script's ForceActiveQuest, else the newest running quest. A co-op
+/// host sends it to its guests (nvforever `coop`).
+pub fn active_quest(st: Option<&DataState>, g: &fnv_game::game::Game) -> Option<FormId> {
+    let running: Vec<u32> = player_quests(st, g).into_iter().filter(|q| !q.done).map(|q| q.form).collect();
+    let pick = st.and_then(|st| st.active_quest).filter(|a| running.contains(a));
+    let forced = g.ui.active_quest.map(|q| q.0).filter(|a| running.contains(a));
+    // A ForceActiveQuest the page has not taken yet wins, as it will there.
+    let forced_new = st.is_none_or(|st| g.ui.active_quest_count != st.forced_seen);
+    let chosen = if forced_new { forced.or(pick) } else { pick.or(forced) };
+    chosen.or(running.first().copied()).map(FormId)
+}
+
+/// When the quest list first showed `quest` (a running count, larger is newer; 0: not
+/// yet): a co-op host sends it with its story, for its guests' order.
+pub fn quest_seen(st: &DataState, quest: u32) -> u64 {
+    st.seen.get(&quest).copied().unwrap_or(0)
+}
+
+/// A co-op guest's quest list, the host's (design: the guest
+/// listed only the host's active quest): each quest of the host's story with a name and an
+/// objective shown or done, as [`listed`] has the host's own (`Game::coop_host_story`,
+/// which reaches a guest that joins later within a round of its pages); the host's active
+/// quest; the quests that ended while this guest played (`Game::coop_host_ended`, at
+/// once, before the story's next page). Done when completed or failed. In the host's
+/// order: [`model::sort_quests`] by when the host's list first showed each
+/// (`HostQuestState::seen`; a late join in testing listed them by when the guest did).
+fn guest_quests(g: &fnv_game::game::Game) -> Vec<QuestKey> {
+    let named = |q: FormId| g.data.quests.get(&q).and_then(|d| d.name.as_deref()).is_some_and(|n| !n.trim().is_empty());
+    host_quest_log(&g.coop_host_story, g.coop_host_quest.as_ref(), &g.coop_host_ended, named, g.tweaks.hide_completed_quests)
+}
+
+/// The host's quest log as a guest's list has it ([`guest_quests`]): every named quest of the host's story
+/// with an objective shown or done, the host's active quest (`host`), and the quests that
+/// ended while this guest played (`ended`); done when completed or failed. In the host's
+/// order. `hide_completed`: this player's own tweak leaves the done ones out, as
+/// [`player_quests`] does with a player's own quests [design: docs/design/tweaks.md].
+fn host_quest_log(story: &fnv_game::coop::HostStory, host: Option<&fnv_game::coop::HostQuest>, ended: &[(FormId, bool)], named: impl Fn(FormId) -> bool, hide_completed: bool) -> Vec<QuestKey> {
+    // The host's order (`HostQuestState::seen`); a quest the story has not ordered yet (one
+    // that ended a moment ago) is newest, as the host's own newest quest is.
+    let seen = |q: u32| story.quests.get(&FormId(q)).map(|s| s.seen).filter(|s| *s > 0).unwrap_or(u64::MAX);
+    let mut done: BTreeMap<u32, bool> = BTreeMap::new();
+    for (q, s) in &story.quests {
+        if named(*q) && !s.objectives.is_empty() {
+            done.insert(q.0, s.ended);
+        }
+    }
+    if let Some(h) = host.filter(|h| named(h.quest)) {
+        *done.entry(h.quest.0).or_default() |= h.completed || h.failed;
+    }
+    for (q, _) in ended.iter().filter(|(q, _)| named(*q)) {
+        done.insert(q.0, true);
+    }
+    let mut out: Vec<QuestKey> = done.into_iter().filter(|(_, done)| !(hide_completed && *done)).map(|(form, done)| QuestKey { seen: seen(form), form, done }).collect();
+    model::sort_quests(&mut out);
+    out
+}
+
 /// Whether a quest is in the player's list: it has a name and an objective shown or done
 /// (docs/spec-notes/quest-messages.md §5).
 fn listed(g: &fnv_game::game::Game, q: FormId, s: &fnv_game::quest::QuestState) -> bool {
@@ -1564,24 +1702,24 @@ fn lists(st: &mut DataState, game: &Game) -> Lists {
     let mut out = Lists::default();
     let Some(rt) = game.script.as_ref().and_then(|s| s.rt.as_ref()) else { return out };
     let g = &rt.game;
-    out.quests = g
-        .quests
-        .iter()
-        // The player's tweak lists only quests under way [design: docs/design/tweaks.md].
-        .filter(|(q, s)| listed(g, **q, s) && !(g.tweaks.hide_completed_quests && (s.completed || s.failed)))
-        .map(|(q, s)| QuestKey { seen: st.seen.get(&q.0).copied().unwrap_or(st.seen_count + 1), form: q.0, done: s.completed || s.failed })
-        .collect();
-    model::sort_quests_with_top(&mut out.quests, g.top_ui_quest().map(|q| q.0));
+    if g.coop_guest {
+        // A co-op guest's list is the host's: its quests as the host's story
+        // carries them, its active quest and the quests that ended while it played.
+        out.quests = guest_quests(g);
+        st.active_quest = g.coop_host_quest.as_ref().map(|h| h.quest.0);
+    } else {
+        out.quests = player_quests(Some(st), g);
+    }
     // A script's ForceActiveQuest makes its quest the active one [documented: GECK wiki
     // ForceActiveQuest]; the player's pick afterwards wins again.
-    if g.ui.active_quest_count != st.forced_seen {
+    if !g.coop_guest && g.ui.active_quest_count != st.forced_seen {
         st.forced_seen = g.ui.active_quest_count;
         if let Some(q) = g.ui.active_quest {
             st.active_quest = Some(q.0);
             info!("pipboy data: active quest {q} (ForceActiveQuest)");
         }
     }
-    if !st.active_quest.is_some_and(|a| out.quests.iter().any(|q| q.form == a && !q.done)) {
+    if !g.coop_guest && !st.active_quest.is_some_and(|a| out.quests.iter().any(|q| q.form == a && !q.done)) {
         // The player's tweaks: no quest is made the active one by itself, neither when
         // the active one is done nor when objectives come with none active [design: docs/design/tweaks.md].
         let by_hand_only = g.tweaks.no_quest_set_on_objective || g.tweaks.no_quest_set_on_complete;
@@ -1740,7 +1878,8 @@ fn take_input(st: &mut DataState, tab: usize, l: &Lists, game: &mut Game, input:
         }
     }
     // The wheel zooms a map, scrolls the right pane under the pointer, else the list.
-    let mut notches = 0.0;
+    let mut notches = if input.physical.as_ref().is_some_and(|p|p.active) {0.0} else {input.touch_wheel.as_ref().zip(input.touch_pip.as_deref()).map_or(0.0,|(w,pip)|w.lines(pip))};
+    let pointer=input.touch_wheel.as_ref().filter(|_|notches!=0.0).and_then(|w|w.at).or(pointer);
     for w in input.wheel.read() {
         notches += match w.unit {
             MouseScrollUnit::Line => w.y,
@@ -1829,7 +1968,15 @@ fn take_input(st: &mut DataState, tab: usize, l: &Lists, game: &mut Game, input:
     }
     if len > 0 {
         st.sel[tab] = st.sel[tab].min(len - 1);
-        st.first[tab] = model::keep_in_view(st.sel[tab], st.first[tab].min(len - 1), st.fit[tab]);
+        if st.manual_list.is_some_and(|(old_tab, selected)| old_tab != tab || (selected != st.sel[tab] && !st.pointer_pick)) {
+            st.manual_list = None;
+        }
+        if st.manual_list.is_some() {
+            st.first[tab] = st.first[tab].min(len.saturating_sub(st.fit[tab].max(1)));
+            st.manual_list = Some((tab, st.sel[tab]));
+        } else {
+            st.first[tab] = model::keep_in_view(st.sel[tab], st.first[tab].min(len - 1), st.fit[tab]);
+        }
     }
     let shows = pane_key(st, tab, l);
     scroll_pane(st, tab, shows, pane);
@@ -2002,6 +2149,11 @@ fn drag_bar(st: &mut DataState, held: bool, pointer: Option<Vec2>, pane: &mut Pa
 /// turned off on the one playing [hypothesis: "Tune"].
 fn use_row(st: &mut DataState, tab: usize, i: usize, l: &Lists, game: &mut Game) {
     match tab {
+        // A co-op guest's list is the host's log, read only: the host's active quest
+        // stays the marked one [design].
+        QUESTS if game.script.as_ref().and_then(|s| s.rt.as_ref()).is_some_and(|rt| rt.game.coop_guest) => {
+            info!("pipboy data: the host's quest log is read only here; the host's active quest stays marked");
+        }
         QUESTS => {
             if let Some(q) = l.quests.get(i).filter(|q| !q.done) {
                 st.active_quest = Some(q.form);
@@ -2380,6 +2532,7 @@ fn build(st: &mut DataState, tab: usize, l: &Lists, game: &Game, pointer: Option
         quests: !l.quests.is_empty(),
         no_show_location: game.script.as_ref().and_then(|s| s.rt.as_ref()).is_some_and(|rt| rt.game.tweaks.no_show_quest_location),
         quest_done: l.quests.get(st.sel[QUESTS]).map(|q| q.done),
+        quests_read_only: game.script.as_ref().and_then(|s| s.rt.as_ref()).is_some_and(|rt| rt.game.coop_guest),
         notes: l.has_notes,
         notes_of_active: st.notes_of_active,
         audio,
@@ -2418,6 +2571,9 @@ struct HintFacts {
     /// Quests are listed, and whether the selected one is done.
     quests: bool,
     quest_done: Option<bool>,
+    /// The list is the host's log, read only (a co-op guest): the
+    /// make-active hint is dim, as on a quest done [design].
+    quests_read_only: bool,
     /// The player's tweak drops Show Location [design: docs/design/tweaks.md].
     no_show_location: bool,
     /// The player has a note (whatever the filter keeps); the notes' filter is on; the
@@ -2471,7 +2627,7 @@ fn tab_buttons(tab: usize, f: &HintFacts) -> Vec<Button> {
     let b = |word, key, dim, kind| Button { hint: Hint::new(word, key, dim), kind };
     let a = match tab {
         WORLD => Some(b(built_in_label("sTravel"), a_key(), !f.marker, ButtonKind::Travel)),
-        QUESTS if f.quests => Some(b(built_in_label("sMakeActiveQuest"), a_key(), f.quest_done != Some(false), ButtonKind::MakeActive)),
+        QUESTS if f.quests => Some(b(built_in_label("sMakeActiveQuest"), a_key(), f.quest_done != Some(false) || f.quests_read_only, ButtonKind::MakeActive)),
         NOTES => f.audio.map(|playing| b(built_in_label(if playing { "sStopAudio" } else { "sPlayAudio" }), a_key(), false, ButtonKind::PlayAudio)),
         RADIO if f.stations => Some(b(built_in_label("sTune"), a_key(), false, ButtonKind::Tune)),
         _ => None,
@@ -2502,23 +2658,52 @@ fn quest_name(game: &Game, q: u32) -> String {
     game.script.as_ref().and_then(|s| s.rt.as_ref()).and_then(|rt| rt.game.data.quests.get(&FormId(q))).and_then(|d| d.name.clone()).unwrap_or_default()
 }
 
-/// The quest's objectives shown or done, with text.
+/// The quest's objectives shown or done, with text: on a co-op guest, the host's.
 fn objectives(game: &Game, q: u32) -> Vec<Row> {
     let Some(rt) = game.script.as_ref().and_then(|s| s.rt.as_ref()) else { return Vec::new() };
-    let (Some(def), Some(state)) = (rt.game.data.quests.get(&FormId(q)), rt.game.quests.get(&FormId(q))) else { return Vec::new() };
-    let mut lines: Vec<ObjectiveLine> = state
-        .objectives
-        .iter()
-        .filter(|(_, o)| o.displayed || o.completed)
-        .filter_map(|(i, o)| {
-            def.objectives.get(i)?;
+    let g = &rt.game;
+    let Some(def) = g.data.quests.get(&FormId(q)) else { return Vec::new() };
+    let shown: Vec<(i32, bool)> = match (&g.coop_host_quest, g.quests.get(&FormId(q))) {
+        (Some(h), _) if g.coop_guest && h.quest.0 == q => h.objectives.iter().map(|(i, done)| (*i, *done)).collect(),
+        // Another quest of the host's: its objectives as the host's story carries them,
+        // else as the host's quest view last showed them.
+        _ if g.coop_guest => match g.coop_host_story.quests.get(&FormId(q)).filter(|s| !s.objectives.is_empty()) {
+            Some(s) => s.objectives.iter().map(|(i, done)| (*i, *done)).collect(),
+            None => g.coop_host_objectives.get(&FormId(q)).map(|o| o.iter().map(|(i, done)| (*i, *done)).collect()).unwrap_or_default(),
+        },
+        (_, Some(state)) => state.objectives.iter().filter(|(_, o)| o.displayed || o.completed).map(|(i, o)| (*i, o.completed)).collect(),
+        (_, None) => Vec::new(),
+    };
+    let mut lines: Vec<ObjectiveLine> = shown
+        .into_iter()
+        .filter_map(|(i, done)| {
+            def.objectives.get(&i)?;
             // SetObjectiveText's first (`fnv_game::nvse_jip10`).
-            let text = rt.game.expand_codes(&rt.game.objective_text(FormId(q), *i)?);
-            (!text.trim().is_empty()).then(|| ObjectiveLine { index: *i, text: text.trim().to_string(), done: o.completed })
+            let text = g.expand_codes(&g.objective_text(FormId(q), i)?);
+            (!text.trim().is_empty()).then(|| ObjectiveLine { index: i, text: text.trim().to_string(), done })
         })
         .collect();
     model::sort_objectives(&mut lines);
-    lines.into_iter().map(|o| Row { text: o.text, mark: if o.done { Mark::Filled } else { Mark::Empty }, done: o.done }).collect()
+    let mut rows: Vec<Row> = lines.into_iter().map(|o| Row { text: o.text, mark: if o.done { Mark::Filled } else { Mark::Empty }, done: o.done }).collect();
+    if let Some(line) = claimed_line(g, FormId(q)) {
+        rows.push(Row { text: line, mark: Mark::None, done: false });
+    }
+    rows
+}
+
+/// A co-op guest's quest whose stages it claimed this session (joint progression,
+/// `fnv_game::coop_joint`, coop-shared-progress.md §3.5): a last line under its objectives saying they also
+/// count in this character's own save; a quest it does not sync (its line sat out:
+/// docs/design/coop-quest-sync.md §3) says so instead [design: our own words].
+fn claimed_line(g: &fnv_game::game::Game, q: FormId) -> Option<String> {
+    if !g.coop_guest {
+        return None;
+    }
+    if g.player.quest_sync.on == Some(true) && !g.coop_takes_quest(Some(q)) {
+        return Some(fnv_util::words::tr("Sitting out: not shared with your own save").to_string());
+    }
+    let n = g.player.claims.stages.get(&q).map_or(0, |s| s.len());
+    (n > 0).then(|| fnv_util::words::tr("Shared quest progress: also counts in your own save").to_string())
 }
 
 /// The heading's place name, kept per cell.
@@ -3361,7 +3546,8 @@ pub(crate) fn refresh_quest_targets(time: Res<Time<Real>>, state: Option<ResMut<
         return;
     }
     st.target_poll = TARGET_POLL;
-    let quest = st.active_quest.map(FormId).or(rt.game.ui.active_quest);
+    // A co-op guest marks the host's quest (`Game::coop_host_quest`).
+    let quest = if rt.game.coop_guest { rt.game.coop_host_quest.as_ref().map(|h| h.quest) } else { st.active_quest.map(FormId).or(rt.game.ui.active_quest) };
     // The conditions read the world played (`crate::script::with_world`).
     let checks = quest.map(|q| crate::script::with_world(rt, &mut sim, |rt| rt.game.check_quest_targets(q))).unwrap_or_default();
     if quest != st.target_quest {
@@ -3749,7 +3935,15 @@ fn list(p: &mut ChildSpawnerCommands, c: &mut Ctx, origin: Vec2, height: f32, ba
         }
         if first > 0 || first + fit < rows.len() {
             let bar_x = if bar_left { 0.0 } else { LIST_W - SCROLLBAR };
-            scroll_bar(p, c, bar_x, height, first as f32 / rows.len() as f32, fit as f32 / rows.len() as f32);
+            let from = first as f32 / rows.len() as f32;
+            let part = fit as f32 / rows.len() as f32;
+            scroll_bar(p, c, bar_x, height, from, part);
+            if let Some(tab) = tab {
+                let (top, h) = bar_marker(height, from, part);
+                let track = Rect::new(bar_x, ARROW_H+4.0, bar_x+SCROLLBAR, height-ARROW_H-4.0);
+                super::scrollbar::hits(p, Page::Data, tab, Rect::new(bar_x,0.0,bar_x+SCROLLBAR,height),track,
+                    Rect::new(bar_x,top,bar_x+SCROLLBAR,(top+h).min(track.max.y)),origin);
+            }
         }
     });
     fit
@@ -3816,10 +4010,11 @@ fn bar_run(height: f32) -> f32 {
 
 /// A scroll bar's marker in a bar `height` high: its top and height for the part shown
 /// (`part`) from `from` (shares of the whole).
-fn bar_marker(height: f32, from: f32, part: f32) -> (f32, f32) {
+pub(super) fn bar_marker(height: f32, from: f32, part: f32) -> (f32, f32) {
     let run = bar_run(height);
     (ARROW_H + 4.0 + run * from.clamp(0.0, 1.0), (run * part.clamp(0.0, 1.0)).max(8.0))
 }
+pub(super) fn bar_track(height: f32) -> (f32, f32) { (ARROW_H+4.0, height-ARROW_H-4.0) }
 
 /// The places on a scroll bar at `x`, `height` high ([`scroll_bar`]) that take the
 /// pointer: the arrows, the track above and below the marker, and the marker (as wide as
@@ -4978,16 +5173,16 @@ mod tests {
         for tab in [LOCAL, WORLD] {
             assert_eq!(shown(tab, &all), [hint("Place Marker", false)], "tab {tab}");
         }
-        assert_eq!(shown(QUESTS, &all), [hint("Show Location X)", false)]);
-        assert_eq!(shown(NOTES, &all), [hint("Active Notes X)", false), hint("Challenges R)", false)]);
-        assert_eq!(shown(NOTES, &HintFacts { notes_of_active: true, ..all }), [hint("All Notes X)", false), hint("Challenges R)", false)]);
-        assert_eq!(shown(NOTES, &HintFacts { challenges: true, ..all }), [hint("Next Challenge X)", true), hint("Challenges R)", false)]);
+        assert_eq!(shown(QUESTS, &all), [hint("Show Location [X]", false)]);
+        assert_eq!(shown(NOTES, &all), [hint("Active Notes [X]", false), hint("Challenges [R]", false)]);
+        assert_eq!(shown(NOTES, &HintFacts { notes_of_active: true, ..all }), [hint("All Notes [X]", false), hint("Challenges [R]", false)]);
+        assert_eq!(shown(NOTES, &HintFacts { challenges: true, ..all }), [hint("Next Challenge [X]", true), hint("Challenges [R]", false)]);
         // An audio note's Play is the controller's only.
         assert_eq!(shown(NOTES, &HintFacts { audio: Some(false), ..all }), shown(NOTES, &all));
         // No quest: nothing on Quests; no note: only the challenges toggle.
         assert!(shown(QUESTS, &none).is_empty());
-        assert_eq!(shown(NOTES, &none), [hint("Challenges R)", false)]);
-        assert_eq!(shown(NOTES, &HintFacts { challenges: true, ..none }), [hint("Challenges R)", false)]);
+        assert_eq!(shown(NOTES, &none), [hint("Challenges [R]", false)]);
+        assert_eq!(shown(NOTES, &HintFacts { challenges: true, ..none }), [hint("Challenges [R]", false)]);
     }
 
     /// With a controller the original's column (#1897, the issue's screenshots): Local
@@ -5017,18 +5212,18 @@ mod tests {
         ];
         crate::pad::set_labels(crate::pad::Labels::Keys);
         let want: [Vec<(String, bool)>; 13] = [
-            vec![hint("Place Marker X)", false)],
-            vec![hint("Travel A)", false), hint("Place Marker X)", false)],
-            vec![hint("Travel A)", true), hint("Place Marker X)", false)],
-            vec![hint("Set Active A)", false), hint("Show Location X)", false)],
-            vec![hint("Set Active A)", true), hint("Show Location X)", false)],
+            vec![hint("Place Marker [X]", false)],
+            vec![hint("Travel [A]", false), hint("Place Marker [X]", false)],
+            vec![hint("Travel [A]", true), hint("Place Marker [X]", false)],
+            vec![hint("Set Active [A]", false), hint("Show Location [X]", false)],
+            vec![hint("Set Active [A]", true), hint("Show Location [X]", false)],
             vec![],
-            vec![hint("Active Notes X)", false), hint("Challenges Y)", false)],
-            vec![hint("Play A)", false), hint("Active Notes X)", false), hint("Challenges Y)", false)],
-            vec![hint("Stop A)", false), hint("All Notes X)", false), hint("Challenges Y)", false)],
-            vec![hint("Next Challenge X)", true), hint("Challenges Y)", false)],
-            vec![hint("Challenges Y)", false)],
-            vec![hint("Tune In A)", false)],
+            vec![hint("Active Notes [X]", false), hint("Challenges [Y]", false)],
+            vec![hint("Play [A]", false), hint("Active Notes [X]", false), hint("Challenges [Y]", false)],
+            vec![hint("Stop [A]", false), hint("All Notes [X]", false), hint("Challenges [Y]", false)],
+            vec![hint("Next Challenge [X]", true), hint("Challenges [Y]", false)],
+            vec![hint("Challenges [Y]", false)],
+            vec![hint("Tune In [A]", false)],
             vec![],
         ];
         for (k, (g, w)) in got.iter().zip(&want).enumerate() {
@@ -5614,10 +5809,15 @@ mod tests {
                         assert!(r.max.x < super::super::SCREEN_CROP.x, "{labels:?} {:?} ends at {}", b.hint, r.max.x);
                         assert!(r.min.x > MAIN.min.x + LIST.max.x, "{labels:?} {:?} starts at {}", b.hint, r.min.x);
                     }
-                    // The keyboard's keys and the Xbox names fit: the words end at the
-                    // heading's right end.
+                    // The keyboard's keys and the Xbox names: the words end at the heading's
+                    // right end, or as far left of it as the widest key needs to stay in its
+                    // room (a bracketed "[Enter]", #4495; the rule of #1896).
                     if labels != crate::pad::Labels::PlayStation {
-                        assert!(ends.iter().all(|e| (e - MAIN.max.x).abs() < 1e-3), "{labels:?} tab {tab}: {ends:?}");
+                        let face = c.kit.face(2);
+                        let keys = list.iter().map(|b| crate::pad::hint_width(face, &b.hint.text(), c.glyphs) - crate::pad::hint_width(face, b.hint.word, c.glyphs));
+                        let right = super::super::frame::hint_words_right(MAIN.max.x, MAIN.max.x + super::super::frame::HINT_KEY_ROOM, keys);
+                        assert!(right > MAIN.max.x - 10.0, "{labels:?} tab {tab}: a key moves the column {} left", MAIN.max.x - right);
+                        assert!(ends.iter().all(|e| (e - right).abs() < 1e-3), "{labels:?} tab {tab}: {ends:?}");
                     }
                     let boxes = button_boxes(&c, &list);
                     for w in boxes.windows(2) {
@@ -6157,6 +6357,57 @@ mod tests {
         assert_eq!(marker_from_save(&serde_json::to_value(m).unwrap(), Some(&gone)), Some(m));
     }
 
+    /// The host's quest log on a guest: every named quest of the host's story with an objective shown or done,
+    /// running and done alike, in the host's order (running first, newest first); the
+    /// host's active quest even before the story carries it; a quest that ended a moment
+    /// ago done at once; unnamed quests and quests with no objective shown left out; the
+    /// player's own hide-completed tweak drops the done ones.
+    #[test]
+    fn a_guests_list_is_the_hosts_whole_quest_log() {
+        use fnv_game::coop::{HostQuest, HostQuestState, HostStory};
+        let state = |seen: u64, ended: bool, objectives: &[(i32, bool)]| HostQuestState { stage: 10, running: !ended, ended, done: vec![10], failed: false, objectives: objectives.iter().copied().collect(), seen };
+        let mut story = HostStory::default();
+        story.quests.insert(FormId(0x100), state(1, true, &[(10, true)])); // done, oldest
+        story.quests.insert(FormId(0x200), state(2, false, &[(10, true), (20, false)])); // running
+        story.quests.insert(FormId(0x300), state(3, false, &[(10, false)])); // running, newest
+        story.quests.insert(FormId(0x400), state(4, false, &[])); // started, nothing shown yet
+        story.quests.insert(FormId(0x500), state(5, false, &[(10, false)])); // no name (a quest the list never shows)
+        story.quests.insert(FormId(0x600), state(6, false, &[(10, false)])); // ends a moment ago
+        let named = |q: FormId| q.0 != 0x500;
+        // The host's active quest, which the story has not carried yet.
+        let host = HostQuest { quest: FormId(0x700), objectives: [(10, false)].into(), completed: false, failed: false };
+        let ended = [(FormId(0x600), false)];
+        let rows = |hide| host_quest_log(&story, Some(&host), &ended, named, hide).iter().map(|k| (k.form, k.done)).collect::<Vec<_>>();
+        assert_eq!(rows(false), [(0x700, false), (0x300, false), (0x200, false), (0x600, true), (0x100, true)]);
+        assert_eq!(rows(true), [(0x700, false), (0x300, false), (0x200, false)]);
+        // Nothing heard yet: an empty list, not the guest's own quests.
+        assert!(host_quest_log(&HostStory::default(), None, &[], |_| true, false).is_empty());
+    }
+
+    /// The host's log is read only on a guest: the make-active hint is dim there, as on a
+    /// quest done, and bright on the host's own running quest.
+    #[test]
+    fn a_guests_make_active_hint_is_dim() {
+        let make_active = |f: &HintFacts| tab_buttons(QUESTS, f).into_iter().find(|b| matches!(b.kind, ButtonKind::MakeActive)).map(|b| b.hint.dim);
+        assert_eq!(make_active(&facts(true)), Some(false));
+        assert_eq!(make_active(&HintFacts { quests_read_only: true, ..facts(true) }), Some(true));
+    }
+
+    #[test]
+    fn projected_mobile_wheel_reaches_native_data_list_channel_and_stale_tab_is_refused(){
+        use bevy::ecs::system::RunSystemOnce;
+        fn read(mut st:ResMut<DataState>,mut game:Game,mut input:Input){
+            take_input(&mut st,NOTES,&Lists::default(),&mut game,&mut input,None,true);
+        }
+        let mut world=page_world(true,data_open(NOTES));
+        let mut wheel=super::super::touch_scroll::WheelFrame::default();
+        wheel.set(world.resource::<PipBoy>(),Vec2::new(100.,100.),-60.);world.insert_resource(wheel);
+        world.run_system_once(read).unwrap();assert_eq!(world.resource_mut::<DataState>().take_list_notches(),-3.0);
+        world.resource_mut::<PipBoy>().tabs[Page::Data.index()]=QUESTS;
+        world.run_system_once(read).unwrap();assert_eq!(world.resource_mut::<DataState>().take_list_notches(),0.0);
+        assert!(world.resource::<Messages<FastTravelAsk>>().is_empty());
+    }
+
     #[test]
     fn script_map_marker_overrides_reach_world_local_discovery_compass_and_hud() {
         use bevy::ecs::system::SystemState;
@@ -6498,7 +6749,7 @@ mod tests {
 
         // Before discovery (#3468 check 252 + 2026-11-22 live map-marker probe for script
         // values; Pip-Boy drawing an undiscovered FNAM=3 marker as discovered with its own
-        // icon is [hypothesis]):
+        // icon follows `known_marker` above and docs/spec-notes/ext-lutana.md §9):
         // - Visible | Can Travel To (FNAM=3) is known and travelable (Some(true)).
         // - Visible alone (FNAM=1) is known as undiscovered (Some(false)).
         // - Can Travel To alone (FNAM=2) is unknown (None) and stays in unmapped_of (Hide Unmapped Places).

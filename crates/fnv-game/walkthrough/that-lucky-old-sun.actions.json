@@ -5,7 +5,7 @@
  "actions": [
   {
    "op": "note",
-   "text": "Path: at HELIOS One Lt. Haggerty hears why the player came (VMS03HaggertyInvestigate) and his offer to help with the solar tower (VMS03HaggertySolarTower, Science 30: 5); Fantastic, in the back, is talked round (SettleDown, Job, TryingToAccomplish, Retarget) and the player agrees to retarget the plant (VMS03FantasticIAmNow, begin script: 10, objectives 20/30/40, the west terminal's password); the west and east reflector terminals connect to the mainframe (VHeliosFarmTerminal1/2 item 0: objectives 20, 30); the auxiliary generator is mended (VHeliosAuxGeneratorSCRIPT, its box's button 1, shown with Repair 40 and a scrap of spare parts: objective 50); the mainframe terminal's power menu sends the power to the Strip and McCarran (VHeliosMainframeTerminalSub1 item 0: nPowerConfiguration 1, objective 60, 70 shown); the tower console (VHeliosArchimedesSCRIPT on ControlPanelHeliosTowerREF, 9:00-15:00) completes 70 and shows 80; Fantastic's DivertedPower line completes 80 and the quest (CompleteQuest; VMS03 has no Complete Quest stage, its only stages are 5, 10 and 255). Stand-ins: travel by move_player; Science 30 and Repair 40 given (set_av), one Spare Parts given (add_item); the hour set to 10:00 (GameHour) for the console; the plant's turrets and doors are not walked; the terminals' locks (password, hacking) are not modelled by the terminal op. Data note: Fantastic's IAmNow begin script adds the west terminal's password with no reference, so it goes to Fantastic, the speaker (a dialogue result runs on the speaker)."
+   "text": "Path: at HELIOS One Lt. Haggerty hears why the player came (VMS03HaggertyInvestigate) and his offer to help with the solar tower (VMS03HaggertySolarTower, Science 30: 5); Fantastic, in the back, is talked round (SettleDown, Job, TryingToAccomplish, Retarget) and the player agrees to retarget the plant (VMS03FantasticIAmNow, begin script: 10, objectives 20/30/40, the west terminal's password); the west and east reflector terminals connect to the mainframe (VHeliosFarmTerminal1/2 item 0: objectives 20, 30); the auxiliary generator is mended (VHeliosAuxGeneratorSCRIPT, its box's button 1, shown with Repair 40 and a scrap of spare parts: objective 50); the mainframe terminal's power menu sends the power to the Strip and McCarran (VHeliosMainframeTerminalSub1 item 0: nPowerConfiguration 1, objective 60, 70 shown); the tower console (VHeliosArchimedesSCRIPT on ControlPanelHeliosTowerREF, 9:00-15:00) completes 70 and shows 80; Fantastic's DivertedPower line completes 80 and the quest (CompleteQuest; VMS03 has no Complete Quest stage, its only stages are 5, 10 and 255). Stand-ins: travel by move_player; Science 30 and Repair 40 given (set_av), one Spare Parts given (add_item); the hour set to 10:00 (GameHour) for the console; the plant's turrets and doors are not walked; the terminals' locks (password, hacking) are not modelled by the terminal op. The west terminal's password comes with Fantastic's GOODBYE line 0x000E360D (Goodbye, Say Once, VMS03 at 10 or later): its end script's AddNote names no reference and gives the note to the player, as in the original (observer check 46, #1113). The player says goodbye to hear it; GetHasNote reads the note, which is no item."
   },
   {
    "op": "set_av",
@@ -95,7 +95,13 @@
    "label": "fantastic i am now"
   },
   {
-   "op": "end_talk"
+   "op": "choose",
+   "topic": "GOODBYE",
+   "label": "fantastic goodbye"
+  },
+  {
+   "op": "wait_talk",
+   "label": "fantastic goodbye done"
   },
   {
    "op": "advance_seconds",
@@ -113,9 +119,8 @@
    "label": "final: VMS03 10"
   },
   {
-   "op": "get_item_count",
-   "of": "player",
-   "item": "VMS03HeliosTerminalWestPassword",
+   "op": "call",
+   "line": "player.GetHasNote VMS03HeliosTerminalWestPassword",
    "label": "west password"
   },
   {

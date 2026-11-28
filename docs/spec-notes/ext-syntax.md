@@ -231,8 +231,15 @@ Command & Control 2.60, `(rRef.GetFactionRank <faction> > 9)` beside an extender
 
 **break** leaves the innermost while or foreach at once; **continue** skips to the next
 test (while) or entry (foreach). Both are only allowed inside such a loop
-[documented: Break; Continue; While; ForEach]. Nested loops: break and continue act on
-the innermost [hypothesis: the pages say "the loop"; not stated for nesting].
+[documented: Break; Continue; While; ForEach]. Nested `while` loops: `break` and `continue`
+act strictly on the innermost loop [observed: Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9,
+2026-11-23/24, `GSDocMitchellHouse` (`0x00103DF9`), 10 official base masters, read-only
+`PrintToConsole` probes `core_06_nested_loop_break_continue`
+(`tools/capture/nvse/catalogs/wave4a_extenders.json`, #3679):
+`PROBE|core_06_nested_loop_break_continue|3,3` and `w4c_b2_07_nested_break_continue`
+(`tools/capture/nvse/catalogs/wave4c_extenders.json`, #3679, nested `while` loops testing
+inner `break` and inner `continue`): `PROBE|w4c_b2_07_nested_break_continue|brk=3,cont=6`;
+no DLL or source consulted].
 
 **Label / GoTo** (FOSE1): `Label n` marks a place, `GoTo n` jumps back to it; `n` is
 0–255 (256 labels; other values do not work); the label must come before the GoTo. The

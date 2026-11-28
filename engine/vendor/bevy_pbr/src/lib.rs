@@ -394,6 +394,10 @@ impl Plugin for PbrPlugin {
                     nvf_count_light_views
                         .in_set(RenderSystems::Prepare)
                         .after(prepare_lights),
+                    // NVForever hosted shadow views (light.rs `NvfSharedShadowViews`).
+                    nvf_host_shadow_views
+                        .in_set(RenderSystems::Prepare)
+                        .after(prepare_lights),
                     prepare_clusters_for_cpu_clustering
                         .in_set(RenderSystems::PrepareResources)
                         .run_if(
@@ -404,7 +408,9 @@ impl Plugin for PbrPlugin {
                 ),
             )
             .init_gpu_resource::<LightMeta>()
-            .init_resource::<RenderShadowLodOrigin>();
+            .init_resource::<RenderShadowLodOrigin>()
+            // NVForever hosted shadow views.
+            .init_resource::<NvfSharedShadowViews>();
 
         render_app
             .world_mut()

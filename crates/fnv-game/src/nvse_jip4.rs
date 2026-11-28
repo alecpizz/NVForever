@@ -22,9 +22,12 @@ use std::collections::HashMap;
 /// This file's session state (not saved).
 #[derive(Debug, Default)]
 pub struct Jip4State {
-    /// SetQuestFlag's changes to the record flags of a quest (IDs 2–5 and 7), as the
+    /// SetQuestFlag's changes to the record flags of a quest (IDs 2–4 and 7), as the
     /// whole flag byte.
     pub quest_flags: HashMap<FormId, u8>,
+    /// Explicit `SetQuestFlag q 5 on` session overrides so clearing flag 5 (`0`) overrides
+    /// the Pip-Boy-shown fallback [observed: `w6d2_26_quest_flag_5_clear_and_all_bits`].
+    pub quest_flag5: HashMap<FormId, bool>,
     /// Invalidates placed-light and light-backed emittance consumers. Values remain
     /// in canonical field_overrides (light-session-consumers.md).
     pub light_revision: u64,
@@ -320,12 +323,24 @@ fn climate_trait(g: &Game, c: FormId, t: i64) -> f64 {
 
 fn set_climate_trait(g: &mut Game, c: FormId, t: i64, v: f64) {
     const SUN: [&str; 4] = ["sunrise_begin", "sunrise_end", "sunset_begin", "sunset_end"];
+    if g.data.sig(g.unclone(c)) != Some(*b"CLMT") || !v.is_finite() {
+        return;
+    }
     match t {
-        0..=3 => set(g, c, "TNAM", SUN[t as usize], XVal::Num((v / 10.0).trunc().clamp(0.0, 255.0))),
+        0..=3 => {
+            let units = ((v.trunc() as i64 as u32) / 10).min(143);
+            set(g, c, "TNAM", SUN[t as usize], XVal::Num(f64::from(units)));
+        }
         4 => set(g, c, "TNAM", "volatility", XVal::Num(v.trunc().clamp(0.0, 255.0))),
         5 | 6 => {
             let now = get_num(g, c, "TNAM", "moons_phase_length") as u64;
-            let new = if t == 5 { (now & 0x3F) | (((v as u64) & 3) << 6) } else { (now & 0xC0) | ((v as u64) & 0x3F) };
+            let new = if t == 5 {
+                let moons = (v.trunc() as i64).clamp(0, 3) as u64;
+                (now & 0x3F) | (moons << 6)
+            } else {
+                let phase = (v.trunc() as i64).clamp(0, 63) as u64;
+                (now & 0xC0) | phase
+            };
             set(g, c, "TNAM", "moons_phase_length", XVal::Num(new as f64));
         }
         _ => {}
@@ -360,8 +375,12 @@ impl Game<'_> {
     /// GetQuestFlag's IDs 0–7 [documented: GetQuestFlag]: 0 running, 1 completed and 6
     /// failed are the quest's state; 2 and 3 are the record's DATA bits of the same
     /// number; 4 (set running on reset) is DATA bit 0, "Start Game Enabled" [documented:
-    /// the page's note, Start Game Enabled is flags 0 and 4]; 5 (shown in the Pip-Boy) a
-    /// named quest that runs or ran [hypothesis]; 7 unknown, kept as set.
+    /// the page's note, Start Game Enabled is flags 0 and 4]; 5 (shown in the Pip-Boy)
+    /// reads an explicit `SetQuestFlag q 5 0/1` override first, otherwise bit `0x20` or
+    /// a named quest that has completed or displayed/completed an objective [observed:
+    /// `w6d2_26_quest_flag_5_clear_and_all_bits`, running named `VCG01` starts `0`,
+    /// `SetQuestFlag 5 1` -> `1`, `SetQuestFlag 5 0` -> `0`; hypothesis: objective/
+    /// completion fallback]; 7 unknown, kept as set.
     fn jip4_quest_flag(&self, q: FormId, id: i64) -> bool {
         let s = self.quests.get(&q);
         let bits = self.jip4_quest_bits(q);
@@ -371,8 +390,14 @@ impl Game<'_> {
             6 => s.is_some_and(|s| s.failed),
             2 | 3 => bits & (1 << id) != 0,
             4 => bits & 1 != 0,
-            5 if self.gaps.jip4.quest_flags.get(&q).is_some_and(|b| b & 0x20 != 0) => true,
-            5 => self.data.quests.get(&q).is_some_and(|d| d.name.as_deref().is_some_and(|n| !n.is_empty())) && s.is_some_and(|s| s.running || s.completed),
+            5 => {
+                if let Some(&on) = self.gaps.jip4.quest_flag5.get(&q) {
+                    return on;
+                }
+                bits & 0x20 != 0
+                    || (self.data.quests.get(&q).is_some_and(|d| d.name.as_deref().is_some_and(|n| !n.is_empty()))
+                        && s.is_some_and(|s| s.completed || s.objectives.values().any(|o| o.displayed || o.completed)))
+            }
             7 => bits & 0x80 != 0,
             _ => false,
         }
@@ -383,7 +408,13 @@ impl Game<'_> {
             0 => self.quest(q).running = on,
             1 => self.quest(q).completed = on,
             6 => self.quest(q).failed = on,
-            2..=5 | 7 => {
+            5 => {
+                self.gaps.jip4.quest_flag5.insert(q, on);
+                let now = self.jip4_quest_bits(q);
+                let new = if on { now | 0x20 } else { now & !0x20 };
+                self.gaps.jip4.quest_flags.insert(q, new);
+            }
+            2..=4 | 7 => {
                 let bit = if id == 4 { 1u8 } else { 1u8 << id };
                 let now = self.jip4_quest_bits(q);
                 let new = if on { now | bit } else { now & !bit };
@@ -408,14 +439,29 @@ impl Game<'_> {
         }
     }
 
-    /// An effect from a poison on the actor: an active effect whose source is an
-    /// ingestible all of whose effects are hostile and detrimental (GetIsPoison's rule,
-    /// `nvse_gaps`) [documented: GetIsPoisoned, "under the influence of a poison-type
-    /// effect"; hypothesis: the rule].
+    /// Whether the actor has an active poison or hostile+detrimental timed SPEL magic effect
+    /// (covering poison SPELs, ALCH poisons, and hostile+detrimental SPEL effects such as
+    /// SpellFlamerEffect while excluding beneficial or mixed non-poison ALCH ingestibles)
+    /// [documented: GetIsPoisoned; observed:
+    /// w6d12_38_getispoisoned_all_sources_and_antivenom_clear; design: ignoring inactive
+    /// (`!e.inactive`) and permanent (`!e.permanent`) effects and scoping the non-`is_poison`
+    /// Hostile+Detrimental branch to `SPEL` sources].
     fn jip4_poisoned(&self, a: FormId) -> bool {
-        self.effects.iter().filter(|e| e.target == a).any(|e| self.is_poison(e.source))
+        use crate::data::MagicEffectDef;
+        self.effects.iter().filter(|e| e.target == a && !e.inactive).any(|e| {
+            self.is_poison(e.source)
+                || (!e.permanent
+                    && self.data.sig(self.unclone(e.source)) == Some(*b"SPEL")
+                    && self
+                        .magic_effect_def(e.effect)
+                        .is_some_and(|m| m.has(MagicEffectDef::HOSTILE) && m.has(MagicEffectDef::DETRIMENTAL)))
+        })
     }
 }
+
+#[cfg(test)]
+#[path = "w6d12_getispoisoned_tests.rs"]
+mod w6d12_getispoisoned_tests;
 
 /// The functions of this file; `None` for any other name.
 pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XVal]) -> Option<Result<XVal, String>> {
@@ -626,12 +672,18 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
             }
             zero
         }
-        // The cell, place and angles (degrees) the reference has in the plugins; 0 for a
-        // reference made in the game [documented: GetEditorPosition; hypothesis: the
-        // angles in degrees, as GetAngle].
+        // The cell, place and angles (degrees) the reference has in the plugins; returns 0
+        // and preserves all six output variables unchanged for a reference with no editor
+        // placement such as the player or a runtime-created reference [documented:
+        // GetEditorPosition; observed: Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 + JIP LN
+        // 57.30, 2026-11-24, `w6_t1_03_pos_ex_and_editor_pos`
+        // (`tools/capture/nvse/catalogs/wave6_t1_editor_pos.json`, `jip-traits-4.md` §10):
+        // `edDoc=00103DF9(dpos=0.00,0.00,0.00|rot=0.000,0.000,22.918|start=0.000,0.000,22.918)|edPc=00000000(111.0,222.0,333.0,444.0,555.0,666.0)`].
         "geteditorposition" => {
-            let p = subject.and_then(|r| g.world.placed.get(r)).map(|p| (p.cell, p.pos, p.rot));
-            let (cell, pos, rot) = p.unwrap_or((None, [0.0; 3], [0.0; 3]));
+            let Some(p) = subject.and_then(|r| g.world.placed.get(r)) else {
+                return Some(Ok(XVal::Ref(0)));
+            };
+            let (cell, pos, rot) = (p.cell, p.pos, p.rot);
             let d = |a: f32| f64::from(a.to_degrees());
             let outs = [f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]), d(rot[0]), d(rot[1]), d(rot[2])];
             let ret = XVal::Ref(cell.map_or(0, |c| c.0));

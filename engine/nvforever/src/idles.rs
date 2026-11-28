@@ -59,8 +59,10 @@
 //!   when it stops (it listens), and whenever the gesture it plays ends while it is
 //!   still in the same part; the tree chooses talking or listening, the mood, sitting
 //!   or standing. A response's own idle (INFO `SNAM`/`LNAM`) or any other idle asked
-//!   for comes first: no gesture is picked while one plays. A gesture ends when the
-//!   conversation does, or when the actor walks.
+//!   for comes first: no gesture is picked while one plays. A gesture waits while the
+//!   actor walks, turns on the spot, or gets on or off furniture, and ends when the
+//!   conversation does, when the actor walks, or when its furniture posture changes
+//!   (getting off a seat or sitting down).
 //!
 //! - **Cowering** (idles.md §13). An NPC fleeing from a fight that stands still (as
 //!   when its flight begins, or at its flee spot) is checked every
@@ -217,6 +219,10 @@ pub struct Playing<C> {
     fresh: bool,
     /// Holds its actor in place until it ends ([`holds_in_place`]).
     pub holds: bool,
+    /// Whether the actor was seated on furniture (`on_furniture`, state 3) when this
+    /// idle started, so seated gestures and dialogue idles fade out if it starts getting
+    /// off furniture (#3407).
+    pub seated: bool,
     /// The normalized source file, when this is an IDLE loaded from a file.
     file: Option<String>,
 }
@@ -235,6 +241,13 @@ impl<C> Default for IdleSlot<C> {
 }
 
 impl<C> IdleSlot<C> {
+    /// Play a clip that is no IDLE record (a slot machine's seat) as an idle `source`
+    /// asked for; returns its serial.
+    pub fn start_clip(&mut self, source: IdleSource, clip: C, play: IdlePlay) -> u32 {
+        self.start(0, source, None, clip, play);
+        self.serial
+    }
+
     /// Play an idle from its start. What played until now is held under it while it
     /// fades in; an idle started in the same step is replaced outright (a package's
     /// change idle followed by the next package's begin idle).
@@ -267,7 +280,7 @@ impl<C> IdleSlot<C> {
             self.prev = Some(old);
         }
         self.serial = self.serial.wrapping_add(1);
-        self.cur = Some(Playing { idle, group: None, source, owner, clip, play, serial: self.serial, fresh: true, holds: false, file });
+        self.cur = Some(Playing { idle, group: None, source, owner, clip, play, serial: self.serial, fresh: true, holds: false, seated: false, file });
         true
     }
 
@@ -439,6 +452,11 @@ pub struct PlayerIdles {
     pub third: IdleSlot<Arc<Clip>>,
     /// The player when an idle began to turn the view ([`Held`]).
     pub held: Option<Held>,
+    /// A menu that is played at a place in the world is open (the slot machine's,
+    /// `slots_seat.rs`): the third-person body's idles go on under it, where a menu
+    /// otherwise holds them [design: the body is seen at the machine; slots-170-B
+    /// camera-win-warm, the cheer held on its first frame].
+    pub under_menu: bool,
 }
 
 /// Movement camera overlays animate the view without owning position; other
@@ -958,6 +976,8 @@ pub fn drive(
     // closes, so a scene goes on where it was [observed: owner's TTW run 2026-11-02, the
     // stage that opens the trait menu starts the birth scene's last section, which
     // played out behind the menu; hypothesis: the original's menu mode stops it].
+    // ... except the player's body at a menu played in the world (`PlayerIdles::under_menu`).
+    let body_dt = if pi.under_menu { dt } else if game.menu.is_some() { 0.0 } else { dt };
     let dt = if game.menu.is_some() { 0.0 } else { dt };
     // Between frames the game being played keeps its world in the simulation
     // (`nvf_play::script::with_world`); conditions are evaluated with it put back.
@@ -1022,6 +1042,18 @@ pub fn drive(
         .map(|(_, v, ..)| v.0)
         .collect();
     drop_holstered_waits(&mut st.waiting, &away_off);
+    // Drop queued talking gestures whose actor started moving, left the conversation,
+    // or entered a furniture transition while the clip was loading (#3407).
+    let stale_gestures: HashSet<u32> = actors
+        .iter()
+        .filter(|(_, v, _, _, lo, _)| {
+            let moving = lo.is_some_and(|l| l.velocity != [0.0; 2]);
+            let talking = talk_parts.iter().any(|p| p.actor.0 == v.0);
+            moving || !talking || in_furniture_transition(game, v.0)
+        })
+        .map(|(_, v, ..)| v.0)
+        .collect();
+    drop_stale_gesture_waits(&mut st.waiting, &stale_gestures);
     for (_, v, _, idle, lo, _) in &mut actors {
         let Some(mut idle) = idle else { continue };
         idle.0.check_owner(|s| owner_now(game, v.0, s));
@@ -1074,8 +1106,17 @@ pub fn drive(
         if let Some(c) = idle.0.cur.as_mut().filter(|c| c.source == IdleSource::Standing && (moving || game.draws_weapon(FormId(v.0)) || game.is_dead(FormId(v.0)))) {
             c.play.stop();
         }
-        // A gesture ends when its actor walks or is no longer in a conversation [design].
-        if let Some(c) = idle.0.cur.as_mut().filter(|c| c.source == IdleSource::Gesture && (moving || !talk_parts.iter().any(|p| p.actor.0 == v.0))) {
+        // A gesture ends when its actor walks, is no longer in a conversation, or
+        // changes furniture posture (e.g., starts getting off a chair while a seated
+        // talk clip plays, or sits down during a standing gesture) [design, #3407].
+        // A seated response idle (Speaker/Listener) likewise fades out when its actor
+        // starts getting off furniture so its seated pose does not persist once the
+        // exit clip ends [design, #3407].
+        let seated_now = on_furniture(game, v.0);
+        if let Some(c) = idle.0.cur.as_mut().filter(|c| {
+            (c.source == IdleSource::Gesture && gesture_ends(moving, talking, c.seated, seated_now))
+                || seated_dialogue_idle_ends(c.source, c.seated, seated_now)
+        }) {
             c.play.stop();
         }
         // An idle that poses its actor's legs ends when the actor has somewhere to go
@@ -1418,12 +1459,22 @@ pub fn drive(
         // A standing look gives way to the gestures (House's talking face).
         let other = playing.is_some_and(|p| !matches!(p.source, IdleSource::Gesture | IdleSource::Standing)) || asked_now.contains(&actor);
         let gesture_on = playing.is_some_and(|p| p.source == IdleSource::Gesture);
-        // Walking, or turning on the spot to face the other fast enough for the turn
-        // clips (they step the feet; the walker's heading noise is far below it).
-        let busy_body = lo.is_some_and(|l| l.velocity != [0.0; 2] || l.turn.abs() > fnv_actor::locomotion::TURN_RATE);
+        // Walking, turning on the spot to face the other fast enough for the turn
+        // clips (they step the feet; the walker's heading noise is far below it), or
+        // getting onto/off furniture (idles.md §12.2) [design, #3407].
+        let furniture_transition = in_furniture_transition(game, actor);
+        let busy_body = lo.is_some_and(|l| l.velocity != [0.0; 2] || l.turn.abs() > fnv_actor::locomotion::TURN_RATE) || furniture_transition;
         if other || busy_body || (gesture_on && !changed) || (g.retry > 0.0 && !changed) {
             if (changed || fresh) && (other || busy_body) {
-                let why = if other { "another idle plays" } else if lo.is_some_and(|l| l.velocity != [0.0; 2]) { "it walks" } else { "it turns on the spot" };
+                let why = if other {
+                    "another idle plays"
+                } else if furniture_transition {
+                    "it uses furniture"
+                } else if lo.is_some_and(|l| l.velocity != [0.0; 2]) {
+                    "it walks"
+                } else {
+                    "it turns on the spot"
+                };
                 info!("talk gesture: {} waits: {why}", game.data.name(part.actor));
             }
             continue;
@@ -1658,11 +1709,15 @@ pub fn drive(
                 continue;
             }
             let bound = Arc::new(bound);
+            let seated = on_furniture(game, actor.0);
             let started = match slot {
                 Some(mut s) => {
                     let started = s.0.start_file(idle.0, source, owner, bound, play, file);
                     if let Some(c) = s.0.cur.as_mut() {
                         c.holds = holds;
+                        if started {
+                            c.seated = seated;
+                        }
                     }
                     started
                 }
@@ -1671,6 +1726,7 @@ pub fn drive(
                     s.0.start_file(idle.0, source, owner, bound, play, file);
                     if let Some(c) = s.0.cur.as_mut() {
                         c.holds = holds;
+                        c.seated = seated;
                     }
                     commands.entity(e).insert(s);
                     true
@@ -1724,9 +1780,8 @@ pub fn drive(
             None => {}
         }
     }
-    for slot in [&mut pi.first, &mut pi.third] {
-        slot.advance(dt);
-    }
+    pi.first.advance(dt);
+    pi.third.advance(body_dt);
     if let Some(p) = pi.first.playing().or(pi.third.playing()) {
         now.insert(player_ref, p.idle);
     }
@@ -1759,6 +1814,34 @@ fn fleeing(game: &Game, actor: u32) -> bool {
 /// `GetSleeping` 3).
 fn on_furniture(game: &Game, actor: u32) -> bool {
     game.furniture_use(FormId(actor)).is_some_and(|u| u.state == 3)
+}
+
+/// Whether `actor` is getting onto or off furniture (`GetSitting` / `GetSleeping`
+/// state other than 3, such as 2 GettingOn or 4 GettingOff) [design, #3407].
+fn in_furniture_transition(game: &Game, actor: u32) -> bool {
+    game.furniture_use(FormId(actor)).is_some_and(|u| u.state != 3)
+}
+
+/// Whether a talking gesture ends: its actor walks, is no longer in a conversation, or
+/// changed furniture posture relative to when the gesture started (e.g., started getting
+/// off a chair while a seated talk clip plays, or sat down during a standing gesture)
+/// [design, #3407].
+fn gesture_ends(moving: bool, talking: bool, gesture_seated: bool, now_seated: bool) -> bool {
+    moving || !talking || gesture_seated != now_seated
+}
+
+/// Whether a dialogue response's own Speaker/Listener idle ends because it started while
+/// seated on furniture (`state == 3`) and the actor has started getting off or stood up
+/// [design, #3407].
+fn seated_dialogue_idle_ends(source: IdleSource, idle_seated: bool, now_seated: bool) -> bool {
+    idle_seated && !now_seated && matches!(source, IdleSource::Speaker | IdleSource::Listener)
+}
+
+/// Talking gestures still waiting for their clip, of actors in `stale` (moving, no
+/// longer talking, or getting on/off furniture), are dropped so they do not start during
+/// or after a furniture transition [design, #3407].
+fn drop_stale_gesture_waits(waiting: &mut Vec<(IdleRequest, std::time::Instant)>, stale: &HashSet<u32>) {
+    waiting.retain(|(r, _)| !(r.source == IdleSource::Gesture && stale.contains(&r.actor.0)));
 }
 
 /// Whether a fidget with the weapon away ends: its actor moves, its weapon is no longer
@@ -2471,5 +2554,96 @@ mod tests {
         assert_eq!(clip_path_for(&game, FormId::PLAYER_REF, Some(IdlePov::Third), idle).as_deref(), Some("meshes\\characters\\_male\\idleanims\\specialidle_test.kf"));
         assert_eq!(strip_meshes_prefix("meshes/AnimGroupOverride/ModA/SpecialIdle_Test.kf"), "AnimGroupOverride\\ModA\\SpecialIdle_Test.kf");
         assert_eq!(strip_meshes_prefix("Meshes\\AnimGroupOverride\\ModA\\SpecialIdle_Test.kf"), "AnimGroupOverride\\ModA\\SpecialIdle_Test.kf");
+    }
+
+    #[test]
+    fn talking_gesture_ends_on_furniture_posture_change_and_clears_before_chair_exit_finishes() {
+        // Seated gesture keeps playing while still seated, stationary, and talking.
+        assert!(!gesture_ends(false, true, true, true));
+        // Standing gesture keeps playing while standing still and talking.
+        assert!(!gesture_ends(false, true, false, false));
+        // Seated gesture ends as soon as the actor starts getting off (now_seated == false),
+        // even while velocity == 0 and the dialogue line is still playing (#3407).
+        assert!(gesture_ends(false, true, true, false), "seated gesture must stop on chair exit");
+        // Standing gesture ends if the actor sits down.
+        assert!(gesture_ends(false, true, false, true), "standing gesture must stop on sitting");
+        // Existing stop triggers remain unchanged: moving or leaving conversation.
+        assert!(gesture_ends(true, true, false, false), "moving ends gesture");
+        assert!(gesture_ends(false, false, true, true), "leaving conversation ends gesture");
+
+        // Slot lifecycle: a 6.97 s seated talk gesture stopped when a 1.53 s chair exit starts
+        // fades out over its 0.25 s blend-out and is completely gone before the actor stands up.
+        let mut slot: IdleSlot<u8> = IdleSlot::default();
+        assert!(slot.start(42, IdleSource::Gesture, None, 42, play(6.97, 0.25, Some(1))));
+        slot.cur.as_mut().unwrap().seated = true;
+        slot.advance(1.2);
+        assert!(slot.playing().is_some());
+        if let Some(c) = slot.cur.as_mut().filter(|c| c.source == IdleSource::Gesture && gesture_ends(false, true, c.seated, false)) {
+            c.play.stop();
+        }
+        assert!(slot.playing().is_none(), "stopped gesture immediately yields busy status");
+        slot.advance(0.30);
+        assert!(slot.is_empty(), "seated gesture fades out well before a 1.53 s exit clip ends");
+    }
+
+    #[test]
+    fn seated_dialogue_response_idles_stop_on_furniture_exit_while_other_idles_stay() {
+        // Seated Speaker and Listener idles stop when the actor starts getting off furniture.
+        assert!(seated_dialogue_idle_ends(IdleSource::Speaker, true, false));
+        assert!(seated_dialogue_idle_ends(IdleSource::Listener, true, false));
+        // While still seated, they continue normally.
+        assert!(!seated_dialogue_idle_ends(IdleSource::Speaker, true, true));
+        assert!(!seated_dialogue_idle_ends(IdleSource::Listener, true, true));
+        // Standing dialogue response idles are unaffected.
+        assert!(!seated_dialogue_idle_ends(IdleSource::Speaker, false, false));
+        assert!(!seated_dialogue_idle_ends(IdleSource::Listener, false, true));
+        // Scripted / package idles are not forcibly ended by this rule.
+        assert!(!seated_dialogue_idle_ends(IdleSource::Script, true, false));
+        assert!(!seated_dialogue_idle_ends(IdleSource::PackageBegin, true, false));
+    }
+
+    #[test]
+    fn furniture_transition_holds_gestures_and_drops_stale_waiting_gestures() {
+        use fnv_game::game::FurnitureUse;
+        let empty = crate::outfits::tests::empty_world_data();
+        let forms = crate::outfits::tests::actor_forms(vec![]);
+        let refs = fnv_sim::RefTable::default();
+        let functions = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schemas/script/functions.json");
+        let table = fnv_script::FunctionTable::load(&functions).unwrap();
+        let json = serde_json::from_str(&std::fs::read_to_string(functions).unwrap()).unwrap();
+        let data = fnv_game::GameData::build(empty.lo, empty.schema, table, &json, &refs);
+        let mut game = Game::new(&data, fnv_sim::World::new(&forms, &refs, Default::default()), Default::default());
+        let actor = 0x2001u32;
+
+        // Standing (no furniture): neither on furniture nor transitioning.
+        assert!(!on_furniture(&game, actor));
+        assert!(!in_furniture_transition(&game, actor));
+
+        // Getting on furniture (state 2): transitioning -> gestures wait.
+        game.set_furniture_use(FormId(actor), Some(FurnitureUse { reference: FormId(0x3001), marker_id: 14, state: 2 }));
+        assert!(!on_furniture(&game, actor));
+        assert!(in_furniture_transition(&game, actor));
+
+        // Seated on furniture (state 3): seated and not transitioning -> chair gestures allowed.
+        game.set_furniture_use(FormId(actor), Some(FurnitureUse { reference: FormId(0x3001), marker_id: 14, state: 3 }));
+        assert!(on_furniture(&game, actor));
+        assert!(!in_furniture_transition(&game, actor));
+
+        // Getting off furniture (state 4): transitioning -> seated gestures end and no new gesture starts.
+        game.set_furniture_use(FormId(actor), Some(FurnitureUse { reference: FormId(0x3001), marker_id: 14, state: 4 }));
+        assert!(!on_furniture(&game, actor));
+        assert!(in_furniture_transition(&game, actor));
+
+        // Queued gesture requests for stale actors are dropped while Script requests and other actors stay.
+        let now = std::time::Instant::now();
+        let req = |a: u32, idle: u32, source: IdleSource| (IdleRequest { actor: FormId(a), idle: FormId(idle), source, pov: None }, now);
+        let mut waiting = vec![
+            req(actor, 10, IdleSource::Gesture),
+            req(actor, 11, IdleSource::Script),
+            req(actor + 1, 12, IdleSource::Gesture),
+        ];
+        drop_stale_gesture_waits(&mut waiting, &HashSet::from([actor]));
+        let left: Vec<(u32, IdleSource)> = waiting.iter().map(|(r, _)| (r.actor.0, r.source)).collect();
+        assert_eq!(left, [(actor, IdleSource::Script), (actor + 1, IdleSource::Gesture)]);
     }
 }

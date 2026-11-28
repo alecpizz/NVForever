@@ -231,6 +231,34 @@ fn unlinked_navmeshes_are_unreachable_and_ledges_are_opt_in() {
 }
 
 #[test]
+fn a_step_between_unlinked_areas_is_found_where_they_lie_close() {
+    // SSHQ01's shape (#3473): a floor and, 24 units beyond its east edge and 31 below, a
+    // stair top on a navmesh of its own, no link between them.
+    let a = grid(1, [0.0, 0.0], 2, 2, 100.0, &[], flat);
+    let b = grid(2, [224.0, 0.0], 2, 2, 100.0, &[], |_, _| -31.0);
+    let g = graph(&[(a, W), (b, W)]);
+    let from = Place { space: W, pos: [50.0, 50.0, 0.0] };
+    let to = Place { space: W, pos: [350.0, 50.0, -31.0] };
+    assert!(matches!(g.find_path(from, to, &PathParams::default()), Err(PathError::Unreachable { .. })));
+    let area = |p: Place| g.area[g.locate(p.space, p.pos, 64.0).unwrap() as usize];
+    let (fa, ta) = (area(from), area(to));
+    assert_ne!(fa, ta);
+    let (off, on) = g.step_between(W, fa, ta, 48.0, 48.0).expect("a step");
+    // Off the floor's east edge, onto the lower navmesh, a little way into it.
+    assert!((off[0] - 200.0).abs() < 1e-3 && off[2] == 0.0, "{off:?}");
+    assert!(on[0] > 224.0 && on[0] <= 224.0 + crate::graph::STEP_IN + 1.0 && on[2] == -31.0, "{on:?}");
+    assert_eq!(area(Place { space: W, pos: on }), ta);
+    // From there the way goes on; and both ways are found.
+    assert!(g.find_path(Place { space: W, pos: on }, to, &PathParams::default()).is_ok());
+    assert!(g.step_between(W, ta, fa, 48.0, 48.0).is_some());
+    // Too far apart, too high, or the same area: none.
+    assert!(g.step_between(W, fa, ta, 20.0, 48.0).is_none());
+    assert!(g.step_between(W, fa, ta, 48.0, 30.0).is_none());
+    assert!(g.step_between(W, fa, fa, 48.0, 48.0).is_none());
+    assert!(g.step_between(Space::Interior(9), fa, ta, 48.0, 48.0).is_none());
+}
+
+#[test]
 fn walkers_take_off_from_the_ledge_links_point() {
     let a = grid(1, [0.0, 0.0], 2, 2, 100.0, &[], flat);
     let b = grid(2, [200.0, 0.0], 2, 2, 100.0, &[], |_, _| -100.0);

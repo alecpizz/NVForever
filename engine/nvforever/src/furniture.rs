@@ -509,6 +509,23 @@ impl Approach {
     }
 }
 
+impl OnFurniture {
+    /// The furniture reference used.
+    pub fn furniture(&self) -> u32 {
+        self.plan.furniture
+    }
+
+    /// On it (getting on, staying or getting off), not walking up to it.
+    pub fn seated(&self) -> bool {
+        matches!(self.stage, Stage::Using(_))
+    }
+
+    /// Getting off it, or asked to while still getting on.
+    pub fn leaving(&self) -> bool {
+        matches!(&self.stage, Stage::Using(u) if u.phase == Phase::GettingOff || u.leave_wanted)
+    }
+}
+
 enum Stage {
     /// The last steps to the entry point: turn to face the way, walk there, turn to the
     /// entry heading (`Approach::at`).
@@ -983,6 +1000,9 @@ pub fn drive_player(
             seat.hold = Some(b.pos);
             seat.bed = lying && u.usage.phase != Phase::GettingOff;
             seat.on = Some(u.plan.furniture);
+            seat.seated = u.usage.phase == Phase::On;
+            // Getting off is sent to the co-op players as off (`coop.rs`).
+            seat.getting_off = u.usage.phase == Phase::GettingOff;
             body.0 = Some(b);
         }
         None => {
@@ -995,6 +1015,7 @@ pub fn drive_player(
             seat.hold = None;
             seat.bed = false;
             seat.on = None;
+            seat.seated = false;
             body.0 = None;
             f.stats.player_stood += 1;
             f.release(u.plan.furniture, who.reference);

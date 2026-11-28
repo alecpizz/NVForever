@@ -40,6 +40,18 @@ actors, `resolve_changed_at`), `engine/nvforever/src/zones.rs` (the engine's cop
   leveled actors when it loads them]. A reference with a zone of its own enters that zone
   when its cell loads.
 - Saved: `fnv.sim.state/1` `zone_levels` (absent when empty).
+- **Optional tweak (`bNoLockEncounterZoneLevels`, off by default):** [documented: lStewieAl's
+  Tweaks 10.05 (`https://www.nexusmods.com/newvegas/mods/66347`) `nvse_stewie_tweaks.ini`
+  `[Tweaks]`: `; don't freeze the level of encounter zones when they are first visited` /
+  `bNoLockEncounterZoneLevels = 0`; no DLL or source consulted]. When
+  `Tweaks::no_lock_encounter_zone_levels` (`tweak-no-lock-encounter-zone-levels`) is enabled,
+  entering or querying a zone recomputes its level from the player's current level
+  (`level_on_entry`, still respecting `min_level` and "Match PC Below Minimum Level" including
+  session `SetZoneMinLevel` / `SetZoneFlag` bit-2 overrides) instead of keeping the first-visit
+  level frozen (`World::enter_zone`, `World::level_at_with_zone_lock`, `Game::zone_level` /
+  `GetZoneLevel`); already-fixed references keep their fixed `ref_levels` until a cell reset,
+  and toggling the option off leaves unmodded vanilla locking unchanged [design: NVForever's own
+  runtime integration; the toggle itself is a setting and is not saved in `Snapshot`].
 
 ## 3. The level a placed reference reads leveled lists at
 

@@ -18,8 +18,8 @@
 //!   stayed there for the next minute, in a dust storm too; one held on a slope kept
 //!   rocking, more in the storm].
 //! - **The wind.** Its direction is the trees' and the grass's (`crate::tree::wind_vector`),
-//!   its speed [`SPEED_PER_WIND`] × the weather's DATA wind speed, faded across a weather
-//!   change; none indoors.
+//!   its speed [`ROLL_SPEED`] in any weather with wind, faded in and out across a change
+//!   to or from a still one; none indoors.
 //!
 //! Log: `wind summary: …` at exit (bodies that respond to the wind, the most blown in one
 //! frame, the longest way one went and where to, the most time a frame took).
@@ -28,11 +28,14 @@ use bevy::prelude::*;
 use nvf_play::phys::PhysState;
 use std::collections::HashMap;
 
-/// Game units a second of wind per unit of the WTHR DATA wind speed (0–255): 4, so the
-/// masters' usual 50 blows at 200 units a second [hypothesis: the fastest tumbleweeds of
-/// o27_tumble, under NVWastelandClear's 50, rolled at 150–210 units a second; linear in
-/// the wind speed is a guess].
-pub const SPEED_PER_WIND: f32 = 4.0;
+/// The speed the wind rolls a tumbleweed at, game units a second, whatever the weather's
+/// WTHR DATA wind speed, as long as it is not 0 [observed: o27_tumble, NVWastelandClear's
+/// 50, the fastest rolled at 150–210 units a second; o32_tumble, HVDustStorm's 127 forced
+/// before the cells loaded, the one that rolled went 654 units in 6 s at a median 126 and
+/// a 90th percentile of 182, towards the same 319° (observer check 94, 2026-11-25, issue
+/// #1401): no faster; hypothesis: the same in every weather with wind, 200 from the fastest
+/// under 50]. Before, 4 units a second per unit of wind speed rolled them at 508 under 127.
+pub const ROLL_SPEED: f32 = 200.0;
 
 /// The most the wind changes a body's horizontal speed, game units a second squared: on
 /// a slope of more than about 25° (gravity's share 9.8 m/s² × sin 25° ≈ 290 units/s²)
@@ -51,9 +54,15 @@ pub const SETTLE: f32 = 50.0;
 /// The wind in game space: (x, y) in game units a second.
 pub fn wind_velocity(sky: &crate::sky::SkyState) -> [f32; 2] {
     let w = crate::tree::wind_vector(sky);
-    // Bevy (x, z) is game (x, −y); w.w is the wind speed ÷ 255.
-    let speed = w.w * 255.0 * SPEED_PER_WIND;
-    [w.x * speed, -w.z * speed]
+    // Bevy (x, z) is game (x, −y); w.w is the wind speed ÷ 255, 0 in a still weather.
+    [w.x * roll_speed(w.w * 255.0), -w.z * roll_speed(w.w * 255.0)]
+}
+
+/// The roll speed for the weather's wind speed `wind` (DATA units, faded across a change):
+/// [`ROLL_SPEED`] for any wind of 1 or more, eased in below that so a fade from a still
+/// weather does not start it at once [design].
+fn roll_speed(wind: f32) -> f32 {
+    ROLL_SPEED * wind.clamp(0.0, 1.0)
 }
 
 #[derive(Resource, Default)]
@@ -127,8 +136,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_usual_wind_blows_at_200_units_a_second() {
-        assert_eq!(50.0 * SPEED_PER_WIND, 200.0);
+    fn the_wind_rolls_them_alike_in_a_breeze_and_a_storm() {
+        // NVWastelandClear's 50 and HVDustStorm's 127 (observer check 94).
+        assert_eq!(roll_speed(50.0), 200.0);
+        assert_eq!(roll_speed(127.0), 200.0);
+        assert_eq!(roll_speed(0.0), 0.0);
+        assert!(roll_speed(0.5) < ROLL_SPEED);
         // A slope of 25° holds a body against the pull: gravity's share exceeds it.
         let g = 9.8 * 69.99;
         assert!(g * 25f32.to_radians().sin() < WIND_ACCEL * 1.0 + 1.0);

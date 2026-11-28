@@ -1,0 +1,80 @@
+plugins { id 'com.android.application' }
+
+// Monotonic Android versionCode for downgrade protection: explicit NVF_ANDROID_VERSION_CODE
+// or -PnvfAndroidVersionCode wins; otherwise derive from versionName
+// (major*10_000_000 + minor*100_000 + patch*1_000 + androidRevision).
+def resolvedVersionName = providers.environmentVariable('NVF_ANDROID_VERSION_NAME')
+    .orElse(providers.gradleProperty('nvfAndroidVersionName'))
+    .getOrElse('0.7.0-android-r10')
+def explicitVersionCode = providers.environmentVariable('NVF_ANDROID_VERSION_CODE')
+    .orElse(providers.gradleProperty('nvfAndroidVersionCode'))
+    .orNull
+def deriveVersionCode = { String name ->
+    def m = (name =~ /^v?(\d+)\.(\d+)\.(\d+)(?:-android-r(\d+))?/)
+    if (!m.find()) {
+        throw new GradleException("Cannot derive monotonic versionCode from versionName '${name}'; set NVF_ANDROID_VERSION_CODE")
+    }
+    int major = m.group(1) as int
+    int minor = m.group(2) as int
+    int patch = m.group(3) as int
+    int rev = m.group(4) ? (m.group(4) as int) : 0
+    return major * 10000000 + minor * 100000 + patch * 1000 + rev
+}
+def resolvedVersionCode = explicitVersionCode != null
+    ? (explicitVersionCode as int)
+    : deriveVersionCode(resolvedVersionName)
+if (resolvedVersionCode <= 1) {
+    throw new GradleException("Android versionCode must be > 1 (got ${resolvedVersionCode})")
+}
+
+android {
+    namespace 'org.nvforever.android'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'org.nvforever.android'
+        minSdk 29
+        targetSdk 35
+        versionCode resolvedVersionCode
+        versionName resolvedVersionName
+        ndk { abiFilters 'arm64-v8a' }
+    }
+    // Only this repository's runtime data and Classic casing artwork. No game data.
+    sourceSets.main.assets.srcDirs = ['../../runtime-assets']
+    sourceSets.main.jniLibs.srcDirs = ['../../native-libs']
+    packaging { jniLibs { useLegacyPackaging = true } }
+    buildTypes { release { minifyEnabled false } }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+}
+
+// Binary distributions carry the same licence notices as desktop release archives.
+def legalAssets = layout.buildDirectory.dir('generated/legal-assets')
+android.sourceSets.main.assets.srcDir(legalAssets)
+def stageLegalAssets = tasks.register('stageLegalAssets', Exec) {
+    outputs.dir(legalAssets)
+    // Regenerate with the exact resolved native dependency graph and source revision.
+    outputs.upToDateWhen { false }
+    doFirst {
+        def ndk = providers.environmentVariable('ANDROID_NDK_HOME').orNull
+        if (ndk == null) throw new GradleException('Set ANDROID_NDK_HOME or build with tools/android/build.py')
+        commandLine providers.environmentVariable('NVF_PYTHON').getOrElse('python3'),
+            rootProject.file('../tools/android/legal_assets.py'), '--ndk', ndk,
+            '--out', legalAssets.get().asFile
+    }
+    doLast {
+        // A Java-only support APK can retain an already-qualified native library pair.
+        // Its native source identity is separate from this APK's corresponding source.
+        def nativeSource = providers.environmentVariable('NVF_ANDROID_NATIVE_SOURCE').orNull
+        def destination = legalAssets.get().file('NATIVE-SOURCE.txt').asFile
+        if (nativeSource != null) {
+            if (!(nativeSource ==~ /[0-9a-f]{40}/)) throw new GradleException('Invalid native source revision')
+            destination.text = "Native libraries corresponding source:\nhttps://github.com/LootJunkieAzza/NVForever/tree/${nativeSource}\n"
+        } else if (destination.exists() && !destination.delete()) {
+            throw new GradleException('Cannot remove stale native source identity')
+        }
+    }
+}
+tasks.configureEach {
+    if ((name.startsWith('merge') && name.endsWith('Assets'))
+            || name.startsWith('lint')
+            || (name.startsWith('generate') && name.contains('Lint'))) dependsOn(stageLegalAssets)
+}

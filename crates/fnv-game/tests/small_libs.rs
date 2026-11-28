@@ -115,18 +115,47 @@ fn source_get_is_form_type_uses_the_reference_base_signature() {
     let mut g = game(&f);
     for (expression, expected) in [
         ("TestBoxRef.GetIsFormType \"ACTI\"", 1.0),
-        ("TestBoxRef.GetIsFormType \"acti\"", 1.0),
+        ("TestBoxRef.GetIsFormType \"acti\"", 0.0),
+        ("TestBoxRef.GetIsFormType \"Acti\"", 0.0),
+        ("TestBoxRef.GetIsFormType \"aCtI\"", 0.0),
         ("TestBoxRef.GetIsFormType \"REFR\"", 0.0),
         ("TestBoxRef.GetIsFormType \"MISC\"", 0.0),
-        ("TestGun.GetIsFormType \"WEAP\"", 1.0),
+        ("TestBoxRef.GetIsFormType \"ACT\"", 0.0),
+        ("TestBoxRef.GetIsFormType \"ACTIS\"", 0.0),
+        ("TestBoxRef.GetIsFormType \"\"", 0.0),
+        // Direct base forms return 0 and continue (w4g_01_getisformtype_case).
+        ("TestGun.GetIsFormType \"WEAP\"", 0.0),
+        ("TestGun.GetIsFormType \"weap\"", 0.0),
+        ("TestGun.GetIsFormType \"Weap\"", 0.0),
         ("TestGun.GetIsFormType \"Weapon\"", 0.0),
+        ("TestBox.GetIsFormType \"ACTI\"", 0.0),
         ("GetIsFormType \"ACTI\"", 0.0),
     ] {
         assert_eq!(g.run_query(&format!("Begin Function {{}}\nSetFunctionValue ({expression})\nEnd"), Default::default()).unwrap(), XVal::Num(expected), "{expression}");
     }
+    // Base-form call does not abort the script; subsequent statements still run.
+    assert_eq!(
+        g.run_query(
+            "int a\nBegin Function {}\nlet a := TestGun.GetIsFormType \"WEAP\"\nSetFunctionValue (a + 7)\nEnd",
+            Default::default(),
+        )
+        .unwrap(),
+        XVal::Num(7.0),
+    );
+    // Placed/spawned reference of the same weapon base matches strictly uppercase "WEAP".
+    assert_eq!(
+        g.run_query(
+            "ref w\nint u\nint l\nint m\nint d\nBegin Function {}\nlet w := player.PlaceAtMe TestGun 1\nlet u := w.GetIsFormType \"WEAP\"\nlet l := w.GetIsFormType \"weap\"\nlet m := w.GetIsFormType \"Weap\"\nlet d := w.GetIsFormType \"DOOR\"\nSetFunctionValue (u * 1000 + l * 100 + m * 10 + d)\nEnd",
+            Default::default(),
+        )
+        .unwrap(),
+        XVal::Num(1000.0),
+    );
+    // Temporary inventory reference preserves reference resolution and strict case-sensitivity.
     let XVal::Ref(temporary) = g.run_query("Begin Function {}\nplayer.AddItem TestGun 1\nSetFunctionValue (player.GetFirstRefForItem TestGun)\nEnd", Default::default()).unwrap() else { panic!("expected an inventory reference") };
     assert_ne!(temporary, 0);
     assert_eq!(fnv_game::nvse::call(&mut g, &Default::default(), "getisformtype", Some(FormId(temporary)), &[XVal::Str("WEAP".into())]), Some(Ok(XVal::Num(1.0))));
+    assert_eq!(fnv_game::nvse::call(&mut g, &Default::default(), "getisformtype", Some(FormId(temporary)), &[XVal::Str("weap".into())]), Some(Ok(XVal::Num(0.0))));
 }
 
 /// A data folder made for the run: the KF files the kNVSE functions look for, Stewie's
@@ -761,7 +790,7 @@ fn stewie_inventory_queries_keep_unbound_fallback_and_follow_current_choices_aft
     let version = q(&mut g, "SetFunctionValue (GetPluginVersion \"lStewieAl's Tweaks\")");
     for name in ["StewVal", "StewieGetValue"] {
         for key in keys {
-            assert_eq!(q(&mut g, &format!("SetFunctionValue ({name} \" {key} \")")), n(0.0), "loaded explicit off for {name} {key}");
+            assert_eq!(q(&mut g, &format!("SetFunctionValue ({name} \"{key}\")")), n(0.0), "loaded explicit off for {name} {key}");
         }
         for (key, expected) in [("bUnmapped:Tweaks", n(7.0)), ("sUnmapped:Tweaks", s("retained")), ("bWeightlessItems:Tweaks", n(1.0)), ("bAmmoWeight:Other", n(9.0)), ("malformed", n(0.0))] {
             assert_eq!(q(&mut g, &format!("SetFunctionValue ({name} \"{key}\")")), expected, "unchanged fallback {name} {key}");
@@ -771,9 +800,23 @@ fn stewie_inventory_queries_keep_unbound_fallback_and_follow_current_choices_aft
     g.tweaks.hardcore_ammo_weight = true;
     g.tweaks.single_item_figures = true;
     let before = g.tweaks.clone();
-    assert_eq!(q(&mut g, "SetFunctionValue (StewVal \" bHARDCOREtweaks : tWEAKs \")"), n(1.0));
-    assert_eq!(q(&mut g, "SetFunctionValue (StewieGetValue \" bAMMOweight : hardcore tweaks \")"), n(1.0));
-    assert_eq!(q(&mut g, "SetFunctionValue (StewVal \" bindividialitemstats : tweaks \")"), n(1.0));
+    // Surrounding whitespace is NOT trimmed [observed: w4h_08_stewie_get_value_whitespace];
+    // ASCII case-insensitive matching stays (see docs/spec-notes/ext-small.md).
+    assert_eq!(q(&mut g, "SetFunctionValue (StewVal \"bHARDCOREtweaks:tWEAKs\")"), n(1.0));
+    assert_eq!(q(&mut g, "SetFunctionValue (StewieGetValue \"bAMMOweight:hardcore tweaks\")"), n(1.0));
+    assert_eq!(q(&mut g, "SetFunctionValue (StewVal \"bindividialitemstats:tweaks\")"), n(1.0));
+    for padded in [
+        " bHardcoreTweaks:Tweaks",
+        "bHardcoreTweaks:Tweaks ",
+        "bHardcoreTweaks : Tweaks",
+        " bHARDCOREtweaks : tWEAKs ",
+        " bAMMOweight : hardcore tweaks ",
+        " bUnmapped:Tweaks",
+        "bUnmapped:Tweaks ",
+        "bUnmapped : Tweaks",
+    ] {
+        assert_eq!(q(&mut g, &format!("SetFunctionValue (StewVal \"{padded}\")")), n(0.0), "whitespace not trimmed: {padded:?}");
+    }
     assert_eq!(g.tweaks, before, "queries do not mutate any settings");
     assert_eq!(q(&mut g, "SetFunctionValue (GetPluginVersion \"lStewieAl's Tweaks\")"), version);
     let saved = g.snapshot();
@@ -827,16 +870,18 @@ fn stewie_pipboy_queries_keep_unbound_fallback_and_follow_current_choices_after_
     };
     g.bind_stewie_stat_settings(&chosen);
     let version = q(&mut g, "SetFunctionValue (GetPluginVersion \"lStewieAl's Tweaks\")");
-    assert_eq!(version, n(945.0));
+    assert_eq!(version, n(960.0));
     for name in ["StewVal", "StewieGetValue"] {
-        assert_eq!(q(&mut g, &format!("SetFunctionValue ({name} \" bDisableStealthEffectInPipboy : Tweaks \")")), n(0.0));
-        assert_eq!(q(&mut g, &format!("SetFunctionValue ({name} \" bKeepPipboyLightOnCellChange : Tweaks \")")), n(1.0));
+        assert_eq!(q(&mut g, &format!("SetFunctionValue ({name} \"bDisableStealthEffectInPipboy:Tweaks\")")), n(0.0));
+        assert_eq!(q(&mut g, &format!("SetFunctionValue ({name} \"bKeepPipboyLightOnCellChange:Tweaks\")")), n(1.0));
+        assert_eq!(q(&mut g, &format!("SetFunctionValue ({name} \" bKeepPipboyLightOnCellChange : Tweaks \")")), n(0.0));
         assert_eq!(q(&mut g, &format!("SetFunctionValue ({name} \"bDisableStealthEffectInPipboy:Other\")")), n(7.0));
     }
     g.tweaks.no_stealth_shimmer_in_pipboy = true;
     let before = g.tweaks.clone();
-    assert_eq!(q(&mut g, "SetFunctionValue (StewVal \" bdisablestealtheffectinpipboy : tweaks \")"), n(1.0));
-    assert_eq!(q(&mut g, "SetFunctionValue (StewieGetValue \" bkeeppipboylightoncellchange : tweaks \")"), n(1.0));
+    assert_eq!(q(&mut g, "SetFunctionValue (StewVal \"bdisablestealtheffectinpipboy:tweaks\")"), n(1.0));
+    assert_eq!(q(&mut g, "SetFunctionValue (StewieGetValue \"bkeeppipboylightoncellchange:tweaks\")"), n(1.0));
+    assert_eq!(q(&mut g, "SetFunctionValue (StewVal \" bdisablestealtheffectinpipboy : tweaks \")"), n(0.0));
     assert_eq!(g.tweaks, before, "queries do not mutate settings");
     // Restore clears application authority until rebound.
     let saved = g.snapshot();
@@ -868,10 +913,11 @@ fn stewie_worn_armor_weightless_queries_follow_handoff_and_keep_item_mask_fallba
         ..Default::default()
     };
     g.bind_stewie_stat_settings(&chosen);
-    assert_eq!(q(&mut g, "SetFunctionValue (GetPluginVersion \"lStewieAl's Tweaks\")"), n(945.0));
+    assert_eq!(q(&mut g, "SetFunctionValue (GetPluginVersion \"lStewieAl's Tweaks\")"), n(960.0));
     for name in ["StewVal", "StewieGetValue"] {
-        assert_eq!(q(&mut g, &format!("SetFunctionValue ({name} \" bWeightlessWornArmor : Tweaks \")")), n(0.0));
-        assert_eq!(q(&mut g, &format!("SetFunctionValue ({name} \" bWeightlessWornPowerArmor : Tweaks \")")), n(1.0));
+        assert_eq!(q(&mut g, &format!("SetFunctionValue ({name} \"bWeightlessWornArmor:Tweaks\")")), n(0.0));
+        assert_eq!(q(&mut g, &format!("SetFunctionValue ({name} \"bWeightlessWornPowerArmor:Tweaks\")")), n(1.0));
+        assert_eq!(q(&mut g, &format!("SetFunctionValue ({name} \" bWeightlessWornPowerArmor : Tweaks \")")), n(0.0));
         assert_eq!(q(&mut g, &format!("SetFunctionValue ({name} \"bWeightlessItems:Tweaks\")")), n(1.0));
         assert_eq!(q(&mut g, &format!("SetFunctionValue ({name} \"bWeightlessWornArmor:Other\")")), n(5.0));
     }
@@ -879,8 +925,9 @@ fn stewie_worn_armor_weightless_queries_follow_handoff_and_keep_item_mask_fallba
     g.tweaks.weightless_worn_armor = true;
     g.tweaks.weightless_worn_power_armor = false;
     let before = g.tweaks.clone();
-    assert_eq!(q(&mut g, "SetFunctionValue (StewVal \" bweightlesswornarmor : tweaks \")"), n(1.0));
-    assert_eq!(q(&mut g, "SetFunctionValue (StewieGetValue \" bweightlesswornpowerarmor : tweaks \")"), n(0.0));
+    assert_eq!(q(&mut g, "SetFunctionValue (StewVal \"bweightlesswornarmor:tweaks\")"), n(1.0));
+    assert_eq!(q(&mut g, "SetFunctionValue (StewieGetValue \"bweightlesswornpowerarmor:tweaks\")"), n(0.0));
+    assert_eq!(q(&mut g, "SetFunctionValue (StewVal \" bweightlesswornarmor : tweaks \")"), n(0.0));
     assert_eq!(g.tweaks, before, "queries do not mutate settings");
 
     // Snapshot/restore clears application authority until rebound.
@@ -921,10 +968,11 @@ bPreventSwitchWhenEmptyingCategory=9\n";
     // bRestoreLockedDoorSound always true (NVForever already plays DRSLocked on refused locks).
     let defaults = fnv_game::tweaks::Tweaks::default();
     g.bind_stewie_stat_settings(&defaults);
-    assert_eq!(q(&mut g, "SetFunctionValue (GetPluginVersion \"lStewieAl's Tweaks\")"), n(945.0));
+    assert_eq!(q(&mut g, "SetFunctionValue (GetPluginVersion \"lStewieAl's Tweaks\")"), n(960.0));
     for name in ["StewVal", "StewieGetValue"] {
-        assert_eq!(q(&mut g, &format!("SetFunctionValue ({name} \" bSynchronizeContainerCategories : Tweaks \")")), n(0.0));
-        assert_eq!(q(&mut g, &format!("SetFunctionValue ({name} \" bPreventSwitchWhenEmptyingCategory : Synchronized Container Categories \")")), n(1.0));
+        assert_eq!(q(&mut g, &format!("SetFunctionValue ({name} \"bSynchronizeContainerCategories:Tweaks\")")), n(0.0));
+        assert_eq!(q(&mut g, &format!("SetFunctionValue ({name} \"bPreventSwitchWhenEmptyingCategory:Synchronized Container Categories\")")), n(1.0));
+        assert_eq!(q(&mut g, &format!("SetFunctionValue ({name} \" bPreventSwitchWhenEmptyingCategory : Synchronized Container Categories \")")), n(0.0));
         assert_eq!(q(&mut g, &format!("SetFunctionValue ({name} \"bBarterCheckActorBuySellFlags:Tweaks\")")), n(0.0));
         assert_eq!(q(&mut g, &format!("SetFunctionValue ({name} \"bDontOpenDoorsAfterLockpick:Tweaks\")")), n(0.0));
         assert_eq!(q(&mut g, &format!("SetFunctionValue ({name} \"bNoSkipDialog:Tweaks\")")), n(0.0));
@@ -1272,4 +1320,169 @@ fn knvse_transition_duration_view_weights_additive_and_non_finite_dest_frame() {
         n(1.0)
     );
     assert!((g_sync.script_sequence_time_for(FormId::PLAYER_REF, "test\\d.kf", true) - 0.35).abs() < 1e-6);
+}
+
+#[test]
+fn knvse_legacy_anim_time_paths_loaded_matched_and_kept_on_existing_clock() {
+    use fnv_game::nvse_knvse::SequenceInfo;
+    files();
+    let f = fixture();
+    let mut g = game(&f);
+    g.cfg.frame_seconds = 0.25;
+    g.senses.first_person = true;
+    g.knvse_ini = fnv_game::knvse_ini::KnvseIni::parse(
+        b"[Anim Fixes]\nsLegacyAnimTimePaths = B42Inject, B42Interact, B42Loot\n",
+    );
+
+    let legacy_loop = "B42Inject\\loop.kf";
+    let legacy_clamp = "Characters\\_1stPerson\\B42Interact\\clamp.kf";
+    let modern = "test\\a.kf";
+    assert!(g.knvse_ini.uses_legacy_anim_time(legacy_loop));
+    assert!(g.knvse_ini.uses_legacy_anim_time(legacy_clamp));
+    assert!(!g.knvse_ini.uses_legacy_anim_time(modern));
+
+    g.set_sequence_info(
+        legacy_loop,
+        SequenceInfo { name: "Loop".into(), accum_root: String::new(), frequency: 2.0, begin: 0.0, end: 1.0, cycle: 0, text_keys: vec![] },
+    );
+    g.set_sequence_info(
+        legacy_clamp,
+        SequenceInfo { name: "Clamp".into(), accum_root: String::new(), frequency: 1.0, begin: 0.0, end: 0.5, cycle: 2, text_keys: vec![] },
+    );
+    g.set_sequence_info(
+        modern,
+        SequenceInfo { name: "Modern".into(), accum_root: String::new(), frequency: 2.0, begin: 0.0, end: 1.0, cycle: 0, text_keys: vec![] },
+    );
+
+    // Establish the actor's animation clock origin and seed all three sequences at time 0.
+    let key_loop = legacy_loop.to_ascii_lowercase();
+    let key_clamp = legacy_clamp.to_ascii_lowercase();
+    let key_modern = modern.to_ascii_lowercase();
+    let XVal::Num(now_clock) = q(&mut g, "SetFunctionValue (PlayerREF.GetAnimCurrentTime \"test\\a.kf\")") else {
+        panic!("expected numeric anim time");
+    };
+    g.knvse.offsets.insert((FormId::PLAYER_REF, key_loop), -now_clock);
+    g.knvse.offsets.insert((FormId::PLAYER_REF, key_clamp), -now_clock);
+    g.knvse.offsets.insert((FormId::PLAYER_REF, key_modern), -now_clock);
+    g.anim_paths.played.entry(FormId::PLAYER_REF).or_default().push(legacy_loop.into());
+    g.anim_paths.played.entry(FormId::PLAYER_REF).or_default().push(modern.into());
+
+    for _ in 0..3 {
+        g.tick();
+    }
+    // Listed and unlisted paths stay on the existing sequence clock (3 * 0.25 s = 0.75 s)
+    // until a committed original-game probe shows where kNVSE v37 diverges.
+    let t_loop = g.script_sequence_time_for(FormId::PLAYER_REF, legacy_loop, false);
+    let t_clamp = g.script_sequence_time_for(FormId::PLAYER_REF, legacy_clamp, false);
+    let t_modern = g.script_sequence_time_for(FormId::PLAYER_REF, modern, false);
+    assert!((t_loop - 0.75).abs() < 1e-6, "listed looping path stays on existing clock: got {t_loop}");
+    assert!((t_clamp - 0.75).abs() < 1e-6, "listed clamped path stays on existing clock: got {t_clamp}");
+    assert!((t_modern - 0.75).abs() < 1e-6, "unlisted path stays on existing clock: got {t_modern}");
+
+    // Pause/resume and GetAnimationAttributes keep existing clock contract on listed paths too.
+    g.knvse_ini = fnv_game::knvse_ini::KnvseIni::parse(b"[Anim Fixes]\nsLegacyAnimTimePaths = test\n");
+    assert!(g.knvse_ini.uses_legacy_anim_time(modern));
+    assert_eq!(q(&mut g, "SetFunctionValue (PlayerREF.ActivateAnim \"test\\a.kf\" 1 1 1 1 0)"), n(1.0));
+    g.tick(); // 0.25 s on existing clock
+    assert!((g.script_sequence_time_for(FormId::PLAYER_REF, modern, true) - 0.25).abs() < 1e-6);
+    assert_eq!(q(&mut g, "SetFunctionValue (PlayerREF.DeactivateAnim \"test\\a.kf\" 0)"), n(1.0));
+    g.tick(); // inactive while paused
+    assert_eq!(q(&mut g, "SetFunctionValue (PlayerREF.ActivateAnim \"test\\a.kf\" 1 1 0 1 0)"), n(1.0));
+    let resumed = g.script_sequence_time_for(FormId::PLAYER_REF, modern, true);
+    assert!((resumed - 0.25).abs() < 1e-6, "resuming listed sequence preserves existing clock 0.25: got {resumed}");
+
+    let XVal::Num(last_time) = q(&mut g, "array_var a\nlet a := PlayerREF.GetAnimationAttributes \"test\\a.kf\"\nSetFunctionValue (a[\"lastTime\"])") else {
+        panic!("expected lastTime");
+    };
+    let XVal::Num(last_scaled) = q(&mut g, "array_var a\nlet a := PlayerREF.GetAnimationAttributes \"test\\a.kf\"\nSetFunctionValue (a[\"lastScaledTime\"])") else {
+        panic!("expected lastScaledTime");
+    };
+    let XVal::Num(calc_time) = q(&mut g, "array_var a\nlet a := PlayerREF.GetAnimationAttributes \"test\\a.kf\"\nSetFunctionValue (a[\"calculatedTime\"])") else {
+        panic!("expected calculatedTime");
+    };
+    assert!((last_time - 0.25).abs() < 1e-6, "lastTime stays on existing clock 0.25: got {last_time}");
+    assert!((last_scaled - 0.5).abs() < 1e-6, "lastScaledTime scales once by frequency to 0.5: got {last_scaled}");
+    assert!((calc_time - 0.25).abs() < 1e-6, "calculatedTime stays on existing clock 0.25: got {calc_time}");
+
+    // Clearing sLegacyAnimTimePaths leaves matching off while keeping clock behavior unchanged.
+    g.knvse_ini.legacy_anim_time_paths.clear();
+    assert!(!g.knvse_ini.uses_legacy_anim_time(legacy_loop));
+    let t_loop_vanilla = g.script_sequence_time_for(FormId::PLAYER_REF, legacy_loop, false);
+    assert!((t_loop_vanilla - 1.25).abs() < 1e-6, "vanilla default keeps existing clock 1.25: got {t_loop_vanilla}");
+}
+
+#[test]
+fn knvse_play_animation_path_pre_tick_neg_flt_max_and_frequency_scaled_delta() {
+    files();
+    let f = fixture();
+    let mut g = game(&f);
+    g.cfg.frame_seconds = 0.055;
+    g.senses.first_person = true;
+    g.knvse_ini = fnv_game::knvse_ini::KnvseIni::parse(
+        b"[Anim Fixes]\nsLegacyAnimTimePaths = W4ELegacy,B42Inject\n",
+    );
+    let legacy = "test\\W4ELegacy\\test.kf";
+    let normal = "test\\W4ENormal\\test.kf";
+    assert!(g.knvse_ini.uses_legacy_anim_time(legacy));
+    assert!(!g.knvse_ini.uses_legacy_anim_time(normal));
+
+    // Advance a few frames so GetGlobalAnimTime is nonzero before PlayAnimationPath.
+    for _ in 0..8 {
+        g.tick();
+    }
+    assert_eq!(q(&mut g, "SetFunctionValue (PlayerREF.PlayAnimationPath \"test\\W4ELegacy\\test.kf\" 1)"), n(1.0));
+    assert_eq!(q(&mut g, "SetFunctionValue (PlayerREF.PlayAnimationPath \"test\\W4ENormal\\test.kf\" 1)"), n(1.0));
+
+    // Immediately after PlayAnimationPath before the first tick, GetAnimCurrentTime reads
+    // -FLT_MAX (t0L=-3.40282e+38) [observed: w4e_08_knvse_legacy_anim_time], while
+    // pre-first-tick offset and lastTime returning -f32::MAX follows
+    // nvse_knvse.rs and docs/spec-notes/ext-knvse.md §5.
+    let neg_flt_max = f64::from(-f32::MAX);
+    for path in [legacy, normal] {
+        let XVal::Num(t0) = q(&mut g, &format!("SetFunctionValue (PlayerREF.GetAnimCurrentTime \"{path}\")")) else {
+            panic!("expected GetAnimCurrentTime number");
+        };
+        let XVal::Num(off0) = q(&mut g, &format!("array_var a\nlet a := PlayerREF.GetAnimationAttributes \"{path}\"\nSetFunctionValue (a[\"offset\"])")) else {
+            panic!("expected offset");
+        };
+        let XVal::Num(last0) = q(&mut g, &format!("array_var a\nlet a := PlayerREF.GetAnimationAttributes \"{path}\"\nSetFunctionValue (a[\"lastTime\"])")) else {
+            panic!("expected lastTime");
+        };
+        assert_eq!(t0, neg_flt_max, "{path} pre-tick GetAnimCurrentTime must be -FLT_MAX");
+        assert_eq!(off0, neg_flt_max, "{path} pre-tick offset must be -FLT_MAX");
+        assert_eq!(last0, neg_flt_max, "{path} pre-tick lastTime must be -FLT_MAX");
+    }
+
+    // After ticking at frequency 1.0 (3 ticks -> 0.165 s), both legacy and normal paths match.
+    for _ in 0..3 {
+        g.tick();
+    }
+    let XVal::Num(g1) = q(&mut g, "SetFunctionValue (PlayerREF.GetGlobalAnimTime 1)") else { panic!("g1") };
+    let XVal::Num(t1_l) = q(&mut g, "SetFunctionValue (PlayerREF.GetAnimCurrentTime \"test\\W4ELegacy\\test.kf\")") else { panic!("t1_l") };
+    let XVal::Num(t1_n) = q(&mut g, "SetFunctionValue (PlayerREF.GetAnimCurrentTime \"test\\W4ENormal\\test.kf\")") else { panic!("t1_n") };
+    let XVal::Num(off1_l) = q(&mut g, "array_var a\nlet a := PlayerREF.GetAnimationAttributes \"test\\W4ELegacy\\test.kf\"\nSetFunctionValue (a[\"offset\"])") else { panic!("off1_l") };
+    let XVal::Num(last1_l) = q(&mut g, "array_var a\nlet a := PlayerREF.GetAnimationAttributes \"test\\W4ELegacy\\test.kf\"\nSetFunctionValue (a[\"lastTime\"])") else { panic!("last1_l") };
+    assert!((t1_l - 0.165).abs() < 1e-6, "got {t1_l}");
+    assert!((t1_n - t1_l).abs() < 1e-9);
+    assert!((last1_l - t1_l).abs() < 1e-6);
+
+    // After SetAnimSequenceFrequency 2.5 and 3 more ticks (dg = 0.165 s):
+    // GetAnimCurrentTime = t1 + dg * 2.5, offset stays fixed, lastTime = t1 + dg (unscaled)
+    // identically on BOTH listed (W4ELegacy) and unlisted (W4ENormal) paths [observed: w4e_08].
+    q(&mut g, "PlayerREF.SetAnimSequenceFrequency \"test\\W4ELegacy\\test.kf\" 2.5");
+    q(&mut g, "PlayerREF.SetAnimSequenceFrequency \"test\\W4ENormal\\test.kf\" 2.5");
+    for _ in 0..3 {
+        g.tick();
+    }
+    let XVal::Num(g2) = q(&mut g, "SetFunctionValue (PlayerREF.GetGlobalAnimTime 1)") else { panic!("g2") };
+    let dg = g2 - g1;
+    assert!((dg - 0.165).abs() < 1e-6);
+    for path in [legacy, normal] {
+        let XVal::Num(t2) = q(&mut g, &format!("SetFunctionValue (PlayerREF.GetAnimCurrentTime \"{path}\")")) else { panic!("t2") };
+        let XVal::Num(off2) = q(&mut g, &format!("array_var a\nlet a := PlayerREF.GetAnimationAttributes \"{path}\"\nSetFunctionValue (a[\"offset\"])")) else { panic!("off2") };
+        let XVal::Num(last2) = q(&mut g, &format!("array_var a\nlet a := PlayerREF.GetAnimationAttributes \"{path}\"\nSetFunctionValue (a[\"lastTime\"])")) else { panic!("last2") };
+        assert!((t2 - (t1_l + dg * 2.5)).abs() < 1e-6, "{path} GetAnimCurrentTime expected {}, got {t2}", t1_l + dg * 2.5);
+        assert!((off2 - off1_l).abs() < 1e-9, "{path} offset must remain fixed ({off1_l}), got {off2}");
+        assert!((last2 - (t1_l + dg)).abs() < 1e-6, "{path} lastTime must remain unscaled ({}), got {last2}", t1_l + dg);
+    }
 }

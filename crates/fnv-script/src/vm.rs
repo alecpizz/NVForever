@@ -151,6 +151,11 @@ pub enum VmError {
     /// extender error does [observed: nvse-inv foreach.read.after, "script call failed"].
     #[error("{0} called on no reference")]
     NoReference(String),
+    /// A host command whose invalid argument aborts the calling script at runtime in
+    /// both strict and default modes (for example `SetClass` given a non-CLAS or null
+    /// class argument) [observed: w4g_05_isactordetected_and_setclass_invalid].
+    #[error("{0}")]
+    RuntimeAbort(String),
 }
 
 /// What the VM needs from the game. Every method may fail with a message; a failure
@@ -3266,6 +3271,28 @@ impl Vm<'_, '_> {
                     other => other,
                 })
             }
+            // [observed: w4g_05_isactordetected_and_setclass_invalid] Calling
+            // IsActorDetected on an explicit null/non-form receiver logs a null-reference
+            // diagnostic, returns 0 without falling back to implicit self, and continues
+            // the script instead of aborting.
+            "isactordetected" => {
+                let on = match &c.on {
+                    Some(e) => Some(self.xeval(e)?.value()?),
+                    None => None,
+                };
+                if on.is_some_and(|v| v.as_form().is_none()) {
+                    self.host.no_reference_call(&lname, on, c);
+                    return Ok(XVal::Num(0.0));
+                }
+                let mut args = Vec::with_capacity(c.args.len());
+                for a in &c.args {
+                    args.push(self.xeval(a)?);
+                }
+                match self.host.ext_call(&lname, on, &args) {
+                    Some(r) => r.map_err(VmError::Host),
+                    None => Err(VmError::NotBuilt(format!("the extender function {name} (tasks C, D)"))),
+                }
+            }
             // [documented: ToString; ToNumber] (the hex and reportError arguments of
             // ToNumber: D1). List arrays and stringmaps format as "NULL" [observed:
             // Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9, 2026-11-23, `GSDocMitchellHouse`,
@@ -3495,6 +3522,32 @@ impl Vm<'_, '_> {
                 };
                 Ok(XVal::Num(0.0))
             }
+            // [observed: w4g_05_isactordetected_and_setclass_invalid] SetClass on a
+            // null/empty receiver continues safely without mutating anything or falling
+            // back to implicit self; a non-CLAS or null class argument aborts the script
+            // at runtime in both strict and default modes.
+            "setclass" => {
+                let on = match &c.on {
+                    Some(e) => Some(self.xeval(e)?.value()?),
+                    None => None,
+                };
+                let mut args = Vec::with_capacity(c.args.len());
+                for a in &c.args {
+                    args.push(match a {
+                        XExpr::Axis { c } => XVal::Str(c.to_string()),
+                        other => self.xeval(other)?,
+                    });
+                }
+                if on.is_some_and(|v| v.as_form().is_none()) {
+                    self.host.no_reference_call(&lname, on, c);
+                    return Ok(XVal::Num(0.0));
+                }
+                match self.host.ext_call(&lname, on, &args) {
+                    Some(Ok(v)) => Ok(v),
+                    Some(Err(e)) => Err(VmError::RuntimeAbort(e)),
+                    None => Err(VmError::NotBuilt(format!("the extender function {name} (tasks C, D)"))),
+                }
+            }
             _ => self.host_function(&lname, c)?.ok_or_else(|| VmError::NotBuilt(format!("the extender function {name} (tasks C, D)"))),
         }
     }
@@ -3549,13 +3602,14 @@ impl Vm<'_, '_> {
             None => return Err(VmError::NotBuilt(format!("the extender function {lname}"))),
         };
         let XVal::Array(id) = r else { return Ok(r) };
-        let vals: Vec<XVal> = self.store()?.array(id).map(|a| a.entries.iter().map(|(_, v)| v.clone()).collect()).unwrap_or_default();
+        let entries: Vec<(XKey, XVal)> = self.store()?.array(id).map(|a| a.entries.clone()).unwrap_or_default();
+        let at = |idx: usize| entries.iter().find(|(k, _)| matches!(k, XKey::Num(x) if *x == idx as f64)).map(|(_, v)| v.clone());
         for (i, &k) in outs.iter().enumerate() {
-            if let (Some(XExpr::Var { var, .. }), Some(v)) = (c.args.get(k), vals.get(i + 1)) {
-                self.write_var(var, v.clone())?;
+            if let (Some(XExpr::Var { var, .. }), Some(v)) = (c.args.get(k), at(i + 1)) {
+                self.write_var(var, v)?;
             }
         }
-        Ok(vals.first().cloned().unwrap_or(XVal::Num(0.0)))
+        Ok(at(0).unwrap_or(XVal::Num(0.0)))
     }
 
     fn host_function(&mut self, lname: &str, c: &XCall) -> Result<Option<XVal>, VmError> {
@@ -3567,9 +3621,15 @@ impl Vm<'_, '_> {
         // nvse-inv foreach.read.after, "script call failed"], unless the host admits an
         // explicit null receiver (`0`) for that global command (for example player-source
         // commands [observed: w4g_06_player_cmds_explicit_receiver]).
+        // Exception: JIP LN ProjectUITile logs the null-ref diagnostic, returns 0.0,
+        // and continues script execution without enqueueing a projection [observed:
+        // w4g_10_project_ui_tile_errors, tools/capture/nvse/catalogs/wave4g_f2_extenders.json].
         let explicit_null = matches!(on, Some(Value::Ref(0))) || matches!(on, Some(Value::Num(x)) if x == 0.0);
         if on.is_some_and(|v| v.as_form().is_none()) && !(explicit_null && self.host.allows_null_receiver(lname)) {
             self.host.no_reference_call(lname, on, c);
+            if lname == "projectuitile" {
+                return Ok(Some(XVal::Num(0.0)));
+            }
             return Err(VmError::NoReference(lname.to_string()));
         }
         let mut args = Vec::with_capacity(c.args.len());

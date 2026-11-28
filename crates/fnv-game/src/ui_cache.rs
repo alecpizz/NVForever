@@ -211,7 +211,7 @@ fn queue(g: &mut Game, lname: &str, args: &[XVal]) -> Option<XVal> {
         }
         "cuigetqueuesize" => XVal::Num(queues.get(&key).map_or(0.0, |q| q.len() as f64)),
         // Direction 1: the first goes last, `[0, 25, 20, 9]` to `[25, 20, 9, 0]`
-        // [documented: CUIQueueCycle's example]; 0 the last goes first [hypothesis].
+        // [documented: CUIQueueCycle's example]; 0 the last goes first (see docs/spec-notes/menu-xml.md §9).
         "cuiqueuecycle" => {
             if let Some(q) = queues.get_mut(&key).filter(|q| !q.is_empty()) {
                 if num(args, 1) != 0.0 {

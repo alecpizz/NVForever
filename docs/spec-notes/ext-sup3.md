@@ -15,16 +15,17 @@ from the save nvftest [observed: golden `jip/sup3.json`, private]. Lab `L5.ext.s
 
 | Function | NVForever |
 |---|---|
-| GetTFCPos `axis`, SetTFCPos `axis value`, SetTFCPosEx `x y z`, GetTFCPosEx `x y z` | the camera's position in game units [documented]. Never used it reads 0 0 0; turned on it starts at the player's eye, 118 above the feet in first person; it keeps its last place when turned off [observed: sup3 cam.off.pos, cam.on.pos, cam.off2.pos]. Setters return 0 and the next frame reads the same [observed: cam.setpos, cam.setpos.next] |
-| GetTFCAngle `axis`, SetTFCAngle `axis value`, …AngleEx | X (down positive) and Z (the heading, 0 north, clockwise) in degrees, as GetAngle gives them: turned on, the player's angles [observed: cam.on.angles]; values kept as given, 400 and -100 not wrapped [observed: cam.setangle.wide]. Y: 0, and setting it does nothing [observed: 2026-11-23, `GSDocMitchellHouse` (`0x00103DF9`), Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 + SUP NVSE 855 with the 10 official base masters, clean-room script probe `sup_05_tfc_angle_rot_y_z` (`GetTFCAngle`/`GetTFCRot`): `0.000,0.000,0.000`; no DLL or source consulted] |
-| GetTFCRot `axis`, SetTFCRot `axis value`, …RotEx | "not the actual angle value" [documented]: X is angle X in radians (9.1804° read 0.1602, 30° 0.5236, 0.5 set reads 28.6479°); Y reads 0 and setting it changes nothing [observed: cam.on.angles, cam.setangle.*, cam.setrot.y]. Z: 0 [observed: 2026-11-23, `GSDocMitchellHouse` (`0x00103DF9`), `sup_05_tfc_angle_rot_y_z`] |
+| GetTFCPos `axis`, SetTFCPos `axis value`, SetTFCPosEx `x y z`, GetTFCPosEx `x y z` | the camera's position in game units [documented]. Never used it reads 0 0 0; turned on it starts at the player's eye, 118 above the feet in first person; it keeps its last place when turned off [observed: sup3 cam.off.pos, cam.on.pos, cam.off2.pos]. Setters return 0 and the next frame reads the same [observed: cam.setpos, cam.setpos.next]. `GetTFCPosEx` returns 0 and writes `(0, 0, 0)` initially and `(100, 200, 300)` after `SetTFCPosEx 100 200 300` [observed: 2026-11-24, `GSDocMitchellHouse` (`0x00103DF9`), FNV 1.4.0.525 + xNVSE 6.4.9 + JIP LN 57.30 + JohnnyGuitar 528 + ShowOff 184 + SUP NVSE 855 + Stewie 1005, 10 official base masters, `tools/capture/nvse/catalogs/wave6_t1_sup_tfc_calc.json` (`w6_t1_12_sup_tfc_and_mouse`): `PROBE\|w6_t1_12_sup_tfc_and_mouse\|tfcP0=0(0.0,0.0,0.0)\|tfcP2=(100.0,200.0,300.0)\|tfcA=0(15.00,90.00)\|tfcR=0(0.2618,1.5708)\|mPos=0(111,222)\|mMov=0(0.0,0.0)`] |
+| GetTFCAngle `axis`, SetTFCAngle `axis value`, …AngleEx | X (down positive) and Z (the heading, 0 north, clockwise) in degrees, as GetAngle gives them: turned on, the player's angles [observed: cam.on.angles]; values kept as given, 400 and -100 not wrapped [observed: cam.setangle.wide]. Y: 0, and setting it does nothing [observed: 2026-11-23, `GSDocMitchellHouse` (`0x00103DF9`), Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 + SUP NVSE 855 with the 10 official base masters, clean-room script probe `sup_05_tfc_angle_rot_y_z` (`GetTFCAngle`/`GetTFCRot`): `0.000,0.000,0.000`; no DLL or source consulted]. `SetTFCAngleEx 15 90` followed by `GetTFCAngleEx` returns 0 and writes `(15.00, 90.00)` [observed: 2026-11-24, `w6_t1_12_sup_tfc_and_mouse`] |
+| GetTFCRot `axis`, SetTFCRot `axis value`, …RotEx | "not the actual angle value" [documented]: X is angle X in radians and Z is angle Z in radians; Y reads 0 and setting it changes nothing [observed: cam.on.angles, cam.setangle.*, cam.setrot.y (9.1804° read 0.1602, 30° 0.5236, 0.5 set reads 28.6479°); earlier `sup_05_tfc_angle_rot_y_z` read `0.000` on Z before any Z rotation was set; observed: 2026-11-24, `GSDocMitchellHouse` (`0x00103DF9`), FNV 1.4.0.525 + xNVSE 6.4.9 + JIP LN 57.30 + JohnnyGuitar 528 + ShowOff 184 + SUP NVSE 855 + Stewie 1005, 10 official base masters, `tools/capture/nvse/catalogs/wave6_t1_sup_tfc_calc.json` (`w6_t1_12_sup_tfc_and_mouse` & `w6_t1_12b_sup_tfc_rot_set`): after `SetTFCAngleEx 15 90`, `GetTFCRotEx` returns 0 and writes `(0.2618, 1.5708)`; after `SetTFCRotEx 0.5 1.0`, `PROBE\|w6_t1_12b_sup_tfc_rot_set\|rotEx=(0.5000,1.0000)\|angEx=(28.65,57.30)\|rotXYZ=(0.5000,0.0000,1.0000)`; no DLL or source consulted; hypothesis: `SetTFCRot Z` sets angle Z in radians symmetrically with `GetTFCRot Z` and `SetTFCRotEx`] |
 | GetCalculatedAngleXForTFCCamera `x y z` | the angle X to look at the point from the camera: −atan2(rise, distance across), up negative [observed: cam.calc.x, -45, 45, 0, -53.1301] |
 | GetCalculatedAngleZForTFCCamera `x y` | the heading of the point from the camera: atan2(east, north), straight south -180 [observed: cam.calc.z, 90 0 -90 -180 45] |
 
 The `…Ex` getters write their results into the script's variables (the VM's
-`out_params`, as GetAngleEx). The game's runtime compiler refused every line with one of
+`out_params`, as GetAngleEx). The game's runtime compiler refused bare-variable calls of
 them [observed: sup3 cam.setposex, cam.angleex, cam.rotex, "script did not compile"; it
-compiled SetTFCPosEx], so they follow the pages.
+compiled SetTFCPosEx], while parenthesised `(var)` out-var calls compile and execute in
+the original game [observed: 2026-11-24, `wave6_t1_sup_tfc_calc.json`].
 
 **The engine** (`nvf_play::free_cam`): turning the camera on writes its own place into
 `Game::ui.camera.tfc`; a script's change (`tfc_set`) moves the camera on the next update;
@@ -39,11 +40,13 @@ it).
 
 | Function | NVForever |
 |---|---|
-| `ref.GetCalculatedPos angle dist xOut yOut` | the point `dist` along heading `angle` from the reference: x + dist·sin, y + dist·cos [documented: the page's "in front of the player" with GetAngle Z; hypothesis: the heading's direction as GetCalculatedAngleZ… shows] |
-| GetCalculatedPosAlt `angle dist xOut yOut xIn yIn` | the same from the point [documented] |
+| `ref.GetCalculatedPos angle dist xOut yOut` | the point `dist` along heading `angle` from the reference: x + dist·sin, y + dist·cos, returning 0 [documented: the page's "in front of the player" with GetAngle Z; observed: 2026-11-24, `GSDocMitchellHouse` (`0x00103DF9`), FNV 1.4.0.525 + xNVSE 6.4.9 + JIP LN 57.30 + JohnnyGuitar 528 + ShowOff 184 + SUP NVSE 855 + Stewie 1005, 10 official base masters, `tools/capture/nvse/catalogs/wave6_t1_sup_tfc_calc.json` (`w6_t1_11_sup_calc_pos`): `PROBE\|w6_t1_11_sup_calc_pos\|p0=0(0.0,100.0)\|p90=0(100.0,0.0)\|a0=0(1000.0,2100.0)\|a45=0(1070.7,2070.7)\|a90=0(1100.0,2000.0)\|a180=0(1000.0,1900.0)\|am90=0(900.0,2000.0)`; no DLL or source consulted] |
+| GetCalculatedPosAlt `angle dist xOut yOut xIn yIn` | the same from the point, returning 0 [documented; observed: 2026-11-24, `w6_t1_11_sup_calc_pos`] |
 
-Both write their outputs into the script's variables; the game's compiler refused every
-call in the probes [observed: calc.pos.*, calc.alt.*], so these follow the pages.
+Both write their outputs into the script's variables; bare variable names did not compile
+in `sup3` [observed: calc.pos.*, calc.alt.*], while parenthesised `(ox) (oy)` calls
+compile and confirm the exact heading convention [observed: 2026-11-24,
+`w6_t1_11_sup_calc_pos`].
 
 ## 3. The INI readers
 

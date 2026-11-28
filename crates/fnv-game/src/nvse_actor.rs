@@ -42,7 +42,9 @@ pub(crate) fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XV
     let v = match name {
         // `GetWeaponItemMod slot [weapon]` (1–3): WMI1–3; the effect and values: DNAM
         // effect_modN, value_a_modN, value_b_modN [documented: their pages; the fields are
-        // the schema's].
+        // the schema's; observed 2026-11-24: `w6t2_32_showoff_matrix_edges_and_get_weapon_mod_flags`
+        // (`tools/capture/nvse/catalogs/wave6_t2_observed_matches.json`):
+        // `imod(4.00,0.40)` for `Weap10mmPistol` (`0x434F`) slots 1 and 2].
         "getweaponitemmod" | "getweaponitemmodeffect" | "getweaponitemmodvalue1" | "getweaponitemmodvalue2" => {
             let slot = int(args, 0, 0);
             if !(1..=3).contains(&slot) {

@@ -503,6 +503,11 @@ const REFRESH_FRAMES: u32 = 60;
 /// thousand around Primm) then switches over some frames instead of in one 50-120 ms
 /// frame [observed 2026-11-19, stress tour Goodsprings-Primm, `profile hitch` lines].
 const CLONE_WORK_PER_FRAME: usize = 64;
+/// [design] At most this many entity material-component swaps (`remove::<NifMaterial>` +
+/// `insert::<NifBlendMaterial>`) per frame, so a ready publication with thousands of
+/// eligible shapes amortizes ECS archetype table moves across frames instead of stalling
+/// the main thread in one frame.
+const SWAP_WORK_PER_FRAME: usize = 128;
 /// [design] At most this many `census-shape` lines per run; each line is a distinct base
 /// form, shape index and reason mask (the first reference seen of it).
 const SHAPE_LINES: usize = 2048;
@@ -608,9 +613,9 @@ const PASS_REASONS: [&str; 6] = ["first", "config", "publication", "pending", "s
 /// on a convertible shape or (another handle) on a census-only one, a temporary marker
 /// added, then each removal kind (the ordinary and marker removals on a shape still
 /// tracked). Several can fire in one frame.
-const SHAPE_SIGNALS: [&str; 11] = [
+const SHAPE_SIGNALS: [&str; 10] = [
     "blend-shape", "census", "ordinary-convertible", "ordinary-census-only", "marker-added",
-    "removed-blend-shape", "removed-census", "removed-ordinary", "removed-fading", "removed-faded", "removed-override",
+    "removed-blend-shape", "removed-census", "removed-ordinary", "removed-fading", "removed-override",
 ];
 /// At most this many `verify shape-trigger` lines per signal per run of the blend (only
 /// the five signals with a shape to name log one: at most 10 lines).
@@ -885,8 +890,8 @@ fn enabled_material(source: &NifMaterial, c: BlendConfig, surface: &crate::terra
     }
 }
 
-/// Temporary material owners (fades, actor alpha, overrides), whose copies never blend.
-type Temporary = (Has<nvf_play::fade::Fading>, Has<crate::effect_shaders::Faded>, Has<MaterialOverride>);
+/// Temporary material owners (fades/actor alpha under `Fading`, overrides), whose copies never blend.
+type Temporary = (Has<nvf_play::fade::Fading>, Has<MaterialOverride>);
 /// The see-through shadow markers (nif_material.rs `see_through_casts_no_shadow`).
 type ShadowMarks = (Has<NotShadowCaster>, Has<SeeThroughNoShadow>);
 /// Every shape the blend tracks: convertible ones ([`BlendShape`]) and census-only ones.
@@ -903,7 +908,7 @@ type Tracked<'w, 's> = Query<'w, 's, (Entity, Option<&'static mut BlendShape>, O
 /// (see [`pass_needed`]).
 type ShapeChanges<'w, 's> = Query<'w, 's, (), (Or<(With<BlendShape>, With<BlendCensus>)>, Or<(
     Changed<BlendShape>, Changed<BlendCensus>, (Changed<MeshMaterial3d<NifMaterial>>, With<BlendShape>),
-    Added<nvf_play::fade::Fading>, Added<crate::effect_shaders::Faded>, Added<MaterialOverride>,
+    Added<nvf_play::fade::Fading>, Added<MaterialOverride>,
 )>)>;
 
 /// [design] Census-only shapes (no `BlendShape`) whose ordinary material component was put
@@ -917,7 +922,7 @@ type CensusDrawn<'w, 's> = Query<'w, 's, (Entity, &'static MeshMaterial3d<NifMat
 /// The verify aid only: each tracked shape's signals ([`count_shape_signals`]).
 type Signals<'w, 's> = Query<'w, 's, (
     Entity, Option<Ref<'static, BlendShape>>, Option<Ref<'static, BlendCensus>>, Option<Ref<'static, MeshMaterial3d<NifMaterial>>>,
-    Option<Ref<'static, nvf_play::fade::Fading>>, Option<Ref<'static, crate::effect_shaders::Faded>>, Option<Ref<'static, MaterialOverride>>,
+    Option<Ref<'static, nvf_play::fade::Fading>>, Option<Ref<'static, MaterialOverride>>,
 ), Or<(With<BlendShape>, With<BlendCensus>)>>;
 
 /// The conversion's shape queries; one at a time.
@@ -931,7 +936,6 @@ struct Removals<'w, 's> {
     census: RemovedComponents<'w, 's, BlendCensus>,
     ordinary: RemovedComponents<'w, 's, MeshMaterial3d<NifMaterial>>,
     fading: RemovedComponents<'w, 's, nvf_play::fade::Fading>,
-    faded: RemovedComponents<'w, 's, crate::effect_shaders::Faded>,
     overridden: RemovedComponents<'w, 's, MaterialOverride>,
 }
 
@@ -966,16 +970,15 @@ fn shape_mask(recorded: u32, temporary: bool, source: Option<&NifMaterial>) -> u
 /// [design] Whether any tracked shape's inputs changed since the conversion last ran
 /// ([`ShapeChanges`], [`CensusDrawn`], [`Removals`]), and which removal kinds fired (for
 /// the verify aid's counts). Every removal reader is drained each run.
-fn shapes_changed(shapes: &mut ShapeQueries, removals: &mut Removals, variants: &Variants) -> (bool, [bool; 6]) {
-    let mut removed = [!removals.shape.is_empty(), !removals.census.is_empty(), false, false, false, false];
+fn shapes_changed(shapes: &mut ShapeQueries, removals: &mut Removals, variants: &Variants) -> (bool, [bool; 5]) {
+    let mut removed = [!removals.shape.is_empty(), !removals.census.is_empty(), false, false, false];
     removals.shape.clear();
     removals.census.clear();
     {
         let tracked = shapes.p0();
         removed[2] = removals.ordinary.read().fold(false, |hit, e| hit | tracked.contains(e));
         removed[3] = removals.fading.read().fold(false, |hit, e| hit | tracked.contains(e));
-        removed[4] = removals.faded.read().fold(false, |hit, e| hit | tracked.contains(e));
-        removed[5] = removals.overridden.read().fold(false, |hit, e| hit | tracked.contains(e));
+        removed[4] = removals.overridden.read().fold(false, |hit, e| hit | tracked.contains(e));
     }
     let changed = removed.contains(&true) || !shapes.p1().is_empty()
         || shapes.p2().iter().any(|(e, drawn)| variants.census_drawn.get(&e) != Some(&drawn.0.id()));
@@ -985,17 +988,17 @@ fn shapes_changed(shapes: &mut ShapeQueries, removals: &mut Removals, variants: 
 /// The verify aid only, in a frame whose pass ran for `shapes`: which shape signals fired
 /// ([`SHAPE_SIGNALS`]), counted once each, and up to [`TRIGGER_LINES`] lines per signal naming a
 /// shape that fired one (its model, shape index and recorded reasons).
-fn count_shape_signals(shapes: &mut ShapeQueries, variants: &mut Variants, removed: [bool; 6]) {
+fn count_shape_signals(shapes: &mut ShapeQueries, variants: &mut Variants, removed: [bool; 5]) {
     let mut fired = [false; SHAPE_SIGNALS.len()];
     fired[5..].copy_from_slice(&removed);
-    for (e, shape, census, ordinary, fading, faded, overridden) in shapes.p3().iter() {
+    for (e, shape, census, ordinary, fading, overridden) in shapes.p3().iter() {
         let ordinary_changed = ordinary.as_ref().is_some_and(|o| o.is_changed());
         let hits = [
             shape.as_ref().is_some_and(|s| s.is_changed()),
             census.as_ref().is_some_and(|c| c.is_changed()),
             ordinary_changed && shape.is_some(),
             ordinary_changed && shape.is_none() && ordinary.as_ref().is_some_and(|o| variants.census_drawn.get(&e) != Some(&o.0.id())),
-            fading.is_some_and(|m| m.is_added()) || faded.is_some_and(|m| m.is_added()) || overridden.is_some_and(|m| m.is_added()),
+            fading.is_some_and(|m| m.is_added()) || overridden.is_some_and(|m| m.is_added()),
         ];
         for (i, hit) in hits.iter().enumerate() {
             if !hit { continue; }
@@ -1084,6 +1087,7 @@ fn apply_configured_variants(p: &mut Conversion, c: BlendConfig) {
     let published = cache.published.as_ref().map(publication_key);
     let revision = published.map_or(0, |k| k.0);
     let clone_work = pace.as_deref().map_or(CLONE_WORK_PER_FRAME, |p| p.count(CLONE_WORK_PER_FRAME));
+    let swap_budget = pace.as_deref().map_or(SWAP_WORK_PER_FRAME, |p| p.count(SWAP_WORK_PER_FRAME));
     let _spending = pace.as_deref().map(|p| p.spending());
     let restricted = follow_coverage(cache, variants, blends, clone_work);
     let create_budget = clone_work.saturating_sub(restricted);
@@ -1105,7 +1109,7 @@ fn apply_configured_variants(p: &mut Conversion, c: BlendConfig) {
     let skipped = needed.is_none();
     let settled_before = variants.readiness.as_ref().map(|r| r.settled.load(Ordering::Acquire));
     let lines_before = variants.shape_lines;
-    let outcome = full_pass(commands, cache, variants, materials, blends, &mut shapes.p0(), c, revision, create_budget);
+    let outcome = full_pass(commands, cache, variants, materials, blends, &mut shapes.p0(), c, revision, create_budget, swap_budget);
     variants.passes += u64::from(!skipped);
     if let Some(readiness) = variants.readiness.as_ref().filter(|_| !outcome.pending) { readiness.settled.store(revision, Ordering::Release); }
     if skipped {
@@ -1178,8 +1182,10 @@ fn full_pass(
     c: BlendConfig,
     revision: u64,
     create_budget: usize,
+    swap_budget: usize,
 ) -> Outcome {
     let mut o = Outcome::default();
+    let mut swapped = 0usize;
     if variants.generation != revision {
         variants.generation = revision;
         o.evicted += variants.materials.len();
@@ -1200,8 +1206,8 @@ fn full_pass(
         }
     }
     variants.ordinary_seen.retain(|e, _| ordinary_live.contains(e));
-    for (entity, shape, tracked, drawn, (fading, faded, overridden), (no_shadow, see_through_mark)) in shapes.iter_mut() {
-        let temporary = fading || faded || overridden;
+    for (entity, shape, tracked, drawn, (fading, overridden), (no_shadow, see_through_mark)) in shapes.iter_mut() {
+        let temporary = fading || overridden;
         let recorded = tracked.map_or(0, |t| t.reasons);
         let Some(mut shape) = shape else {
             // Census only: never converted.
@@ -1277,6 +1283,11 @@ fn full_pass(
             continue;
         };
         if shape.enabled.as_ref() != Some(&handle) || drawn.is_some() {
+            if swapped >= swap_budget {
+                o.pending = true;
+                continue;
+            }
+            swapped += 1;
             commands.entity(entity).remove::<MeshMaterial3d<NifMaterial>>().insert(MeshMaterial3d(handle.clone()));
             o.commands += 1;
             // [design] The shared bookkeeping runs on ordinary material changes only; a
@@ -2731,5 +2742,24 @@ mod tests {
         let verify = &app.world().resource::<Variants>().verify;
         assert_eq!((verify.skipped, verify.diverged), (6, 1), "the unseen edit is a divergence");
         assert_eq!(app.world().get::<MeshMaterial3d<NifMaterial>>(e).unwrap().0, source, "and the verify pass acts on it");
+    }
+
+    #[test]
+    fn swaps_above_per_frame_budget_stay_pending_and_finish_on_next_frame() {
+        let mut app = conversion_app();
+        publish(&mut app);
+        let source = app.world_mut().resource_mut::<Assets<NifMaterial>>().add(NifMaterial::default());
+        let total = SWAP_WORK_PER_FRAME + 20;
+        let entities: Vec<Entity> = (0..total)
+            .map(|i| app.world_mut().spawn((tracked(i, 0), BlendShape::new(source.clone()), MeshMaterial3d(source.clone()))).id())
+            .collect();
+        app.update();
+        let after_first = entities.iter().filter(|&&e| blends_on(&app, e)).count();
+        assert_eq!(after_first, SWAP_WORK_PER_FRAME, "first frame swaps exactly SWAP_WORK_PER_FRAME shapes");
+        assert!(app.world().resource::<Variants>().last.as_ref().unwrap().pending, "remaining swaps keep the pass pending");
+        app.update();
+        let after_second = entities.iter().filter(|&&e| blends_on(&app, e)).count();
+        assert_eq!(after_second, total, "second frame finishes the remaining swaps");
+        assert!(!app.world().resource::<Variants>().last.as_ref().unwrap().pending, "pass settles once every shape is swapped");
     }
 }

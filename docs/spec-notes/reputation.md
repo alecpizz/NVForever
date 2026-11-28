@@ -11,9 +11,9 @@ are in scripts.md §7.6 and layer5-captures.md §9.3 a. This note is what play a
   sounds `UIRepGood`, `UIRepBad`.
 - The Fallout wiki page "Reputation (Fallout: New Vegas)" (owner's copy,
   `C:\fnv-private\fallout fandom`).
-- The owner's screenshots in `C:\fnv-private\Faction Reputation`: the boxes "Goodsprings /
-  Liked" and "Powder Gangers / Vilified", and the Pip-Boy's General page in its
-  reputation mode.
+- The owner's screenshots in `C:\fnv-private\Faction Reputation`: the boxes for
+  Goodsprings at fame level 2 and the Powder Gangers at infamy level 3, and the Pip-Boy's
+  General page in its reputation mode.
 
 ## 2. What the records and the page say
 
@@ -21,13 +21,14 @@ are in scripts.md §7.6 and layer5-captures.md §9.3 a. This note is what play a
   GoodspringsFaction 00104C6E has WMI1 RepNVGoodsprings 00104C22] A faction names the
   reputation its members count towards.
 - [documented: the wiki page] Fame and infamy each have four levels; together they give
-  one of sixteen titles, each with a one-line description (the page's table). The levels
+  one of sixteen titles, each with a one-line description. The levels
   are at fractions of the reputation's scale (the page's per-faction numbers are 0.15,
   0.5 and 1.0 × the `DATA` scale, rounded up, as captured in §9.3 a).
-- [observed] FalloutNV.esm overrides one description, `sRepTitlePosTwoNegThreeDesc`, with
-  the Soft-Hearted Devil's text: fame level 2 with infamy level 3 is "Soft-Hearted
-  Devil", and fame 3 with infamy 2 "Dark Hero", as the page's table has it. (The
-  Pip-Boy's list had the two the other way round.)
+- [observed: `fnvtool esm inventory`] The load order holds one of the descriptions as a
+  setting, `sRepTitlePosTwoNegThreeDesc` (fame level 2 with infamy level 3), in
+  FalloutNV.esm; no title and no other description is a setting, in FalloutNV.esm or the
+  DLC masters. The original's other words are built in, not in the data, and NVForever
+  does not copy them (LEGAL.md, #2982).
 - [documented: the wiki page, "Negative reputation for all towns and factions"] Being
   caught stealing costs 2 and killing a faction's or town's people openly 30; killing
   from a hidden state with a silent weapon in one blow costs nothing.
@@ -38,7 +39,7 @@ are in scripts.md §7.6 and layer5-captures.md §9.3 a. This note is what play a
   of an actor while someone (the victim too) sees the player adds 30, to every
   reputation the victim counts towards (its factions' WMI1), each up to its scale
   (`fnv_game::functions::crime_infamy`, `Note::Infamy`). Self-defence counts: the
-  owner's Vilified box came from killing Powder Gangers. Opening an owned lock,
+  owner's box for infamy level 3 came from killing Powder Gangers. Opening an owned lock,
   trespass and assault change no reputation.
 - **Who counts towards what** [design: `functions/reputation.rs` `reputations_of`]: a
   faction that owns the goods counts towards its own reputation. A killed actor is a
@@ -51,10 +52,12 @@ are in scripts.md §7.6 and layer5-captures.md §9.3 a. This note is what play a
   message box opens (it stops the game as message boxes do, queued with the others),
   titled with the reputation's name; the text is the new title, then its description
   (the setting `sRepTitlePos<n>Neg<m>Desc` where the load order has it [hypothesis: the
-  pattern of the one override], else the page's); a Vault Boy face 100 × 100 at the
-  left (the message menu file's icon place); one button, "Ok". The face is
+  pattern of the one setting], else NVForever's own); a Vault Boy face 100 × 100 at the
+  left (the message menu file's icon place); one button, the setting `sOk`. The titles
+  and the other descriptions are NVForever's own words (`nvf-play` reputation.rs
+  `TITLES`, `DESCRIPTIONS`) [design, #2982]. The face is
   `glow_message_vaultboy_very_happy` when fame's level is above infamy's and
-  `glow_message_vaultboy_sad` when below [observed: Liked and Vilified];
+  `glow_message_vaultboy_sad` when below [observed: fame 2 alone, infamy 3 alone];
   `glow_message_vaultboy_neutral` when equal [hypothesis]. `UIRepGood` plays when fame
   reached a new level, else `UIRepBad` [hypothesis].
 - **Pip-Boy, Stats / General, reputation mode** [observed: the screenshots]: the

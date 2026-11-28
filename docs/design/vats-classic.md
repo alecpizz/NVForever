@@ -413,3 +413,13 @@ notes are the full account).
   AP display, AP cost, the wider playback HUD and target-change timing remain open
   in observer check 215; no changes are made for those comparisons. Body-part keys
   (issue item 10) remain open as well.
+
+## 14. Optional direct touch selection [design]
+
+The independently saved Off/Tap/Hold presentation is specified in
+[Android VATS touch](android-vats-touch.md). It uses actual posed-body ray hits and
+the existing AP/legality queue consumer, without changing the physical/controller
+rules above. Selecting queues; only a separate touch Fire confirmation starts the
+existing execution path. The separate look-space double tap only enters VATS.
+The source and authored App controls await compiler/runtime/phone qualification;
+this addition does not alter the currently served APK.

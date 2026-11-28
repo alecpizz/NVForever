@@ -42,6 +42,7 @@ const WEAP_CALC: u32 = 0xA19;
 const CONT: u32 = 0xA1A;
 const NPC_REF: u32 = 0xA1B;
 const BOX_REF: u32 = 0xA1C;
+const WRLD: u32 = 0xA1D;
 
 fn f32b(v: f32) -> Vec<u8> {
     v.to_le_bytes().to_vec()
@@ -157,6 +158,8 @@ fn plugin_bytes() -> Vec<u8> {
         edid(b"WATR", WATR2, "TestWater2", &[sub(b"DATA", vec![0, 0])]),
     ]
     .concat();
+    // Worldspace with DATA flags bit 0 (Small World) and bit 1 (Can't Fast Travel) set (#3757).
+    let wrld = edid(b"WRLD", WRLD, "TestWorld", &[sub(b"DATA", vec![0x03])]);
     [
         tes4(),
         top(b"NPC_", &npcs),
@@ -175,6 +178,7 @@ fn plugin_bytes() -> Vec<u8> {
         top(b"IDLE", &idle),
         top(b"BPTD", &bptd),
         top(b"CELL", &group(0i32.to_le_bytes(), 2, &group(0i32.to_le_bytes(), 3, &[cell, cell_children].concat()))),
+        top(b"WRLD", &wrld),
         top(b"WATR", &watr),
     ]
     .concat()
@@ -345,7 +349,12 @@ fn weapons() {
     assert_eq!(n(&mut g, "GetWeaponDetectionSoundLevel TestGun"), 2.0);
     q(&mut g, "SetWeaponDetectionSoundLevel TestGun 9");
     assert_eq!(n(&mut g, "GetWeaponDetectionSoundLevel TestGun"), 2.0);
-    // Mods, read by GetWeaponItemMod and the rest; left out, none [documented].
+    // Mods, read by GetWeaponItemMod and the rest; left out or non-IMOD clears to 0
+    // [documented; observed: jip_20_weapon_item_mod_non_imod].
+    q(&mut g, "SetWeaponItemMod TestGun 2 TestMod");
+    assert_eq!(n(&mut g, "GetWeaponItemMod 2 TestGun"), f64::from(IMOD));
+    q(&mut g, "SetWeaponItemMod TestGun 2 TestGun");
+    assert_eq!(n(&mut g, "GetWeaponItemMod 2 TestGun"), 0.0, "non-IMOD clears slot to 0");
     q(&mut g, "SetWeaponItemMod TestGun 2 TestMod");
     assert_eq!(n(&mut g, "GetWeaponItemMod 2 TestGun"), f64::from(IMOD));
     q(&mut g, "SetWeaponItemMod TestGun 2");
@@ -429,13 +438,26 @@ fn cells_and_water() {
     let f = fixture();
     let mut g = game(&f);
     // DATA 0-7, LNAM 8-16, read by GetCellFlag [documented: the tables].
-    assert_eq!((n(&mut g, "GetCellFlag TestCell 1"), n(&mut g, "GetCellFlag TestCell 8"), n(&mut g, "GetCellFlag TestCell 9")), (1.0, 1.0, 0.0));
+    assert_eq!((n(&mut g, "GetCellFlag TestCell 0"), n(&mut g, "GetCellFlag TestCell 1"), n(&mut g, "GetCellFlag TestCell 8"), n(&mut g, "GetCellFlag TestCell 9")), (1.0, 1.0, 1.0, 0.0));
+    assert_eq!((n(&mut g, "GetCellFlag TestCell -1"), n(&mut g, "GetCellFlag TestCell 17")), (0.0, 0.0));
     q(&mut g, "SetCellFlag TestCell 1 0");
     q(&mut g, "SetCellFlag TestCell 5 1");
     q(&mut g, "SetCellFlag TestCell 16 1");
     q(&mut g, "SetCellFlag TestCell 4 1");
     assert_eq!(n(&mut g, "GetCellFlag TestCell 4"), 1.0);
     assert_eq!((n(&mut g, "GetCellFlag TestCell 1"), n(&mut g, "GetCellFlag TestCell 5"), n(&mut g, "GetCellFlag TestCell 16")), (0.0, 1.0, 1.0));
+    // Non-CELL records (WRLD with DATA bits 0-1 set, FLST with LNAM, null form) must not leak
+    // their own DATA/LNAM bits through GetCellFlag, while GetWorldspaceFlag still reads WRLD (#3757).
+    assert_eq!((n(&mut g, "GetWorldspaceFlag TestWorld 0"), n(&mut g, "GetWorldspaceFlag TestWorld 1")), (1.0, 1.0));
+    assert_eq!((n(&mut g, "GetCellFlag TestWorld 0"), n(&mut g, "GetCellFlag TestWorld 1")), (0.0, 0.0));
+    q(&mut g, "SetWorldspaceFlag TestWorld 5 1");
+    assert_eq!(n(&mut g, "GetWorldspaceFlag TestWorld 5"), 1.0);
+    assert_eq!(n(&mut g, "GetCellFlag TestWorld 5"), 0.0);
+    // SetCellFlag also ignores a WRLD and must not mutate its flags.
+    q(&mut g, "SetCellFlag TestWorld 0 0");
+    assert_eq!(n(&mut g, "GetWorldspaceFlag TestWorld 0"), 1.0);
+    assert_eq!(n(&mut g, "GetCellFlag TestFactionList 8"), 0.0);
+    assert_eq!(n(&mut g, "GetCellFlag 0 0"), 0.0);
     // Water form and effect, read by GetCellWaterForm and GetWaterFormEffect.
     assert_eq!(n(&mut g, "GetCellWaterForm TestCell"), f64::from(WATR));
     q(&mut g, "SetCellWaterForm TestCell TestWater2");
@@ -455,8 +477,8 @@ fn calculated_weapon_damage_and_dps_resolve_inv_and_world_refs() {
     let f = fixture();
     let mut g = game(&f);
 
-    // Keep Stewie plugin gate pinned at 945 while building 945->960 consumers.
-    assert_eq!(n(&mut g, "GetPluginVersion \"lStewieAl's Tweaks\""), 945.0);
+    // Stewie plugin gate promoted to 960 (#3183); 970 (#3184) remains held.
+    assert_eq!(n(&mut g, "GetPluginVersion \"lStewieAl's Tweaks\""), 960.0);
 
     // Player: Guns 50 (factor 0.75), CritChance 10 (0.10 * 30 * 2.0 = 6.0 crit contrib).
     // NPC: Guns 100 (factor 1.0), CritChance 0.

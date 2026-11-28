@@ -53,9 +53,14 @@ pub enum Action {
     /// A door whose reference is flagged Inaccessible (header bit 8): it shows its name
     /// with "Inaccessible" and E does nothing (docs/spec-notes/cells-refs.md §2).
     Inaccessible,
+    /// Another player down in co-op, aimed at where the body lies: E revives them
+    /// (`nvforever`'s `coop.rs`), not the world's activation, using `with` (its name, a
+    /// Stimpak); `None`: this player has nothing to revive with. Never offered outside
+    /// co-op [design].
+    Revive { with: Option<String> },
     /// A knocked-out companion a Stimpak gets up (the player's Revive Unconscious
     /// Companions tweak, docs/design/tweaks.md).
-    Revive,
+    ReviveCompanion,
 }
 
 /// A lock level by the name the game gives it: the levels the editor offers, 0 Very Easy,
@@ -86,6 +91,10 @@ pub fn terminal_lock_level(code: u8) -> u8 {
 }
 
 impl Action {
+    /// The prompt's verb: plain functional words of NVForever's own ("Take", "Open",
+    /// "Talk", ...), no game setting naming them in the data files [design, #4495; LEGAL.md:
+    /// the engine's short functional phrases]. A lock's level is named as the editor's
+    /// documentation names it ([`lock_text`]).
     pub fn label(&self) -> String {
         match self {
             Action::Take { .. } => "Take".into(),
@@ -110,20 +119,24 @@ impl Action {
             Action::Name | Action::Hostile => String::new(),
             // [hypothesis: the flag's name, cells-refs.md §2]
             Action::Inaccessible => "Inaccessible".into(),
+            // [design: the game's own rollover with the verb]
+            Action::Revive { .. } => "Revive".into(),
             // Our word for the tweak's prompt.
-            Action::Revive => "Revive".into(),
+            Action::ReviveCompanion => "Revive".into(),
         }
     }
 }
 
 /// The two prompt lines under the crosshair, as the original sets them: the action (the
-/// key goes before it), then what it is done to [observed: the owner's screenshots,
-/// docs/spec-notes/reticle.md §3]. A stack is named with its count; a door that leads
+/// key goes before it), then what it is done to [observed: the two lines' order on the
+/// owner's screenshots, docs/spec-notes/reticle.md §3; the words are [`Action::label`]'s]. A stack is named with its count; a door that leads
 /// elsewhere by where it leads, with the action "Open" [hypothesis, reticle.md §5].
 pub fn prompt(name: &str, action: &Action) -> (String, String) {
     match action {
         Action::Take { count } if *count > 1 => (action.label(), format!("{name} ({count})")),
         Action::Travel { to: Some(to) } => ("Open".into(), to.clone()),
+        // [design: "E) Revive <name> (Stimpak)"]
+        Action::Revive { with: Some(with) } => (action.label(), format!("{name} ({with})")),
         _ => (action.label(), name.to_string()),
     }
 }

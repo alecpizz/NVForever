@@ -83,19 +83,22 @@ const STRENGTH: f32 = 0.55;
 /// = 1 - strength x (1 - visibility). Open flat ground has visibility 1 (ssao.wesl
 /// `gtao_visibility` divides by the slices' open integral), so it stays as bright as with the
 /// switch off; a floor point at the foot of a wall has 0.5 (the wall hides half the
-/// cosine-weighted hemisphere), which this darkens to 0.8, about what the old estimate gave
+/// cosine-weighted hemisphere), which this darkens to 0.77 (0.8 until 2026-11-25), about what the old estimate gave
 /// in such a crease [engineering choice, from that estimate, not yet from pictures: the
 /// factor still multiplies all light, so it is kept low as the old one was]. The picture
 /// placement's (`NVF_PLAY_DEBUG_AO=post`, and the fallback while the lighting hook is not in
-/// place): stage one's value, unchanged.
-const GTAO_STRENGTH: f32 = 0.4;
+/// place): stage one's 0.4, raised with the lighting placement's ([`LIGHTING_STRENGTH`]).
+const GTAO_STRENGTH: f32 = 0.46;
 /// The ground-truth estimate's strength in the lighting placement (the default): there the
 /// factor reaches only the ambient light and the lamps that cast no shadow, never the sun,
 /// the moon or highlights, so the reason for keeping the picture placement's low is gone
 /// [engineering choice, the player's: at exponent 1 and lamps 1, indoors 0.4 and 0.8 looked
 /// about the same and neither too dark, and outdoors 0.8 with `thin+soft` "feels about right"
-/// (observed 2026-11-18, the player's play test)].
-const LIGHTING_STRENGTH: f32 = 0.8;
+/// (observed 2026-11-18, the player's play test)]. 0.92 since 2026-11-25, 0.8 until then
+/// [design, set by eye: the factor darkens the ambient light, and once the display sum
+/// showed its dark values as they are (lights/display_shader.rs `nvf_display_to_linear`)
+/// the creases at 0.8 read as too light; both placements' strengths went up by 15%].
+const LIGHTING_STRENGTH: f32 = 0.92;
 /// The remedies for the shimmer on plants in the lighting placement: `thin` and `soft`
 /// ([`AoVariant`]). Measured on the occlusion alone at the Goodsprings street, two bush crops
 /// (median change per pixel between frames 0.12 s apart, levels of 255): the plain estimate
@@ -118,8 +121,26 @@ const GTAO_STEPS: u32 = 4;
 /// look stays close: the same contact shadows, a little more grain where the 4 x 4 texels
 /// lie on different surfaces [engineering choice, from the shader's reads: ssao.wesl].
 const PERFORMANCE_SLICES: u32 = 1;
-/// Largest radius on the screen, in pixels (near things, e.g. the player's arms).
-const MAX_SCREEN_RADIUS: f32 = 80.0;
+/// Largest radius on the screen, as a share of the picture's height (near things, e.g. the
+/// player's arms): 80 pixels of 1080. Until 2026-11-24 it was 80 pixels at any size, so at
+/// 4K half as far as at 1080p: the radius was held to about 5% of a point's distance there,
+/// 12 units (17 cm) at 3 m against the 64 meant, and a room's creases were barely shaded
+/// [observed 2026-11-24, an audit of the pass against the lamp shadows' rewrite]. Under an
+/// upscaler the share is of the render size's height, which the pass runs at.
+const MAX_SCREEN_RADIUS: f32 = 80.0 / 1080.0;
+
+/// [`MAX_SCREEN_RADIUS`], or `NVF_PLAY_DEBUG_AO_SCREEN=<share of the height>` (a test aid,
+/// for comparing: 0.037 is what 4K had).
+fn max_screen_radius() -> f32 {
+    static SHARE: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *SHARE.get_or_init(|| match std::env::var("NVF_PLAY_DEBUG_AO_SCREEN").ok().and_then(|v| v.trim().parse::<f32>().ok()).filter(|v| *v > 0.0) {
+        Some(v) => {
+            info!("ambient occlusion: NVF_PLAY_DEBUG_AO_SCREEN={v}");
+            v
+        }
+        None => MAX_SCREEN_RADIUS,
+    })
+}
 /// The effect fades out between these distances (game units) [engineering choice: beyond
 /// them the radius is a pixel or two and the fog takes over].
 const FADE_START: f32 = 4000.0;
@@ -133,7 +154,10 @@ pub const AO_CHOICES: [&str; 3] = ["Off", "Performance", "Quality"];
 /// How much the ambient occlusion costs while it is on: the Ambient occlusion row's
 /// Performance and Quality ([`AO_CHOICES`]; `--ambient-occlusion[=performance|quality]`).
 /// Quality is the estimate as it was before the row had levels; Performance the same pass
-/// with one slice direction a pixel ([`PERFORMANCE_SLICES`]).
+/// with one slice direction a pixel ([`PERFORMANCE_SLICES`]). An Ultra level, Quality's at
+/// full resolution (a texel a pixel, four times the pass's pixels: 0.41 ms against 0.13 at 4K
+/// with DLSS Quality), was built and dropped on 2026-11-24: "basically not noticeable even at
+/// 4k native" [observed: a play test].
 #[derive(clap::ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AoLevel {
     Performance,
@@ -223,11 +247,10 @@ impl AmbientOcclusion {
     }
 
     /// Under FSR: the occlusion at the render size, on the HDR picture before FSR
-    /// ([`ao_before_fsr`]), with the largest radius on the screen scaled to the render size
-    /// so it covers what it did at the display size.
-    pub(crate) fn before_fsr(&mut self, render_size: UVec2, output_size: UVec2) {
+    /// ([`ao_before_fsr`]). The largest radius on the screen is a share of the height the
+    /// pass runs at ([`MAX_SCREEN_RADIUS`]), so it covers what it does at the display size.
+    pub(crate) fn before_fsr(&mut self, render_size: UVec2, _output_size: UVec2) {
         self.area = Vec4::new(render_size.x as f32, render_size.y as f32, 1.0, 0.0);
-        self.proj.z *= render_size.y as f32 / output_size.y.max(1) as f32;
     }
 
     fn runs_before_fsr(&self) -> bool {
@@ -669,18 +692,40 @@ impl Plugin for SsaoPlugin {
     }
 }
 
+/// `NVF_PLAY_DEBUG_AO_STILL=1` (a test aid): the sample pattern stays where it lies under a
+/// temporal method too, as before 2026-11-24, for comparing.
+fn moving_pattern() -> bool {
+    static MOVING: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *MOVING.get_or_init(|| {
+        let still = std::env::var("NVF_PLAY_DEBUG_AO_STILL").is_ok_and(|v| v.trim() == "1");
+        if still {
+            info!("ambient occlusion: NVF_PLAY_DEBUG_AO_STILL=1, the sample pattern does not move with the frame");
+        }
+        !still
+    })
+}
+
+/// The uniform's `variant.w` for frame `frame`: 0 for the pattern as it lies, else 1 + the
+/// frame's number in 0..15 (ssao.wesl `frame_shift`).
+pub fn frame_code(frame: u32, moving: bool) -> f32 {
+    if moving { (frame % 16 + 1) as f32 } else { 0.0 }
+}
+
 /// The camera's projection into the uniform (the aspect follows the window), and the
 /// strength and remedies of the placement that runs this frame: on the picture until the
 /// lighting hook is in place (or for good if it failed), then the lighting's.
-fn follow_projection(mut cams: Query<(&Projection, &mut AmbientOcclusion), With<FlyCam>>) {
+pub(crate) fn follow_projection(mut cams: Query<(&Projection, &mut AmbientOcclusion, Has<bevy::render::camera::TemporalJitter>), With<FlyCam>>, frame: Res<bevy::diagnostic::FrameCount>) {
     let lighting = AO_DEBUG.in_lighting_now();
-    for (proj, mut ao) in &mut cams {
+    for (proj, mut ao, jitters) in &mut cams {
         let Projection::Perspective(p) = proj else { continue };
         let y = 1.0 / (p.fov * 0.5).tan();
         let x = y / p.aspect_ratio.max(1e-3);
         let params = Vec4::new(RADIUS, AO_DEBUG.strength(lighting), p.near, FADE_END);
-        let projv = Vec4::new(x, y, MAX_SCREEN_RADIUS, FADE_START);
-        let variant = AO_DEBUG.variant_at(lighting, ao.level()).uniform();
+        let projv = Vec4::new(x, y, max_screen_radius(), FADE_START);
+        let mut variant = AO_DEBUG.variant_at(lighting, ao.level()).uniform();
+        // The sample pattern moves each frame while the camera jitters (ssao.wesl
+        // `frame_shift`): a temporal method then averages what the 4 x 4 denoise cannot.
+        variant.w = frame_code(frame.0, jitters && moving_pattern());
         if ao.params != params || ao.proj != projv || ao.variant != variant {
             ao.params = params;
             ao.proj = projv;
@@ -790,7 +835,7 @@ pub(crate) struct AoLightingGpu {
 
 /// Whether the main camera's view takes the occlusion in the lighting this frame: asked for
 /// in its settings, and the lighting hook in place. A failed hook keeps the post placement.
-fn in_lighting(settings: &AmbientOcclusion, hook: HookState) -> bool {
+pub(crate) fn in_lighting(settings: &AmbientOcclusion, hook: HookState) -> bool {
     settings.wants_lighting() && hook == HookState::Installed
 }
 
@@ -1593,8 +1638,8 @@ mod tests {
         );
         // The lighting's line names the remedies that run: the default without the aid's
         // name, `none` and a chosen one with it.
-        assert!(AoDebug::default().describe(true).contains("depth-aware denoise, variant soft+thin, strength 0.8, in the lighting"));
-        assert!(none.describe(true).contains("depth-aware denoise, variant none (NVF_PLAY_DEBUG_AO_VARIANT), strength 0.8"));
+        assert!(AoDebug::default().describe(true).contains("depth-aware denoise, variant soft+thin, strength 0.92, in the lighting"));
+        assert!(none.describe(true).contains("depth-aware denoise, variant none (NVF_PLAY_DEBUG_AO_VARIANT), strength 0.92"));
         assert!(AoDebug { variant: Some(AoVariant::default()), ..post }.describe(false).contains("denoise, variant none (NVF_PLAY_DEBUG_AO_VARIANT), on the picture"));
     }
 
@@ -1915,7 +1960,7 @@ mod tests {
     #[test]
     fn the_log_line_names_the_estimate_and_the_placement() {
         let start = "ambient occlusion: ground-truth estimate (GTAO), 2 slices x 4 steps a side at half resolution, depth-aware denoise";
-        assert_eq!(AoDebug::default().describe(true), format!("{start}, variant soft+thin, strength 0.8, in the lighting: on the ambient light and on lamps without a shadow by 1, exponent 1, multi-bounce by surface colour"));
+        assert_eq!(AoDebug::default().describe(true), format!("{start}, variant soft+thin, strength 0.92, in the lighting: on the ambient light and on lamps without a shadow by 1, exponent 1, multi-bounce by surface colour"));
         let post = AoDebug { post: true, ..AoDebug::default() };
         assert_eq!(post.describe(false), format!("{start}, on the picture (NVF_PLAY_DEBUG_AO=post)"));
         // The default asked for, on the picture while the hook is not in place: stage one's.
@@ -1989,7 +2034,7 @@ mod tests {
         // A surface facing the camera with one side hidden up to the view vector keeps half.
         let half = visible_arc(-FRAC_PI_2, 0.0) + visible_arc(0.0, 0.0);
         assert!((half - 0.5).abs() < 1e-6);
-        assert!((1.0 - GTAO_STRENGTH * (1.0 - half) - 0.8).abs() < 1e-6, "the crease's factor GTAO_STRENGTH's comment gives");
+        assert!((1.0 - GTAO_STRENGTH * (1.0 - half) - 0.77).abs() < 1e-6, "the crease's factor GTAO_STRENGTH's comment gives");
     }
 
     /// Quality is the estimate as it was before the row had levels, uniform for uniform;
@@ -2014,12 +2059,12 @@ mod tests {
         let line = AoDebug::default().describe_with(true, Some(AoLevel::Performance));
         assert_eq!(
             line,
-            "ambient occlusion: ground-truth estimate (GTAO), 1 slice x 4 steps a side at half resolution, depth-aware denoise, variant soft+thin, strength 0.8, in the lighting: on the ambient light and on lamps without a shadow by 1, exponent 1, multi-bounce by surface colour, level Performance"
+            "ambient occlusion: ground-truth estimate (GTAO), 1 slice x 4 steps a side at half resolution, depth-aware denoise, variant soft+thin, strength 0.92, in the lighting: on the ambient light and on lamps without a shadow by 1, exponent 1, multi-bounce by surface colour, level Performance"
         );
         assert_eq!(AoDebug::default().describe_with(true, Some(AoLevel::Quality)), format!("{}, level Quality", AoDebug::default().describe(true)));
         // The aid's `none` at Performance: one slice, no remedies named.
         let none = AoDebug { variant: Some(AoVariant::default()), ..AoDebug::default() };
-        assert!(none.describe_with(true, Some(AoLevel::Performance)).contains("1 slice x 4 steps a side at half resolution, depth-aware denoise, variant none (NVF_PLAY_DEBUG_AO_VARIANT), strength 0.8"));
+        assert!(none.describe_with(true, Some(AoLevel::Performance)).contains("1 slice x 4 steps a side at half resolution, depth-aware denoise, variant none (NVF_PLAY_DEBUG_AO_VARIANT), strength 0.92"));
         assert!(!old.describe_with(false, Some(AoLevel::Performance)).contains("level"), "the old estimate has no level");
         assert_eq!(AO_CHOICES, ["Off", AoLevel::Performance.name(), AoLevel::Quality.name()]);
     }

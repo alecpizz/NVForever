@@ -99,6 +99,21 @@ pub struct ScanCounts {
 #[component(storage = "SparseSet")]
 pub struct ActorBoundsCandidate;
 
+/// The references the other co-op players' bodies are drawn with on a guest (and on the
+/// host before a guest's actor exists): `0xFE00_C000` + the player's id. They are neither
+/// placed nor created references, so [`SimState::is_actor`] never accepts them, yet a shot
+/// must meet them like any body for friendly fire [observed: buckallobill, in game: a
+/// guest's shots went through the host]. They get a hit volume and part capsules, but no
+/// block (the players are not in each other's way) and are not among the living actors
+/// (no "enemies nearby" refusal, no combat music from a fellow player) [design]. Outside
+/// co-op nothing is drawn with them.
+pub const PLAYER_PUPPETS: std::ops::Range<u32> = 0xFE00_C000..0xFE00_C100;
+
+/// Whether `form_id` is one of the [`PLAYER_PUPPETS`].
+pub fn is_player_puppet(form_id: u32) -> bool {
+    PLAYER_PUPPETS.contains(&form_id)
+}
+
 /// A creature skeleton's BBX half-width before base/reference scale [documented:
 /// schemas/nif/scene.json; design: attached only to creature roots in actors.rs, #2535].
 #[derive(Component)]
@@ -124,7 +139,7 @@ impl CreatureBbx {
 /// walk does not find the meshes that were there before it.
 /// A draw-only copy (`crate::DrawOnly`, nvforever's full-detail ring) is never one.
 fn wants_candidate(world: &World, entity: Entity) -> bool {
-    !world.entity(entity).contains::<crate::DrawOnly>() && world.get_resource::<SimState>().is_some_and(|sim| world.get::<RefVisual>(entity).is_some_and(|r| sim.may_be_actor(r.0)))
+    !world.entity(entity).contains::<crate::DrawOnly>() && world.get_resource::<SimState>().is_some_and(|sim| world.get::<RefVisual>(entity).is_some_and(|r| sim.may_be_actor(r.0) || is_player_puppet(r.0)))
 }
 
 /// Set the mark from the entity's reference as it is when this runs (not as it was when
@@ -177,7 +192,7 @@ fn reclassify_candidates(sim: Option<Res<SimState>>, mut table: Local<usize>, re
     }
     *table = now;
     for (e, r, has) in &refs {
-        if sim.may_be_actor(r.0) != has {
+        if (sim.may_be_actor(r.0) || is_player_puppet(r.0)) != has {
             commands.entity(e).queue_silenced(settle_candidate);
         }
     }
@@ -359,7 +374,7 @@ fn gather<'a>(parts: impl Iterator<Item = (&'a RefVisual, &'a Aabb, &'a GlobalTr
         }
         scan.visible += 1;
         // Placed actors and created ones (PlaceAtMe), `SimState::is_actor`.
-        if !sim.is_actor(r.0) {
+        if !sim.is_actor(r.0) && !is_player_puppet(r.0) {
             continue;
         }
         scan.accepted += 1;
@@ -420,7 +435,8 @@ fn sync_volumes(
     for (&id, &(lo, hi)) in &bounds {
         let dead = crate::combat::is_dead(script.as_deref(), id);
         let v = volume_for(lo, hi, dead);
-        if !dead && id != FormId::PLAYER_REF.0 {
+        let puppet = is_player_puppet(id);
+        if !dead && id != FormId::PLAYER_REF.0 && !puppet {
             vols.living.push((id, v.feet));
             // How tall its character is made (`PhysState::add_npc`).
             phys.actor_heights.insert(id, hi[2] - lo[2]);
@@ -428,7 +444,7 @@ fn sync_volumes(
         let posed = posed.by_ref.get(&id).filter(|p| !p.segments.is_empty());
         // In the player's way where its body is now, unless the character controller
         // walks it (its block is where its character is, `crate::player`).
-        if !dead && id != FormId::PLAYER_REF.0 && !phys.npcs.contains_key(&id) && !blocks.in_nobodys_way.contains(&id) {
+        if !dead && id != FormId::PLAYER_REF.0 && !puppet && !phys.npcs.contains_key(&id) && !blocks.in_nobodys_way.contains(&id) {
             let mut block = blocking::block_for(id, lo, hi, posed.and_then(|p| blocking::torso(&p.segments)));
             // Stopping removes the character (nvforever::residents::think), but must
             // keep the widened creature circle at its feet [design, #2535].
@@ -1023,7 +1039,8 @@ mod tests {
                         phys.remove_npc(ids[i]);
                         if walking[i] {
                             let ch = phys.world.add_character(ids[i], fnv_phys::CharacterParams::default(), feet[i]);
-                            phys.npcs.insert(ids[i], NpcBody { ch, prev_feet: feet[i], velocity: [0.0; 2], jump: false, sink: 0.0, lift: Default::default() });
+                            let standing_height = ch.params.height;
+                            phys.npcs.insert(ids[i], NpcBody { ch, prev_feet: feet[i], velocity: [0.0; 2], jump: false, sink: 0.0, lift: Default::default(), standing_height, sneak_crouch: false });
                         }
                     }
                 }

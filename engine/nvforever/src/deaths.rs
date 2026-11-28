@@ -18,7 +18,8 @@
 //!
 //! A corpse laid out by a new game (`Game::starts_dead`) whose reference stores the pose
 //! its designer left it in (`XRGD`, `authored_pose.rs`) is put in that pose at rest
-//! instead of falling (docs/spec-notes/dead-on-spawn.md §5).
+//! instead of falling (docs/spec-notes/dead-on-spawn.md §5); on a skeleton the poses'
+//! reading was not checked on (creatures) it starts in that pose awake and settles (#3408).
 
 use crate::limbs::ActorRig;
 use crate::world::WorldData;
@@ -199,6 +200,9 @@ fn authored(ragdolls: &mut Ragdolls, script: Option<&ScriptState>, world: &World
         Ok(pose) => {
             ragdolls.rest.insert(r, pose);
             ragdolls.authored += 1;
+            if names.first().copied().flatten() != Some(crate::authored_pose::CHECKED_ROOT) {
+                ragdolls.settle_from_stored.insert(r);
+            }
         }
         Err(e) => {
             ragdolls.authored_skipped += 1;

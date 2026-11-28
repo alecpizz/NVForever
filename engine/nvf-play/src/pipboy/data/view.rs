@@ -148,6 +148,34 @@ impl MapView {
         Rect::from_corners(self.left, self.left + self.size)
     }
 
+    /// Touch-only pan/pinch: keep the point below `from` under `to`, using
+    /// the same world/local projection the actual map paints. The existing
+    /// mouse/controller policies remain unchanged. Bounds take precedence over
+    /// the midpoint anchor at the covered map's edges.
+    pub(super) fn touch_transform(&self, mag: f32, from: Vec2, to: Vec2, ratio: f32) -> Option<([f32; 2], f32)> {
+        if !from.is_finite() || !to.is_finite() || !ratio.is_finite() || ratio <= 0.0
+            || !mag.is_finite() || mag <= 0.0 || !self.window.min.is_finite()
+            || !self.window.max.is_finite() || self.extent().min_element() <= 0.0 {
+            return None;
+        }
+        let next = (mag * ratio).clamp(super::ZOOM.0, super::ZOOM.1);
+        let centre = if let Some(p) = self.local {
+            if !p.mag.is_finite() || p.mag <= 0.0 || !p.scale.is_finite() || p.scale <= 0.0 || !p.extent.is_finite()
+                || p.extent.min_element() <= 0.0 || !p.origin.iter().all(|v|v.is_finite()) { return None; }
+            let point = self.local_point(from)?;
+            let delta = (to - self.mid()) * p.scale / next;
+            [(point[0] - delta.x).clamp(p.origin[0], p.origin[0] + p.extent.x),
+             (point[1] + delta.y).clamp(p.origin[1] - p.extent.y, p.origin[1])]
+        } else {
+            if !self.size.is_finite() || self.size.min_element() <= 0.0 { return None; }
+            let point = Vec2::from(self.to_uv(from));
+            let size = self.size * (next / mag);
+            let centre = (self.mid() - to) / size + point;
+            [centre.x.clamp(0.0, 1.0), centre.y.clamp(0.0, 1.0)]
+        };
+        centre.iter().all(|v|v.is_finite()).then_some((centre, next))
+    }
+
     /// The pointer (canvas units) in the window's units, while it is over the window.
     pub fn pointer(&self, canvas: Option<Vec2>) -> Option<Vec2> {
         let p = canvas? - self.window.min;

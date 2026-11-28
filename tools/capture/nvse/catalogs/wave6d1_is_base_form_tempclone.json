@@ -1,0 +1,88 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6d1_is_base_form_tempclone",
+  "description": "Wave 6D-1 strictly read-only console-only clean-room probe catalog verifying ShowOff IsBaseForm returns 1 for TempCloneForm 0xFF base forms and authored base forms (WEAP, NPC_, CELL, WRLD, QUST, FACT, FLST) while returning 0 for placed references.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)",
+    "ShowOffNVSE Plugin": "184",
+    "lStewieAl's Tweaks": "1005"
+  },
+  "batches": [
+    {
+      "id": "w6d1_is_base_form_tempclone",
+      "title": "Wave 6D-1 - ShowOff IsBaseForm TempCloneForm Support",
+      "extender": "xNVSE 6.4.9 + ShowOffNVSE 184",
+      "required_plugins": [
+        "ShowOffNVSE.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6d1_35_showoff_is_base_form_and_fade_state",
+          "bucket": "A",
+          "extender": "ShowOff 184",
+          "required_plugins": [
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-showoff.md",
+          "spec_line": 120,
+          "functions_tested": [
+            "IsBaseForm",
+            "IsReferenceCloned",
+            "IsActorAlt",
+            "GetActorFadeState"
+          ],
+          "claim": "Verify IsBaseForm across WEAP, NPC_, CELL, WRLD, QUST, FACT, FLST, TempCloneForm (0xFF base!), placed ACHR, Player, placed REFR, and GetActorFadeState on non-actor door & unloaded NPC.",
+          "expected": "Check whether IsBaseForm returns 1 for TempCloneForm (0xFF base form!), CELL, WRLD, QUST, FACT; GetActorFadeState returns -1 for non-actor and unloaded NPC.",
+          "script_lines": [
+            "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+            "ref rClone = TempCloneForm r10",
+            "ref rNpcB = GetFormFromMod \"FalloutNV.esm\" \"104C0C\"",
+            "ref rDoc = GetFormFromMod \"FalloutNV.esm\" \"104C0F\"",
+            "ref rSun = GetFormFromMod \"FalloutNV.esm\" \"104E85\"",
+            "ref rDoor = GetFormFromMod \"FalloutNV.esm\" \"103E61\"",
+            "ref rCell = GetFormFromMod \"FalloutNV.esm\" \"103DF9\"",
+            "ref rWrld = GetFormFromMod \"FalloutNV.esm\" \"DA726\"",
+            "ref rQ = GetFormFromMod \"FalloutNV.esm\" \"E282D\"",
+            "ref rFac = GetFormFromMod \"FalloutNV.esm\" \"1B2A4\"",
+            "ref rFlst = GetFormFromMod \"FalloutNV.esm\" \"645D5\"",
+            "int bW = IsBaseForm r10",
+            "int bCl = IsBaseForm rClone",
+            "int bN = IsBaseForm rNpcB",
+            "int bCe = IsBaseForm rCell",
+            "int bWr = IsBaseForm rWrld",
+            "int bQu = IsBaseForm rQ",
+            "int bFa = IsBaseForm rFac",
+            "int bFl = IsBaseForm rFlst",
+            "int bDoc = IsBaseForm rDoc",
+            "int bPc = IsBaseForm Player",
+            "int bDr = IsBaseForm rDoor",
+            "int fPc = Player.GetActorFadeState",
+            "int fDoc = rDoc.GetActorFadeState",
+            "int fDr = rDoor.GetActorFadeState",
+            "int fSun = rSun.GetActorFadeState",
+            "PrintToConsole \"PROBE|w6d1_35_showoff_is_base_form_and_fade_state|base(w=%g,cl=%g,n=%g,ce=%g,wr=%g,qu=%g,fa=%g,fl=%g,doc=%g,pc=%g,dr=%g)|fade(pc=%g,doc=%g,dr=%g,sun=%g)\" bW bCl bN bCe bWr bQu bFa bFl bDoc bPc bDr fPc fDoc fDr fSun"
+          ]
+        }
+      ]
+    }
+  ]
+}

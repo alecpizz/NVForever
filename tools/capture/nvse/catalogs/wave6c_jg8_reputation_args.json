@@ -1,0 +1,114 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6c_jg8_reputation_args",
+  "description": "Wave 6C strictly read-only console-only probe verifying SetOnReputationChangeEventHandler passes (reputation, fame, infamy).",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)",
+    "JohnnyGuitarNVSE": "528"
+  },
+  "batches": [
+    {
+      "id": "w6c_jg8_reputation_args",
+      "title": "Wave 6C - SetOnReputationChangeEventHandler Callback Arguments",
+      "extender": "JohnnyGuitar 528 + JIP LN 57.30",
+      "required_plugins": [
+        "jip_nvse.dll",
+        "johnnyguitar.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6t2p3_12_rep_fame_infamy",
+          "bucket": "B",
+          "extender": "JohnnyGuitar 528",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "johnnyguitar.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-jg8.md",
+          "spec_line": 33,
+          "functions_tested": [
+            "SetOnReputationChangeEventHandler"
+          ],
+          "claim": "Verify SetOnReputationChangeEventHandler exact float args (reputation, fame, infamy) after baseline tick.",
+          "expected": "s1(n=1,rOk=1,fame=5.0,inf=0.0)|s2(n=2,fame=5.0,inf=3.0)",
+          "script_lines": [
+            "ref rRep = GetFormFromMod \"FalloutNV.esm\" \"104C22\"",
+            "ref cb = CompileScript \"nvseprobe_s_p3_12_cb.gek\"",
+            "Player.AuxVarSetRef \"*p3_12_cb\" cb",
+            "Player.AuxVarSetFlt \"*p3_12_n\" 0",
+            "SetOnReputationChangeEventHandler 1 cb 0 rRep"
+          ],
+          "wait_ticks_after": 2,
+          "helper_scripts": {
+            "nvseprobe_s_p3_12_cb.gek": [
+              "begin Function { ref rR, float fFame, float fInf }",
+              "Player.AuxVarSetFlt \"*p3_12_n\" ((Player.AuxVarGetFlt \"*p3_12_n\") + 1)",
+              "Player.AuxVarSetRef \"*p3_12_r\" rR",
+              "Player.AuxVarSetFlt \"*p3_12_fm\" fFame",
+              "Player.AuxVarSetFlt \"*p3_12_in\" fInf"
+            ]
+          },
+          "extra_steps": [
+            {
+              "suffix": "fame",
+              "wait_ticks": 2,
+              "script_lines": [
+                "ref rRep = GetFormFromMod \"FalloutNV.esm\" \"104C22\"",
+                "AddReputationExact rRep 1 5"
+              ]
+            },
+            {
+              "suffix": "inf",
+              "wait_ticks": 2,
+              "script_lines": [
+                "ref rRep = GetFormFromMod \"FalloutNV.esm\" \"104C22\"",
+                "Player.AuxVarSetFlt \"*p3_12_n1\" (Player.AuxVarGetFlt \"*p3_12_n\")",
+                "Player.AuxVarSetFlt \"*p3_12_r1\" ((Player.AuxVarGetRef \"*p3_12_r\") == rRep)",
+                "Player.AuxVarSetFlt \"*p3_12_fm1\" (Player.AuxVarGetFlt \"*p3_12_fm\")",
+                "Player.AuxVarSetFlt \"*p3_12_in1\" (Player.AuxVarGetFlt \"*p3_12_in\")",
+                "AddReputationExact rRep 0 3"
+              ]
+            },
+            {
+              "suffix": "read",
+              "wait_ticks": 0,
+              "script_lines": [
+                "ref rRep = GetFormFromMod \"FalloutNV.esm\" \"104C22\"",
+                "int n1 = Player.AuxVarGetFlt \"*p3_12_n1\"",
+                "int r1 = Player.AuxVarGetFlt \"*p3_12_r1\"",
+                "float fm1 = Player.AuxVarGetFlt \"*p3_12_fm1\"",
+                "float in1 = Player.AuxVarGetFlt \"*p3_12_in1\"",
+                "int n2 = Player.AuxVarGetFlt \"*p3_12_n\"",
+                "float fm2 = Player.AuxVarGetFlt \"*p3_12_fm\"",
+                "float in2 = Player.AuxVarGetFlt \"*p3_12_in\"",
+                "SetOnReputationChangeEventHandler 0 (Player.AuxVarGetRef \"*p3_12_cb\") 0 rRep",
+                "RemoveReputationExact rRep 1 5",
+                "RemoveReputationExact rRep 0 3",
+                "PrintToConsole \"PROBE|w6t2p3_12_rep_fame_infamy|s1(n=%g,rOk=%g,fame=%.1f,inf=%.1f)|s2(n=%g,fame=%.1f,inf=%.1f)\" n1 r1 fm1 in1 n2 fm2 in2"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

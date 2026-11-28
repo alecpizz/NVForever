@@ -70,7 +70,7 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
         // GSDocMitchellHouse (0x00103DF9), Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 +
         // AnhNVSE 131 with the 10 official base masters, probe
         // `anh_07_zone_level_min_owner`: 0 on unentered Vault11Zone (000E9081)].
-        "getzonelevel" => XVal::Num(form(args, 0).and_then(|z| g.world.zone_level(z)).map_or(0.0, f64::from)),
+        "getzonelevel" => XVal::Num(form(args, 0).and_then(|z| g.zone_level(z)).map_or(0.0, f64::from)),
         // [documented: GetZoneMinLevel; GetZoneMatchLevel, "Match PC Below Minimum Level";
         // GetZoneOwner].
         "getzoneminlevel" => XVal::Num(form(args, 0).and_then(|z| g.zone(z)).map_or(0.0, |d| f64::from(d.min_level))),

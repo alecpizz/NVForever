@@ -1,5 +1,10 @@
 # Spec note: fast travel from the Pip-Boy's world map
 
+**NVForever's words** [design, #2984]: the question is "Travel to <place>?" unless a
+plugin sets `sTravelQuestion`, and the refusals are NVForever's own sentences where no
+plugin sets their settings (`pipboy::data::travel`); `sNoFastTravelScriptBlock` is
+FalloutNV.esm's. The original's question quoted below only says where it stands.
+
 Tags as in `nif.md`: `[documented]` cites a page or file, `[observed]` says what was
 looked at, `[hypothesis]` is a reading that nothing has confirmed yet. `[design]` marks
 what is NVForever's own. Implementation: `engine/nvf-play/src/pipboy/data/travel.rs`

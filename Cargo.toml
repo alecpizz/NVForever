@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["crates/fnv-util", "crates/fnv-install", "crates/fnv-save", "crates/fnv-inflate", "crates/fnv-bsa", "crates/fnv-esm", "crates/fnv-nif", "crates/fnv-dds", "crates/fnv-spt", "crates/fnv-font", "crates/fnv-vfs", "crates/fnv-pbr", "crates/fnv-world", "crates/fnv-sim", "crates/fnv-actor", "crates/fnv-combat", "crates/fnv-collide", "crates/fnv-phys", "crates/fnv-script", "crates/fnv-game", "crates/fnv-nav", "crates/fnv-ai", "crates/fnv-voice", "crates/fnv-ui", "crates/fnvtool", "crates/nvf-launcher", "crates/nvf-dlss-files", "crates/nvf-settings-layout", "crates/nvf-nat"]
+exclude = ["vendor/rapier3d"]
+members = ["crates/fnv-util", "crates/fnv-install", "crates/fnv-save", "crates/fnv-inflate", "crates/fnv-bsa", "crates/fnv-esm", "crates/fnv-nif", "crates/fnv-dds", "crates/fnv-spt", "crates/fnv-font", "crates/fnv-vfs", "crates/fnv-pbr", "crates/fnv-world", "crates/fnv-sim", "crates/fnv-actor", "crates/fnv-combat", "crates/fnv-collide", "crates/fnv-phys", "crates/fnv-script", "crates/fnv-game", "crates/fnv-nav", "crates/fnv-ai", "crates/fnv-voice", "crates/fnv-ui", "crates/fnvtool", "crates/nvf-launcher", "crates/nvf-dlss-files", "crates/nvf-settings-layout", "crates/nvf-nat", "crates/nvf-signal", "crates/nvf-relay", "crates/nvf-signal-server"]
 
 [workspace.package]
 # The release's version, the same as engine/Cargo.toml's: saves are stamped with it and
@@ -14,6 +15,10 @@ repository = "https://github.com/LootJunkieAzza/NVForever"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "2"
+
+# Same bounded no-time collision refresh correction in both workspaces.
+[patch.crates-io]
+rapier3d = { path = "vendor/rapier3d" }
 
 [profile.release]
 debug = 1

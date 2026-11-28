@@ -75,16 +75,56 @@ pub const GATE_EDITS: [(&str, &str); 4] = [
 /// `@if(ENVIRONMENT_MAP)` afterwards (a new block in a later Bevy would leak the cube to
 /// every lit shader).
 pub fn gate_patched(source: &str) -> Option<String> {
+    let out = apply_edits(source, &GATE_EDITS).or_else(|| physical_gated(source))?;
+    ungated_blocks(&out).is_empty().then_some(out)
+}
+
+/// [`GATE_EDITS`] on the physical light loop (display_shader.rs `PHYSICAL_EDITS`; Physical
+/// lighting with authored reflections, lights.rs `gating`): the specular line takes the
+/// physical weight, and the physical ambient paths follow the gate, so a fragment that did not
+/// opt in takes the no-environment-map path (the flat ambient) [design, graphics-enhanced.md
+/// §3.25].
+pub const PHYSICAL_GATE_EDITS: [(&str, &str); 4] = [
+    GATE_EDITS[0],
+    (
+        "        indirect_light += environment_light.specular * nvf_ibl_spec_ao;\n    }\n}\n",
+        "        indirect_light += environment_light.specular * nvf_ibl_spec_ao;\n    }\n    }\n}\n",
+    ),
+    GATE_EDITS[2],
+    GATE_EDITS[3],
+];
+
+/// The physical ambient paths' conditions and what they become behind the gate.
+const PHYSICAL_AMBIENT_CONDITIONS: [(&str, &str); 2] = [
+    ("@if(!ENVIRONMENT_MAP)", "@if(!ENVIRONMENT_MAP || !NVF_PBR_REFLECT)"),
+    ("@if(ENVIRONMENT_MAP)", "@if(ENVIRONMENT_MAP && NVF_PBR_REFLECT)"),
+];
+
+fn physical_gated(source: &str) -> Option<String> {
+    let mut out = apply_edits(source, &PHYSICAL_GATE_EDITS)?;
+    // From apply_pbr_lighting on (the physical paths are all in it): the environment map
+    // module's import, above it, stays as it is.
+    let start = out.find("fn apply_pbr_lighting(")?;
+    let mut body = out[start..].to_string();
+    for (from, to) in PHYSICAL_AMBIENT_CONDITIONS {
+        body = body.replace(from, to);
+    }
+    out.replace_range(start.., &body);
+    Some(out)
+}
+
+/// `source` with `edits`, each at the first occurrence of its anchor after the last edit.
+fn apply_edits(source: &str, edits: &[(&str, &str)]) -> Option<String> {
     let mut out = String::with_capacity(source.len() + 512);
     let mut rest = source;
-    for (anchor, text) in GATE_EDITS {
+    for (anchor, text) in edits {
         let at = rest.find(anchor)?;
         out.push_str(&rest[..at]);
         out.push_str(text);
         rest = &rest[at + anchor.len()..];
     }
     out.push_str(rest);
-    ungated_blocks(&out).is_empty().then_some(out)
+    Some(out)
 }
 
 /// The byte offsets of every `@if(ENVIRONMENT_MAP)` in `source` that does not guard the
@@ -93,3 +133,4 @@ pub fn ungated_blocks(source: &str) -> Vec<usize> {
     const PLAIN: &str = "@if(ENVIRONMENT_MAP)";
     source.match_indices(PLAIN).map(|(at, _)| at).filter(|&at| !source[at + PLAIN.len()..].starts_with(" import ")).collect()
 }
+

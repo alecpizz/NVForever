@@ -245,7 +245,11 @@ fn tell(
     }
     // The player.
     let (trigger, aiming, walk) = (control.as_deref().is_some_and(|c| c.trigger), control.as_deref().is_some_and(|c| c.aiming), intent.as_deref().is_some_and(|i| i.walk));
-    let weapon_action = combat.as_deref().zip(weapon.as_deref()).and_then(|(c, w)| c.player_anim_action(w, trigger, aiming, dt));
+    let weapon_action = rt
+        .game
+        .has_pending_force_jam(FormId::PLAYER_REF)
+        .then_some(AnimAction::Jam)
+        .or_else(|| combat.as_deref().zip(weapon.as_deref()).and_then(|(c, w)| c.player_anim_action(w, trigger, aiming, dt)));
     let idle_action = player_idles
         .as_deref()
         .and_then(|pi| pi.first.playing().or(pi.third.playing()))

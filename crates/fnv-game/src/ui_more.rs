@@ -111,7 +111,7 @@ pub(crate) fn trait_name(ui: &Ui, tile: TileId, k: usize) -> String {
 /// the change, a start alone stops it and sets the start, more starts it [documented:
 /// SetUIFloatGradual, CacheUIGradual: "call the function again while omitting all but"
 /// the path (the index and trait), "Alternatively, do include the 2nd argument"]. A
-/// missing duration is 0, the end at once [hypothesis]. A start refused by a lock or for a
+/// missing duration is 0, the end at once (see docs/spec-notes/menu-xml.md §9). A start refused by a lock or for a
 /// mode not built gives false.
 pub(crate) fn gradual(g: &mut Game, owner: Owner, tile: TileId, name: &str, rest: &[XVal]) -> bool {
     match rest.len() {
@@ -187,8 +187,8 @@ pub(crate) fn reveal(g: &mut Game, tile: TileId, name: &str, rest: &[XVal]) -> b
 }
 
 /// SUP's element types: 1 rect, 2 image, 3 text, 4 3D, 5 menu [documented:
-/// GetUIElementType, SetUIFloatMultiple]; `nif` is the 3D tile [hypothesis]; `hotrect`,
-/// `radial`, `window` are in no list and read 0 [hypothesis].
+/// GetUIElementType, SetUIFloatMultiple]; `nif` is the 3D tile; `hotrect`, `radial`,
+/// `window` are in no list and read 0 (see docs/spec-notes/menu-xml.md §9).
 pub fn element_type(kind: &str) -> i64 {
     match kind {
         "rect" => 1,
@@ -299,7 +299,7 @@ pub fn bare_item_name(name: &str) -> String {
 /// `-` reverses it, `#` sorts numerically (else alphabetically), `@` by the item name
 /// without quantity and mod marks; the destination trait (default `_y`) of each item is
 /// set in the sorted order, each the last one's plus the last one's increment trait
-/// (default `height`) [documented: SortUIListBox notes]. [hypothesis] The items are the
+/// (default `height`) [documented: SortUIListBox notes] (see docs/spec-notes/menu-xml.md §9). The items are the
 /// list's children that have the destination trait (a list's other children, its
 /// scroll bar, are not placed by it); the first sorted item takes the smallest
 /// destination value the items had, so the list stays where it was; alphabetic keys
@@ -666,7 +666,7 @@ pub fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XVal]) ->
             None => zero,
         },
         // `path trait value [type]`: every tile in the one named, of the type when given
-        // [documented: SetUIFloatMultiple]. [hypothesis] Only tiles that have the trait
+        // [documented: SetUIFloatMultiple] (see docs/spec-notes/menu-xml.md §9). Only tiles that have the trait
         // (as SetUIFloat makes none), not the named tile itself; the count changed is
         // returned [design: no return value is documented].
         // A non-finite value writes 0 [design: `finite`].
@@ -706,7 +706,7 @@ pub fn call(g: &mut Game, name: &str, subject: Option<FormId>, args: &[XVal]) ->
         // `path trait value`: the trait made on the tile, or set when it is there
         // [documented: AddTraitToTile]. The page allows only traits "which already has a
         // ID assign"; the original's trait ids are not known, so any name is taken
-        // [hypothesis]. 1 when the tile is there [design: no return value is documented].
+        // (see docs/spec-notes/menu-xml.md §9). 1 when the tile is there [design: no return value is documented].
         // An empty name makes no trait (0); a non-finite value writes 0 [design].
         "addtraittotile" => match g.ui_tree.find_tile(&path) {
             Some(t) if !text(args, 1).trim().is_empty() => {

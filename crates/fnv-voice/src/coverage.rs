@@ -96,7 +96,7 @@ pub fn coverage(bank: &VoiceBank, lengths: bool) -> Value {
     let mut missing_by_quest: BTreeMap<String, u64> = BTreeMap::new();
     let mut numbers_in_order = 0u64;
     let mut numbers_other = 0u64;
-    let mut sound_paths: Vec<String> = Vec::new();
+    let mut sound_paths: Vec<(String, usize)> = Vec::new();
     let mut ids: Vec<u32> = ix.lines.keys().copied().collect();
     ids.sort_unstable();
     for id in ids {
@@ -149,7 +149,7 @@ pub fn coverage(bank: &VoiceBank, lengths: bool) -> Value {
                     for v in &voices {
                         let exts = &by_name[&key][*v];
                         if let Some(ext) = SOUND_EXTENSIONS.iter().find(|s| exts.iter().any(|e| e == *s)) {
-                            sound_paths.push(format!("{VOICE_ROOT}\\{}\\{v}\\{}.{ext}", key.0, key.1));
+                            sound_paths.push((format!("{VOICE_ROOT}\\{}\\{v}\\{}.{ext}", key.0, key.1), r.chars));
                         }
                     }
                 }
@@ -194,9 +194,18 @@ pub fn coverage(bank: &VoiceBank, lengths: bool) -> Value {
         let (mut shortest, mut longest) = (f64::INFINITY, 0.0f64);
         let mut rates: BTreeMap<String, u64> = BTreeMap::new();
         let mut channels: BTreeMap<String, u64> = BTreeMap::new();
-        for p in &sound_paths {
+        // Files far shorter than their text needs (`fnv_game::voice::is_placeholder`):
+        // the line keeps its fitted length (#4825).
+        let (mut placeholders, mut placeholder_examples) = (0u64, Vec::new());
+        for (p, chars) in &sound_paths {
             match bank.info(p) {
                 Some(i) => {
+                    if fnv_game::voice::is_placeholder(i.seconds, *chars) {
+                        placeholders += 1;
+                        if placeholder_examples.len() < 20 {
+                            placeholder_examples.push(json!({"path": p, "seconds": i.seconds, "chars": chars}));
+                        }
+                    }
                     read += 1;
                     seconds += i.seconds;
                     shortest = shortest.min(i.seconds);
@@ -215,6 +224,8 @@ pub fn coverage(bank: &VoiceBank, lengths: bool) -> Value {
             "seconds_longest": if read > 0 { json!(longest) } else { Value::Null },
             "sample_rates": rates,
             "channels": channels,
+            "placeholder_sounds": placeholders,
+            "placeholder_examples": placeholder_examples,
         })
     });
 

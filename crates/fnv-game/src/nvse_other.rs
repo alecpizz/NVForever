@@ -269,11 +269,74 @@ impl<'a> Game<'a> {
     }
 }
 
+/// The start of the Alt lock keys NVForever's own mini-games in the world hold the
+/// player's controls under (the drinking contest's `nvforever:drink_contest`): no
+/// plugin's name starts so [design]. Such a lock is not a story scene
+/// ([`Game::story_locks`]); it holds the corner and quest notices while it lasts (nvf-play
+/// `corner_messages::in_world_game`).
+pub const ENGINE_GAME_LOCK_PREFIX: &str = "nvforever:";
+
 impl Game<'_> {
-    /// The control groups locked now: DisablePlayerControls' and every plugin's
-    /// DisablePlayerControlsAlt's (the engine reads this).
+    /// The groups held by a story script's DisablePlayerControls ([`Game::story_locked`])
+    /// and any plugin's Alt lock: what a co-op host's scene holds its guests with [design:
+    /// only story scenes]. A lock from the script of something the host
+    /// uses (a companion's repair message boxes, an activator, a terminal) is the host's
+    /// alone.
+    /// NVForever's own in-world mini-games' locks ([`ENGINE_GAME_LOCK_PREFIX`], the
+    /// drinking contest's) are each game's own, not a scene: every player at the table
+    /// holds its own controls, so a guest is not put on the host's spot.
+    pub fn story_locks(&self) -> [bool; 7] {
+        let mut out = [false; 7];
+        for ((o, d), s) in out.iter_mut().zip(self.player.controls_disabled).zip(self.story_locked) {
+            *o = d && s;
+        }
+        for (_, locks) in self.other.alt_locks.iter().filter(|(k, _)| !k.starts_with(ENGINE_GAME_LOCK_PREFIX)) {
+            for (o, l) in out.iter_mut().zip(locks) {
+                *o |= l;
+            }
+        }
+        out
+    }
+
+    /// Whether the script calling with `ctx` tells a story: a quest's script or stage
+    /// result, a dialogue result (each runs for a quest), or the script of a trigger
+    /// volume (a placed reference whose script has a trigger block: the level designers'
+    /// story triggers). An object script on anything else (an activator, a companion, a
+    /// terminal) is the player's own business there.
+    pub fn is_story_caller(&self, ctx: &crate::functions::Ctx) -> bool {
+        if ctx.quest.is_some() {
+            return true;
+        }
+        let Some(r) = ctx.self_ref else { return false };
+        let Some(base) = self.world.placed.get(r).map(|p| p.base) else { return false };
+        let Some(unit) = self.data.script_of_base(base).and_then(|s| self.data.script(s)) else { return false };
+        [crate::game::event::ON_TRIGGER_ENTER, crate::game::event::ON_TRIGGER, crate::game::event::ON_TRIGGER_LEAVE].iter().any(|&b| unit.has_block(b))
+    }
+
+    /// [`Game::controls_locked`] without NVForever's own in-world mini-games' locks
+    /// ([`ENGINE_GAME_LOCK_PREFIX`]): what a co-op scene holds this player with. At a
+    /// drinking contest's table the other drinkers' bodies stay drawn.
+    pub fn scene_locks(&self) -> [bool; 7] {
+        let mut out = self.player.controls_disabled;
+        for (o, l) in out.iter_mut().zip(self.coop_host_locks) {
+            *o |= l;
+        }
+        for (_, locks) in self.other.alt_locks.iter().filter(|(k, _)| !k.starts_with(ENGINE_GAME_LOCK_PREFIX)) {
+            for (o, l) in out.iter_mut().zip(locks) {
+                *o |= l;
+            }
+        }
+        out
+    }
+
+    /// The control groups locked now: DisablePlayerControls', every plugin's
+    /// DisablePlayerControlsAlt's and, on a co-op guest, the host's scene's
+    /// ([`Game::coop_host_locks`]) (the engine reads this).
     pub fn controls_locked(&self) -> [bool; 7] {
         let mut out = self.player.controls_disabled;
+        for (o, l) in out.iter_mut().zip(self.coop_host_locks) {
+            *o |= l;
+        }
         for locks in self.other.alt_locks.values() {
             for (o, l) in out.iter_mut().zip(locks) {
                 *o |= l;
@@ -337,11 +400,16 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
                         && d.band == crate::detection::Band::Detected)))
         }
         // Four-character record signature, separate from GetObjectType's numeric
-        // result (docs/spec-notes/form-type-source-call.md).
+        // result (docs/spec-notes/form-type-source-call.md). Strictly ASCII
+        // case-sensitive and requires an actual reference (placed, spawned, player,
+        // or temporary inventory ref), rejecting direct base forms with 0 [observed:
+        // w4g_01_getisformtype_case].
         "getisformtype" => {
             let wanted = match args.first() { Some(XVal::Str(s)) => s.as_bytes(), _ => &[] };
-            let actual = subject.and_then(|reference| g.data.sig(base(g, reference)));
-            yes(wanted.len() == 4 && actual.is_some_and(|signature| signature.eq_ignore_ascii_case(wanted)))
+            let actual = subject
+                .and_then(|reference| crate::functions::base_of(g, reference).filter(|&b| b != reference))
+                .and_then(|base_form| g.data.sig(base_form));
+            yes(wanted.len() == 4 && actual.is_some_and(|signature| signature.as_slice() == wanted))
         }
         // [documented: AddItemOwnership; AddItemHealthPercentOwner] `item count [health
         // 0–1] owner rank`: the items come owned (the rank is not kept [hypothesis]), at

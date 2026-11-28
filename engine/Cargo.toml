@@ -2,7 +2,7 @@
 # compile Bevy (docs/adr/0001-bevy-viewer.md, docs/design/layer3.md §2.2).
 [workspace]
 resolver = "2"
-members = ["nvf-assets", "nvf-play", "nvf-viewer", "nvforever", "nvf-shader-tests"]
+members = ["nvf-assets", "nvf-play", "nvf-rtgi", "nvf-rtgi-live", "nvf-viewer", "nvforever", "nvf-coop", "nvf-shader-tests", "nvf-android"]
 exclude = ["vendor/wgpu-ffx", "vendor/wgpu-ffx/wgpu-ffx", "vendor/wgpu-ffx/wgpu-ffx-shaders-spv"]
 
 [workspace.package]
@@ -43,6 +43,11 @@ infinitier_bik_decoder = "=0.0.14"
 fnv-voice = { path = "../crates/fnv-voice" }
 nvf-assets = { path = "nvf-assets" }
 nvf-play = { path = "nvf-play" }
+# The bounce-light solver (#3009): on the CPU, and the same on the GPU.
+nvf-rtgi = { path = "nvf-rtgi" }
+nvf-rtgi-live = { path = "nvf-rtgi-live" }
+# Co-op: the link between games.
+nvf-coop = { path = "nvf-coop" }
 clap = { version = "4", features = ["derive", "env"] }
 # BC1 encode/decode on the CPU (generated LOD, docs/design/generated-lod.md); MIT.
 texpresso = { version = "2.0.2", default-features = false }
@@ -72,6 +77,8 @@ opt-level = 3
 
 # Patched dependencies (engine/vendor/README.md says what was changed and why).
 [patch.crates-io]
+winit = { path = "vendor/winit" }
+rapier3d = { path = "../vendor/rapier3d" }
 bevy_winit = { path = "vendor/bevy_winit" }
 gpu-allocator = { path = "vendor/gpu-allocator" }
 bevy_light = { path = "vendor/bevy_light" }
@@ -83,3 +90,12 @@ bevy_render = { path = "vendor/bevy_render" }
 bevy_shader = { path = "vendor/bevy_shader" }
 wgpu-hal = { path = "vendor/wgpu-hal" }
 naga = { path = "vendor/naga" }
+
+# Developer APKs use a small, independent profile; release builds stay unchanged.
+[profile.android-dev]
+inherits = "dev"
+debug = 0
+opt-level = 1
+
+[profile.android-dev.package."*"]
+opt-level = 1

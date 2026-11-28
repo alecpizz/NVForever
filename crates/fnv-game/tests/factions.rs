@@ -331,7 +331,7 @@ fn a_shared_ally_faction_wins_over_an_enemy_one() {
     assert_eq!(call(&mut g, GET_FACTION_RELATION, BANDIT_REF, &[form(WATCHMAN_REF)]), 2.0);
     assert_eq!(call(&mut g, GET_FACTION_RELATION, WATCHMAN_REF, &[form(BANDIT_REF)]), 2.0);
     assert!(!g.would_attack(bandit, watchman) && !g.would_attack(watchman, bandit));
-    // A friend pair wins as well, and before an ally one [hypothesis].
+    // A friend pair wins as well, and before an ally one (see crates/fnv-game/src/functions/actor.rs, `faction_relation`).
     g.forms.faction_reactions.entry(FormId(RAIDERS)).or_default().insert(FormId(IDLERS), 3);
     assert_eq!(call(&mut g, GET_FACTION_RELATION, BANDIT_REF, &[form(WATCHMAN_REF)]), 3.0);
     // The player's crime enemies still come first.
@@ -642,8 +642,8 @@ fn a_faction_friend_that_helps_friends_joins_a_fight_against_the_player() {
 
 #[test]
 fn a_faction_ally_of_the_player_takes_up_the_players_fight() {
-    // #2794 (combat-ai.md §10.3) [hypothesis: Assistance counts the player as an ally to
-    // help]. The rats are made allies of the player's faction (SetAlly); the bandit (a
+    // #2794 (see docs/design/combat-ai.md §10.3). The rats are made allies of the
+    // player's faction (SetAlly); the bandit (a
     // raider) attacks the player. The helper (Helps Allies) detects the player and joins;
     // the coward (Helps Allies, Cowardly) stays out; neither while the rats are neutral to
     // the player. With Helps Nobody the helper stays out; it never fights its own ally (a
@@ -1128,7 +1128,7 @@ fn an_escort_joins_its_charges_fights() {
     assert!(g.awareness.get(escort).is_some_and(|a| a.alarms.iter().any(|x| x.owner == bandit && x.cause == Cause::Ally)));
     assert!(g.provocations.take_notes().iter().any(|n| matches!(n, Note::Assists { helper, victim, attacker } if *helper == escort && *victim == player && *attacker == bandit)));
     assert_eq!(g.escorts_assist(), 0, "once");
-    // A fight its charge starts is not joined until the other fights back [hypothesis]:
+    // A fight its charge starts is not joined until the other fights back (see crates/fnv-game/src/combat.rs):
     // the player fighting the watchman (which does not fight back) brings nothing.
     fighting(&mut g, PLAYER, WATCHMAN_REF);
     assert_eq!(g.escorts_assist(), 0);
@@ -2107,7 +2107,7 @@ fn a_very_aggressive_actor_leaves_a_neutral_outside_its_aggro_radius_alone() {
     // #2547: HELIOS One's guard dogs (Very Aggressive, aggro radius 2,000) went for the
     // NCR troopers 2,800 units off. A Very Aggressive actor attacks a Neutral on sight
     // [documented: GetFactionCombatReaction] only inside its aggro radius when it has one
-    // [hypothesis]; once fighting it follows the target anywhere.
+    // (see crates/fnv-game/src/combat.rs); once fighting it follows the target anywhere.
     let f = fixture();
     let mut g = game(&f);
     let (hound, ganger) = (FormId(HOUND_REF), FormId(GANGER_B_REF));

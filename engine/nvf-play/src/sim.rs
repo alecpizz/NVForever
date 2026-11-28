@@ -46,7 +46,7 @@ impl SimState {
     /// `game.leveled_at` there would miss every fixed level.
     pub fn leveled_at(&self, game: &fnv_game::Game<'_>, r: FormId) -> fnv_sim::zones::LevelAt {
         let player = game.player.level.map_or(self.world.config().player_level, |l| l.clamp(1, i32::from(u16::MAX)) as u16);
-        self.world.level_at(r, player)
+        self.world.level_at_with_zone_lock(r, player, !game.tweaks.no_lock_encounter_zone_levels)
     }
 
     /// The seed and level `r`'s leveled picks are made with, as the game makes them in a
@@ -112,6 +112,10 @@ impl SimState {
     /// (SetActorFullName, [`fnv_game::Game::script_name`]) comes first: it renames every
     /// reference of the base [documented: GECK wiki SetActorFullName].
     pub fn ref_name<'s>(&'s self, game: Option<&'s fnv_game::Game<'_>>, form_id: u32) -> Option<&'s str> {
+        // Another player of a co-op game goes by its player's name (none outside co-op).
+        if let Some(n) = game.and_then(|g| g.coop_actors.get(&FormId(form_id))) {
+            return Some(n);
+        }
         let base = self.base_of(form_id)?;
         let shown = self.shown_base(game, base, form_id);
         let renamed = game.and_then(|g| g.script_name(base).or_else(|| g.script_name(shown)));

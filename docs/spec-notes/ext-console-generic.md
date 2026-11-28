@@ -77,8 +77,17 @@ generic.5.ref.0 and generic.5.base.0 both give Doc Mitchell's first package].
   `-2 -> n0 - 1`, `999 -> -1`) and `w4d_04_generic_form_neg_idx`
   (`tools/capture/nvse/catalogs/wave4d_extenders.json`, #3802 / PR #3803):
   `PROBE|w4d_04_generic_form_neg_idx|emp(n0=0,d=0/0/0/0:0,r=0:0/0:1/0/0:1,a=-1/0:1/-1/-1/-1:1)|ne(n0=38,a=-1/37:39/-1/-1/-1:39,r=0/1/0/0,d=1:38/1:37/1:36/0:36)|flstC1(g=0,a=-1,r=0,d=0,n=36)`;
-  zero DLL, PDB, or third-party source consulted]. Exact boundary `index == len` (inserts
-  at end) remains [hypothesis].
+  zero DLL, PDB, or third-party source consulted]. At the exact boundary `index == len`:
+  on an empty list (`len == 0`) index `0` inserts and returns `0` (`len: 0 -> 1`), whereas
+  on a non-empty list (`len > 0`) `index == len` returns `-1` without appending (valid
+  non-`-2` indices are `0..len` when `len > 0`, and `0` when `len == 0`) [observed:
+  2026-11-24, `GSDocMitchellHouse` (`0x00103DF9`), Fallout: New Vegas 1.4.0.525 + xNVSE
+  6.4.9 + JIP LN 57.30 with the 10 official base masters, isolated clean-room staging copy
+  (read-only `PrintToConsole` probe; zero writes to game install or Saves), committed
+  probe `w6t2p3_25_generic_form_real_flst`
+  (`tools/capture/nvse/catalogs/wave6_t2_generic_form.json`):
+  `PROBE|w6t2p3_25_generic_form_real_flst|add(0,-1,-1,n=1,past=-1)|delM1(h=1,t=0)|delM2(b=0,c=0)|nEnd=0`;
+  zero DLL, PDB, or third-party source consulted].
 - Target record types are validated against the list code (`0`/`1` `RACE`, `5`–`7`
   `NPC_`/`CREA`, `10` `NPC_`, `13` `FLST`): on a mismatched target record type or unknown
   list code, `GenericAddForm` returns `-1` even at valid index `0`/`-2` without mutating,

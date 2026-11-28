@@ -34,6 +34,13 @@ top down to the first leaf that explains the time. `--log-frame-times <s>` (no v
 and `NVF_PLAY_TEST_SAMPLE` (stress_sample.rs, actors and audio counts) were used beside
 it.
 
+`--log-frame-times <s>` also logs, each period, `gpu resources: <n> buffers, <n> textures,
+<n> texture views, <n> bind groups, …` (graphics.rs; wgpu's count of what the GPU API
+holds). A count that only grows over a session is a leak, and it costs every frame: each
+command buffer takes longer to finish and submit the more there are. It found the bind
+groups the lamps' shadow views left behind at every cell change (2026-11-25,
+graphics-enhanced.md §3.17 "Third round").
+
 ### Profiling options together
 
 [documented in source] `graphics::ensure_render_diagnostics` lets
@@ -1103,7 +1110,8 @@ streaming-hitches.md §3.1 against night stutter). Pipelines with identical desc
 are 2-3 a phase; merging them would leave 98 of 102 batch sets at Goodsprings and 125 of
 132 at Novac. What remains is Bevy's design, one dispatch (and a barrier) per batch set;
 merging the dispatches of a phase means one set of buffers per phase instead of per batch
-set, a rework of its GPU preprocessing, left for upstream.
+set, a rework of its GPU preprocessing, left for upstream. [2026-11-24] Done after all:
+§13, "Merged scene unpacking".
 
 ### Leaf cards in the depth prepass (#2066)
 
@@ -1309,3 +1317,164 @@ the table keeps its shares exactly, with or without Longer shadows (at 800 units
 with 2048² maps gets 200, 230, 500, 800: its second share, 200, is lifted a step above
 the first). The log says the layout whenever the bounds or the maps' side
 change: `sun shadows: cascades far bounds [700, 2000, 5000, 8000] texels [..] units`.
+
+## 13. Graphics pass at 4K with DLSS: every setting's cost, Bevy backports (2026-11-24)
+
+Asked for: go over each graphics setting and feature, find what costs frame time or GPU time
+for what it shows, and what Bevy users do that NVForever does not yet.
+
+[observed 2026-11-23/24 throughout unless said otherwise: Ryzen 9 9950X3D (the game placed
+on the V-cache CCD, cpu_placement.rs), RTX 5090 (Vulkan), 3840 × 2160 borderless, DLSS
+Quality (model L), every graphics switch and list at its top step (sun shadows Quality,
+Smooth filter, 4096 maps, lamp shadows Quality, ambient occlusion Quality, full detail
+9 × 9, distant objects 12 cells, smooth terrain 4 × 4, every slider 1.00), frame generation
+and latency reduction off, `--log-frame-times 5` (no vsync); standing views, the windows of
+the first 15 s left out, the median of 5-s windows, runs interleaved, two rounds unless
+said. The bench made an INI from the owner's with those values and kept the games muted]
+
+### Measuring
+
+- **The frame time hides most of it here.** This display holds presents to 160 Hz even with
+  no vsync asked for (the driver's vertical sync with variable refresh), so every view but
+  Novac measured 6.25 ms a frame whatever changed. The GPU's own time (the `gpu time` line:
+  the sum of the top-level passes' timestamps) and processor time show a change instead:
+  `--log-frame-times` now also logs `cpu time: main thread <m> ms a frame, process <p> ms a
+  frame` (graphics.rs; `profile::thread_cpu_secs`).
+- **Novac at noon is the one view that is not held**: 7.1-7.7 ms a frame with the GPU at
+  5.0-5.5 ms and the main thread at 4.4-4.9 ms of processor time a frame. A `profile` build
+  (spans summed over threads, slower than release) put the render thread's
+  `gpu_preprocess::prepare_preprocess_bind_groups` at 1.09 ms a frame (0.94 at Goodsprings),
+  `material::check_entities_needing_specialization` at 0.66-0.71, the transform propagation
+  workers at 1.2-1.4, the sun's caster visibility (`check_dir_light_mesh_visibility`
+  0.35-0.41 plus `sky::sun_casters_over_slice` 0.27), `water::distant_water` 0.26-0.29 (it
+  should return early standing still; not explained) and, in Novac, the NPCs' character
+  controller planning (`phys::npc_plan` 1.6).
+- **Per thread** (each thread's processor time over 8-10 s, standing at Goodsprings at 160 a
+  second): the 8 compute-pool threads 330-370 ms of each second, the main thread 500, the
+  render thread 330. With the compute pool at 4 threads (a measuring build's test aid,
+  not kept: #1884 adds `NVF_PLAY_TEST_COMPUTE_THREADS`) the
+  process used 10 % less processor time but frames were 3-6 % slower (Goodsprings 6.25 →
+  6.42 ms, Novac 7.24 → 7.69): the pool's time is parallel work, not idle wake-ups.
+
+### What was changed
+
+1. **Auto exposure's histogram** (vendored bevy_post_process, upstream Bevy's fix): every
+   invocation of a 16 × 16 workgroup added a bin into the 64-bin histogram, the 192 past the
+   last bin clamped onto bin 63, so the brightest bin was counted 194 times over and each
+   workgroup made ~200 contended atomics on one address. The pass went from 0.14 ms to
+   0.04 ms or below the log's top entries in every view.
+2. **Shadow fetches skipped where a light adds nothing** (vendored bevy_pbr
+   `pbr_functions.wesl`): beyond a point or spot light's range, behind its shading normal,
+   or facing away from the sun, no shadow map is read and no contact shadow marched (the
+   contribution there is 0 either way). Opaque pass 0.03-0.10 ms less (Novac 1.05 → 0.98,
+   Freeside 1.06 → 0.96, the saloon 0.43 → 0.37).
+3. **Small casters left out of far cascades** (vendored bevy_light,
+   `NVF_SMALL_CASTER_TEXELS`, default 1, 0 off): a caster whose bounding radius is under one
+   texel of a cascade is not drawn into it. Novac: shadow pass 0.35 → 0.32 ms and frame 7.76
+   → 7.59 ms (fewer casters to gather and queue).
+4. **GPU preprocessing bind groups kept** (bevy#26418 backported): Novac 7.67 → 7.24 ms a
+   frame (−5.6 %), the one view the render thread holds.
+5. **Two-phase GPU occlusion culling, as an experiment** (`NVF_OCCLUSION_CULLING=1`,
+   gpu_occlusion.rs; bevy#26239 backported, bevy_core_pipeline vendored for it). Without
+   bevy#26239 it culled visible rocks, posts and plants under DLSS: Bevy built the depth
+   pyramid from the whole display-size depth texture while the main pass draws only the
+   render rectangle, and NVForever's upscaler glue copies the expanded depth back over that
+   texture (upscaler/prep.rs). With it, screenshots against a run without differ only where
+   actors moved. Novac: GPU 5.30 → 4.58 ms (prepass 0.59 → 0.30, opaque 1.07 → 0.75), but the
+   late culling phase costs the CPU: frames 7.24 → 7.49 ms. Not on by default: it pays on a
+   machine the GPU holds, not on this one. First-person shapes keep `NoFrustumCulling`,
+   which the vendored mesh_preprocess.wesl now also reads as "never occlusion culled".
+   [2026-11-24, #3783] The player's choice since: the Graphics row Occlusion culling (off by
+   default, read at the start; docs/settings-reference.md), the test aid still overriding
+   it. On the build with the merged scene unpacking: GPU 4.96 → 4.31 ms, frame 6.96 → 7.18.
+6. **GPU light clustering's buffer churn** (bevy#25869, bevy#26588 backported): the reason
+   for CPU clustering (#897) is gone, but `NVF_GPU_CLUSTERING=1` measured no better (Novac
+   7.59 → 7.88 ms, Goodsprings at night the same), so the CPU stays the default.
+
+### What each setting costs (Novac and Goodsprings at 12:00, one run each)
+
+From the maxed settings, one setting changed at a time. GPU sums move ±0.2 ms between runs
+with the NPCs, so the passes that moved are what to read:
+
+| Setting changed | Frame (ms) | What moved (ms a frame) |
+|---|---|---|
+| (all at the top) | 7.07 | DLSS 1.95, opaque 1.03, prepass 0.57, shadows 0.35, culling 0.39 |
+| Mesh terrain blend off | 7.12 | opaque → 0.65, shadows → 0.28, culling → 0.28 (Goodsprings: opaque 1.18 → 0.94, culling 0.49 → 0.44) |
+| Full detail Off (from 9 × 9) | 6.56 | opaque → 0.72, prepass → 0.28 (Goodsprings: opaque 1.18 → 0.86, prepass 0.42 → 0.22) |
+| Distant LOD off | 6.33 | main thread 4.35 → 4.00, process 26.7 → 22.7 (Goodsprings: main thread 3.51 → 2.21, GPU −0.17) |
+| Sun shadows Performance | 6.70 | shadows → 0.08 |
+| Shadow resolution 2048 | 7.02 | shadows → 0.16 |
+| Shadow filtering Fast | 7.12 | opaque → 0.84 |
+| Ambient occlusion Off | 7.05 | opaque → 0.81, the occlusion pass 0.08 → 0 |
+| Lamp shadows Off | 6.83 | process 26.7 → 24.0 |
+| Smooth terrain Off | 6.81 | main thread 4.35 → 4.25 |
+| DLSS Balanced | 7.14 | DLSS → 1.67 |
+| DLSS model K or Default | 7.09, 7.03 | DLSS the same (1.96) |
+| FSR 3.1 Quality instead of DLSS | 7.07 | the upscaler → 0.70 (Goodsprings: 2.14 → 0.81) |
+| Light shafts, bloom, glow, sharpen, haze, clouds, terrain shadows, water, grass, aerial perspective, terrain textures, anisotropic, eye adaptation, each off | 7.02-7.28 | within the noise |
+
+The dearest switches for what they show: the mesh terrain blend (about 0.5 ms of GPU time:
+opaque 0.38, culling 0.11, shadows 0.07), the 9 × 9 full-detail ring (0.6 ms) and, on the
+processor, the distant LOD (0.7 ms). [corrected 2026-11-24] The blend's cost is not its
+material clones: there is one clone per source material and publication
+(mesh_terrain_blend.rs), and a bindless slab holds each resource once, so the clones of a
+publication share the 421 resources they bind (mostly the fallback image at the unused
+palette indices) and their slabs. The opaque share is the blend's own fragment work, which
+already stops after three height reads where a fragment has no ground contact
+(nif_surface_bindings.wesl `mesh_terrain_lookup`); the culling share was its extra batch
+sets' dispatches, which the merged scene unpacking below removes.
+
+### Result
+
+Main and the branch in one session, interleaved, two rounds (GPU time without the DLSS pass,
+whose own time drifted ±0.2 ms from run to run in both): Goodsprings 2.89 → 2.82 ms (−2.4 %),
+Novac 3.48 → 3.33 (−4.2 %), Freeside 2.31 → 2.10 (−8.9 %), the Prospector Saloon 1.20 → 1.06
+(−12.1 %), Goodsprings at 23:00 2.77 → 2.61 (−5.8 %). Novac's frame, the one not held at
+160 Hz: 7.62 → 7.17 ms (−5.9 %). Screenshots at a fixed frame time differ from main's by no
+more than two runs of main differ (0.05 % of the pixels by more than 24 of 255 at
+Goodsprings, 0.000 % at night); the Vulkan validation layer reports nothing new; 21 smoke
+scenarios of the touched systems pass.
+
+### Merged scene unpacking (2026-11-24)
+
+`uniform_allocation` and `bin_unpacking` were one dispatch per batch set (98-132 a frame in
+the main view alone, §10 "Culling dispatches per batch set"), each followed by a barrier,
+so a few microseconds of work each took 0.07-0.25 ms of GPU time per pass. Now every batch
+set of a view, phase and mesh indexed-ness is packed into one set of buffers (bevy#26580's
+idea, which does not apply over #2064 as it is) and each step is one dispatch for all of
+them: a job per batch set in a storage array, a workgroup-to-job table, the job's offsets
+added to the batch-local indices (vendored bevy_render and bevy_pbr, engine/vendor/README.md
+"Merged scene unpacking"). The batch sets' own buffers are no longer uploaded.
+
+[observed 2026-11-24, the branch before and after in one session, interleaved, two rounds,
+the settings above] Both passes fell from 0.07-0.25 ms each to under the log's top entries
+(below 0.06 ms in Novac,
+0.04 elsewhere) in every view. GPU time (the sum of the top passes, DLSS included):
+
+| View | Before | After |
+|---|---|---|
+| Novac 12:00 | 5.31 | 5.00 |
+| Goodsprings 12:00 | 4.97 | 4.55 |
+| Freeside 14:00 | 4.38 | 4.05 |
+| Prospector Saloon 20:00 | 3.00 | 2.88 |
+| Goodsprings 23:00 | 4.84 | 4.43 |
+
+Novac's frame, the one not held at 160 Hz: 7.25 → 6.94 ms (−4.3 %). Screenshots differ from
+the build before by no more than two runs of that build differ from each other (Goodsprings
+0.04 % of the pixels by more than 24 of 255, Goodsprings at night and the saloon 0.000 %),
+and the multi-chunk scan (a batch set of more than 256 draws) ran at Goodsprings.
+
+### Left, largest first
+
+- **The mesh terrain blend's fragment cost** (opaque 0.38 ms in Novac): not its material
+  clones (see the correction above). What is left is the blend's own lookup and detail
+  sampling; measuring it needs a GPU trace of the blended draws.
+- **Cell fades leave every streamed mesh dithering**: `--cell-fade 0` took Novac's prepass and
+  opaque pass down about 0.07 ms each (fade.rs keeps the fully drawn range for life, so the
+  prepass keeps a discarding fragment stage); taking the ranges off after a fade needs the
+  non-dither pipelines ready, or meshes vanish while they compile.
+- **`water::distant_water`** spends 0.26-0.29 ms a frame standing still in the `profile`
+  build although it should return early.
+- **The distant trees' upkeep** (`treelod::update_distant_trees`, 0.15 ms a frame standing
+  still) walks every drawn tree cell's fade step and every wanted cell each frame; only cells
+  near the loaded area and the ring can change step.

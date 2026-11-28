@@ -522,11 +522,11 @@ fn menu_search_bar_tiles_publish_builtin_and_script_offset_copy() {
     let paths = src.files.keys().cloned().collect::<Vec<_>>();
     ui_loading::load(&mut g, Box::new(src), paths);
 
-    // Keep Stewie plugin gate pinned at 945 while building #3183 search-bar tile publication.
+    // Stewie plugin gate promoted to 960 (#3183) with search-bar tile publication live.
     let ver = g
         .run_query("Begin Function { }\nSetFunctionValue (GetPluginVersion \"lStewieAl's Tweaks\")\nEnd\n", RunCtx::default())
         .unwrap();
-    assert_eq!(ver, XVal::Num(945.0));
+    assert_eq!(ver, XVal::Num(960.0));
 
     // Persistent Pip-Boy search-bar tiles are published at load and script-addressable.
     for path in ["InventoryMenu\\IM_SearchBar", "StatsMenu\\SM_SearchBar", "MapMenu\\MM_SearchBar"] {

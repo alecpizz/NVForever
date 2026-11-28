@@ -8,7 +8,7 @@
 //!   picked one's slice lit and its "on" icon, the others' "off" icons; a button's
 //!   alternative icons while the companion is in its other state ([`fnv_game::companion_wheel::State::alt`]);
 //!   "Companion Commands" at the top, the picked button's words under it in a filled
-//!   bar ("Exit" there over the hub), its context lines at the bottom (Use Stimpak: the
+//!   bar ("Exit" there over the hub), its context lines at the bottom (Heal: the
 //!   companion's HP and the stimpaks carried; Open Inventory: its carry weight), Exit in the hub [observed: the owner's
 //!   screenshots of 2026-10-19 for the bar and the lines], and the companion's reply under the wheel
 //!   (`crate::script_hud`'s subtitle of the companion's line, `ScriptHud::wheel_line`).
@@ -32,6 +32,8 @@
 //! lines: `companion wheel: open on <companion> (<buttons>)`, `companion wheel: <command>
 //! (<label>): <outcome>`, `companion wheel: closed (<how>)`; at exit, when it was used,
 //! `companion wheel summary: …`.
+
+pub mod touch;
 
 use crate::interface::{amber, at, face, plain_font, set_line, Face, Pictures};
 use crate::pause::AidTime;
@@ -187,6 +189,8 @@ pub struct Session {
     pub companion: FormId,
     pub name: String,
     pub buttons: Vec<WheelButton>,
+    /// Reasons read from the same rules as button eligibility.
+    pub unavailable: Vec<Option<String>>,
     /// The button picked (under the pointer, or stepped to).
     pub selected: Option<usize>,
     /// The pointer is over Exit.
@@ -250,11 +254,17 @@ impl Plugin for CompanionWheelPlugin {
         app.init_resource::<WheelScreen>()
             .init_resource::<WheelStats>()
             .init_resource::<WheelView>()
+            .init_resource::<touch::Settings>()
+            .init_resource::<touch::TouchState>()
+            .add_systems(Startup, touch::load)
             .insert_resource(WheelAid { steps, last: None })
             .add_message::<WheelInput>()
-            .add_systems(Update, (run_aid, open, (keys, apply).chain().run_if(in_state(PlayState::Menu)), follow_game, draw).chain().in_set(PlaySet::Ui))
+            .add_systems(Update, (run_aid, open, follow_game, touch::input, (keys, apply).chain().run_if(in_state(PlayState::Menu)), draw).chain().in_set(PlaySet::Ui))
+            .add_systems(Update, touch::draw.after(draw).in_set(PlaySet::Ui))
             .add_systems(OnExit(PlayState::Menu), close)
             .add_systems(Last, report);
+        #[cfg(any(target_os = "android", test))]
+        touch::register(app);
     }
 }
 
@@ -312,12 +322,16 @@ fn open(
     if screen.0.as_ref().is_some_and(|s| s.companion == c) {
         return;
     }
-    let buttons = with_world(rt, &mut sim, |rt| rt.game.wheel_buttons(c));
+    let (buttons, unavailable) = with_world(rt, &mut sim, |rt| {
+        let buttons = rt.game.wheel_buttons(c);
+        let unavailable = buttons.iter().map(|b| rt.game.wheel_unavailable_reason_for(c, b)).collect();
+        (buttons, unavailable)
+    });
     let base = sim.base_of(c.0).unwrap_or(c);
     let name = sim.name(base).map(str::to_string).unwrap_or_else(|| rt.game.data.name(c));
     info!("companion wheel: open on {} ({}) (MenuMode {}): {}", rt.game.data.name(c), name, fnv_game::companion_wheel::MENU_CODE, describe(&buttons));
     stats.opened += 1;
-    screen.0 = Some(Session { companion: c, name, buttons, selected: None, exit_hover: false, fresh: true, refreshed: time.elapsed_secs() });
+    screen.0 = Some(Session { companion: c, name, buttons, unavailable, selected: None, exit_hover: false, fresh: true, refreshed: time.elapsed_secs() });
     if *state.get() != PlayState::Menu {
         next.set(PlayState::Menu);
     }
@@ -329,11 +343,13 @@ fn keys(
     mouse: crate::pad::ActionButtons<MouseButton>,
     windows: Query<&Window, With<PrimaryWindow>>,
     exit: Query<&PointerState, (Changed<PointerState>, With<ExitButton>)>,
-    mut screen: ResMut<WheelScreen>,
+    (mut screen, touch): (ResMut<WheelScreen>, Option<Res<touch::Settings>>),
     mut out: MessageWriter<WheelInput>,
+    mut last_pointer: Local<Option<Vec2>>,
 ) {
     let keys = keys.snapshot();
     let mouse = mouse.snapshot();
+    let pointer_enabled = touch.is_none_or(|settings| !settings.enabled);
     use KeyCode::*;
     let Some(s) = screen.0.as_mut() else { return };
     if s.fresh {
@@ -341,12 +357,14 @@ fn keys(
         return;
     }
     // The pointer in interface units from the wheel's centre.
-    if let Some((p, size)) = windows.single().ok().and_then(|w| Some((w.cursor_position()?, Vec2::new(w.width(), w.height())))) {
+    if let Some((p, size)) = windows.single().ok().filter(|_| pointer_enabled).and_then(|w| Some((w.cursor_position()?, Vec2::new(w.width(), w.height())))) {
         // Where the pointer is on the wheel as drawn at the UI scale (#1631).
         let p = crate::interface::from_menu_frame(p, size, crate::interface::MIDDLE);
         let k = 960.0 / size.y.max(1.0);
         let centre = Vec2::new(size.x * k / 2.0, 480.0 - RAISE);
-        match hit(p * k - centre) {
+        let moved = last_pointer.is_none_or(|before| before != p);
+        *last_pointer = Some(p);
+        if moved { match hit(p * k - centre) {
             Ok(Some(i)) => {
                 if s.selected != Some(i) {
                     s.selected = Some(i);
@@ -355,9 +373,9 @@ fn keys(
             }
             Ok(None) => s.exit_hover = false,
             Err(()) => s.exit_hover = true,
-        }
+        } }
     }
-    if exit.iter().any(|i| *i == PointerState::Pressed) || keys.any_just_pressed([KeyE, Escape]) {
+    if (pointer_enabled && exit.iter().any(|i| *i == PointerState::Pressed)) || keys.any_just_pressed([KeyE, Escape]) {
         out.write(WheelInput::Close);
         return;
     }
@@ -366,7 +384,7 @@ fn keys(
     } else if keys.any_just_pressed([ArrowLeft, KeyA]) {
         s.selected = step(&s.buttons, s.selected, -1);
     }
-    let clicked = mouse.just_pressed(MouseButton::Left) && !s.exit_hover;
+    let clicked = pointer_enabled && mouse.just_pressed(MouseButton::Left) && !s.exit_hover;
     if clicked || keys.any_just_pressed([Enter, NumpadEnter, Space]) {
         if let Some(b) = s.selected.and_then(|i| s.buttons.get(i)) {
             out.write(WheelInput::Use(b.command));
@@ -387,7 +405,7 @@ fn apply(
 ) {
     let inputs: Vec<WheelInput> = input.read().copied().collect();
     let Some(rt) = script.as_mut().and_then(|s| s.rt.as_mut()) else { return };
-    for i in inputs {
+    if let Some(i) = inputs.into_iter().next() {
         let Some(s) = screen.0.as_mut() else { return };
         match i {
             WheelInput::Close => {
@@ -395,7 +413,6 @@ fn apply(
                 info!("companion wheel: closed (the player)");
                 screen.0 = None;
                 next.set(PlayState::Playing);
-                return;
             }
             WheelInput::Use(command) => {
                 let label = s.buttons.iter().find(|b| b.command == command).map_or("?", |b| b.label);
@@ -428,12 +445,20 @@ fn apply(
                     next.set(PlayState::Playing);
                     return;
                 }
-                s.buttons = with_world(rt, &mut sim, |rt| rt.game.wheel_buttons(c));
+                let (buttons, unavailable) = with_world(rt, &mut sim, |rt| {
+                    let buttons = rt.game.wheel_buttons(c);
+                    let unavailable = buttons.iter().map(|b| rt.game.wheel_unavailable_reason_for(c, b)).collect();
+                    (buttons, unavailable)
+                });
+                s.buttons = buttons;
+                s.unavailable = unavailable;
                 s.refreshed = time.elapsed_secs();
                 // The command took effect as the reply started (`Game::wheel_command`).
                 if let Some(b) = s.buttons.iter().find(|b| b.command == command) {
                     info!("companion wheel: {} now shows {}", command.name(), b.label);
                 }
+                // All producers share one actual command per frame; the full input
+                // batch was already drained, so duplicate taps cannot run next frame.
             }
         }
     }
@@ -458,10 +483,15 @@ fn follow_game(mut screen: ResMut<WheelScreen>, mut script: Option<ResMut<Script
     if now - s.refreshed >= REFRESH {
         s.refreshed = now;
         let c = s.companion;
-        let b = with_world(rt, &mut sim, |rt| rt.game.wheel_buttons(c));
+        let (b, unavailable) = with_world(rt, &mut sim, |rt| {
+            let b = rt.game.wheel_buttons(c);
+            let u = b.iter().map(|btn| rt.game.wheel_unavailable_reason_for(c, btn)).collect();
+            (b, u)
+        });
         if b != s.buttons {
             s.buttons = b;
         }
+        s.unavailable = unavailable;
     }
 }
 
@@ -521,7 +551,7 @@ fn picture(p: &mut ChildSpawnerCommands, kit: &mut Kit, data: Option<&GameData>,
 }
 
 /// What was drawn last.
-type Shown = (Vec<WheelButton>, Option<usize>, bool, Option<String>, i32);
+type Shown = (Vec<WheelButton>, Vec<Option<String>>, Option<usize>, bool, Option<String>, i32);
 
 #[derive(Default, PartialEq)]
 struct Drawn(Option<Shown>);
@@ -540,7 +570,7 @@ fn draw(
     mut shown: Local<Drawn>,
 ) {
     let width = windows.single().map_or(1280.0, |w| 960.0 * w.width() / w.height().max(1.0));
-    let now = Drawn(screen.0.as_ref().map(|s| (s.buttons.clone(), s.selected, s.exit_hover, hud.wheel_line.clone(), width.round() as i32)));
+    let now = Drawn(screen.0.as_ref().map(|s| (s.buttons.clone(), s.unavailable.clone(), s.selected, s.exit_hover, hud.wheel_line.clone(), width.round() as i32)));
     if now == *shown {
         return;
     }
@@ -603,6 +633,9 @@ fn draw(
                     }
                 }
             }
+            if let Some(reason) = s.selected.and_then(|i| s.unavailable.get(i)).and_then(Option::as_deref) {
+                centred(m, &kit.font3, reason, cx, CONTEXT_Y - top + 72.0, Some(LABEL_WRAP), bright);
+            }
             // Exit in the hub (text_box.xml).
             let w = kit.font1.font.lines(EXIT, None).first().map_or(0.0, |l| l.width) + HOR_BUF;
             let h = kit.font1.font.size + VER_BUF;
@@ -625,6 +658,7 @@ pub fn report_progress_fixture(step: usize) -> WheelScreen {
         companion: FormId(42),
         name: "Synthetic companion".into(),
         buttons: vec![WheelButton { command: Command::Talk, alt: false, enabled: true, label: "Synthetic command", context: None }],
+        unavailable: vec![None],
         selected: (step >= 1).then_some(0),
         exit_hover: step >= 2,
         fresh: false,

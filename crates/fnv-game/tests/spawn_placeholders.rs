@@ -297,6 +297,57 @@ fn a_reset_that_changes_the_pick_starts_a_fresh_script_instance() {
     assert_eq!(local(&g, MIXED_REF, 2), 7.0, "script B's OnLoad ran on the fresh instance");
 }
 
+/// The game saved as a build from before #3228 wrote it: no mark that the template-scripted
+/// actors' OnLoad ran at their cell load.
+fn older_save(g: &Game) -> fnv_game::game::GameSnapshot {
+    let mut s = g.snapshot();
+    s.template_onloads_run = false;
+    s.restored_onload.clear();
+    s
+}
+
+/// A save from this build: the template-scripted actors ran OnLoad at their cell load, so
+/// a load runs none of them again (#4820: a script drawing GetRandomPercent in its OnLoad
+/// drew again and moved the game's generator).
+#[test]
+fn a_restored_new_save_runs_no_template_on_load_again() {
+    let f = fixture();
+    let mut g = game(&f);
+    g.new_game();
+    g.player_entered(Some(FormId(CELL_A)));
+    // Alive (as an older build left it) but saved by this one: not queued.
+    g.extra.remove(&FormId(SPAWN_REF));
+    let s = g.snapshot();
+    assert!(s.template_onloads_run);
+    let world = World::restore(&f.forms, &f.refs, &s.sim).unwrap();
+    let mut back = Game::restore(&f.data, world, GameConfig::default(), &s).unwrap();
+    assert!(back.restored_onload.is_empty());
+    back.frames(1);
+    assert!(!back.is_dead(FormId(SPAWN_REF)), "no second OnLoad");
+}
+
+/// A save made before the queue's first frame keeps the queue: the load runs it.
+#[test]
+fn a_queue_saved_before_its_frame_runs_after_the_next_load() {
+    let f = fixture();
+    let mut g = game(&f);
+    g.new_game();
+    g.player_entered(Some(FormId(CELL_A)));
+    g.extra.remove(&FormId(SPAWN_REF));
+    let s = older_save(&g);
+    let world = World::restore(&f.forms, &f.refs, &s.sim).unwrap();
+    let back = Game::restore(&f.data, world, GameConfig::default(), &s).unwrap();
+    assert!(back.restored_onload.contains(&FormId(SPAWN_REF)));
+    // Saved again at once, by this build.
+    let s = back.snapshot();
+    assert!(s.template_onloads_run);
+    let world = World::restore(&f.forms, &f.refs, &s.sim).unwrap();
+    let mut again = Game::restore(&f.data, world, GameConfig::default(), &s).unwrap();
+    assert!(again.restored_onload.contains(&FormId(SPAWN_REF)));
+    again.frames(1);
+    assert!(again.is_dead(FormId(SPAWN_REF)), "its OnLoad killed it");
+}
+
 /// A save from before the fix holds a placeholder alive in a loaded cell: the cells stay
 /// loaded through the restore, and its OnLoad runs at the first frame after it.
 #[test]
@@ -308,7 +359,7 @@ fn a_restored_live_placeholder_is_killed_at_the_first_frame() {
     // As an older build left it: alive, never destroyed.
     g.extra.remove(&FormId(SPAWN_REF));
     assert!(!g.is_dead(FormId(SPAWN_REF)));
-    let s = g.snapshot();
+    let s = older_save(&g);
     let world = World::restore(&f.forms, &f.refs, &s.sim).unwrap();
     let mut back = Game::restore(&f.data, world, GameConfig::default(), &s).unwrap();
     assert!(!back.is_dead(FormId(SPAWN_REF)), "nothing runs inside the restore");
@@ -344,7 +395,7 @@ fn a_restored_live_placeholder_away_from_its_cell_is_killed() {
     g.set_loaded([FormId(CELL_A), FormId(CELL_B)].into_iter().collect());
     g.extra.remove(&FormId(SPAWN_REF));
     g.set_actor_place(FormId(SPAWN_REF), Some(FormId(CELL_B)), [500.0, 0.0, 0.0], 0.0).unwrap();
-    let s = g.snapshot();
+    let s = older_save(&g);
     let world = World::restore(&f.forms, &f.refs, &s.sim).unwrap();
     let mut back = Game::restore(&f.data, world, GameConfig::default(), &s).unwrap();
     assert_eq!(back.cell_of(FormId(SPAWN_REF)), Some(FormId(CELL_B)));
@@ -361,7 +412,7 @@ fn a_restored_placeholder_killed_before_its_turn_runs_no_on_load() {
     g.new_game();
     g.player_entered(Some(FormId(CELL_A)));
     g.extra.remove(&FormId(SPAWN_REF));
-    let s = g.snapshot();
+    let s = older_save(&g);
     let world = World::restore(&f.forms, &f.refs, &s.sim).unwrap();
     let mut back = Game::restore(&f.data, world, GameConfig::default(), &s).unwrap();
     assert!(back.restored_onload.contains(&FormId(SPAWN_REF)));

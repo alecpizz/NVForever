@@ -47,14 +47,23 @@ compares it with the one actual catalogue row consumed by FunctionTable and the
 existing source-to-Game/VM request control. These two controls form the generator
 to consumer chain; a passing Python regeneration alone is not VM execution.
 
-[hypothesis: error policy] Wrong argument shape, a missing reference/source,
-invalid text or viewport, quota limits and revision exhaustion deliberately return
-`Err`. They cause the invoking script to error at that line, including repeated
-per-frame attempts on a missing tile; they do not silently return neutral zero.
-Acceptance and exact 1x1 withdrawal retain neutral zero. This correction preserves
-that existing runtime policy and all thirteen Rust control bodies. The unreachable
-generic returns-zero fallback is removed. Historical six-number probes and lab
-expectations remain unchanged; no native error/return parity is inferred.
+[observed: Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 + JIP LN 57.30, 2026-11-24,
+`GSDocMitchellHouse` (`0x00103DF9`), 10 official base masters, isolated staging copy,
+read-only, committed probe `w4g_10_project_ui_tile_errors` in
+`tools/capture/nvse/catalogs/wave4g_f2_extenders.json` (companion catalog PR #3803);
+no DLL or source consulted] Across all seven tested calls — valid `64x64`, `1x1`
+withdrawal, missing tile `"NoSuchMenu/NoSuchTile"`, `0x0`, negative `-10x-10`,
+fractional `64.7x64.7`, and null-ref `rNull = 0` (which logs a NULL-ref warning) —
+`ProjectUITile` returns `0.0` and continues script execution (`ok=1`), superseding the
+earlier script-aborting `Err` hypothesis. Verbatim printed probe output (2 lines):
+- `valid(ok=1,r=0.0)|w1x1(ok=1,r=0.0)|miss(ok=1,r=0.0)|zero(ok=1,r=0.0)`
+- `neg(ok=1,r=0.0)|frac(ok=1,r=0.0)|null(ok=1,r=0.0)`
+In NVForever, `ui_projection::Requests::set` still validates inputs and rejects
+invalid/missing/over-quota requests without enqueueing them into the renderer, while
+`ui_projection::call` and the VM null-receiver path return `Ok(0.0)` so calling scripts
+continue; mismatched non-source argument shapes (such as the retired six-float stub
+signature) still return `Err` at the host boundary [design]. Historical six-number
+probes and lab expectations remain unchanged.
 
 Process qualification: historical CI belongs to its pinned checkout. Every later
 head requires its own applicable tests, lint, audits and review; the generator

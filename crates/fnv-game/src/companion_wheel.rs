@@ -134,21 +134,20 @@ impl Command {
         })
     }
 
-    /// The button's words: what it does now [observed: "Use Stimpak" on the owner's
-    /// screenshot of 2026-10-19 (the masters' sCWheelUseStimPack reads "Use StimPak");
-    /// hypothesis: the others, named as the menu file's comments name the buttons].
+    /// The button's words: what it does now [design: NVForever's own short words for each
+    /// command, #2984; a plugin's sCWheelUseStimPack is not read here].
     pub fn label(self, alt: bool) -> &'static str {
         match (self, alt) {
             (Command::AggressivePassive, false) => "Aggressive",
             (Command::AggressivePassive, true) => "Passive",
-            (Command::UseStimpak, _) => "Use Stimpak",
+            (Command::UseStimpak, _) => "Heal",
             (Command::StayFollow, false) => "Wait",
             (Command::StayFollow, true) => "Follow",
             (Command::Talk, _) => "Talk",
-            (Command::BackUp, _) => "Back Up",
+            (Command::BackUp, _) => "Step Back",
             (Command::NearFar, false) => "Far",
             (Command::NearFar, true) => "Near",
-            (Command::OpenInventory, _) => "Open Inventory",
+            (Command::OpenInventory, _) => "Inventory",
             (Command::RangedMelee, false) => "Ranged",
             (Command::RangedMelee, true) => "Melee",
         }
@@ -169,12 +168,11 @@ pub struct State {
     /// hurt [hypothesis for both].
     pub enabled: bool,
     pub label: &'static str,
-    /// The lines under the wheel (the file's `CWM_ButtonContextText`): Use Stimpak's are
-    /// the companion's health and the stimpaks carried, "HP 94/285" and "Stimpak 84"
-    /// [observed: the owner's screenshot of 2026-10-19]; Open Inventory's the companion's
-    /// carry weight, "WG 95/100" [observed: the owner's word of 2026-10-19 for the
-    /// figures; hypothesis: the "WG" before them, as the Pip-Boy's]; the others have none
-    /// [hypothesis].
+    /// The lines under the wheel (the file's `CWM_ButtonContextText`): Heal's are the
+    /// companion's health and the stimpaks carried, "HP 94/285" and "Stimpak 84" (HP as the
+    /// built-in label of `sHitPointsShort`, Stimpak the item's own name); Inventory's the
+    /// companion's carry weight, "Weight 95/100" [design: our own words, #2984; the figures
+    /// what the owner asked for on 2026-10-19]; the others have none [hypothesis].
     pub context: Option<String>,
 }
 
@@ -332,7 +330,7 @@ impl Game<'_> {
                 Command::Talk | Command::BackUp => true,
                 Command::OpenInventory => {
                     if let Ok(e) = self.world.encumbrance(companion) {
-                        context = Some(format!("WG {:.0}/{:.0}", e.weight.floor(), e.capacity));
+                        context = Some(format!("Weight {:.0}/{:.0}", e.weight.floor(), e.capacity));
                     }
                     c.topic(alt).is_some_and(|t| self.can_say_topic(companion, t))
                 }
@@ -354,6 +352,52 @@ Stimpak {}", now.max(0.0).ceil(), full, carried.map_or(0, |(_, n)| n)));
             out.push(State { command: c, alt, enabled, label: c.label(alt), context });
         }
         out
+    }
+
+    /// Why an already-computed wheel button cannot be selected now, from its actual gates.
+    /// Reuses the [`State`] produced by [`Self::wheel_buttons`] without rebuilding all buttons.
+    pub fn wheel_unavailable_reason_for(&self, companion: FormId, button: &State) -> Option<String> {
+        if button.enabled {
+            return None;
+        }
+        if button.command == Command::UseStimpak {
+            if let Some((_, n)) = self.wheel_scrap(companion) {
+                return Some(if n <= 0 {
+                    "You have no scrap metal.".into()
+                } else {
+                    "The companion is already at full health.".into()
+                });
+            }
+            return Some(if self.wheel_stimpak().is_none() {
+                "You have no stimpaks.".into()
+            } else {
+                "The companion is already at full health.".into()
+            });
+        }
+        Some("No eligible companion response is available.".into())
+    }
+
+    /// Why an existing wheel button cannot be selected now, from its actual gates.
+    /// This is interface explanation, not a second command implementation.
+    pub fn wheel_unavailable_reason(&mut self, command: Command) -> Option<String> {
+        let Some(companion) = self.wheel_companion() else { return Some("The companion wheel is closed.".into()) };
+        if command == Command::UseStimpak {
+            if let Some((_, n)) = self.wheel_scrap(companion) {
+                if n <= 0 {
+                    return Some("You have no scrap metal.".into());
+                }
+                let (now, full) = self.health_now_and_full(companion);
+                return (now >= full).then(|| "The companion is already at full health.".into());
+            }
+            if self.wheel_stimpak().is_none() {
+                return Some("You have no stimpaks.".into());
+            }
+            let (now, full) = self.health_now_and_full(companion);
+            return (now >= full).then(|| "The companion is already at full health.".into());
+        }
+        let buttons = self.wheel_buttons(companion);
+        let button = buttons.iter().find(|b| b.command == command)?;
+        self.wheel_unavailable_reason_for(companion, button)
     }
 
     /// The player picks a command on the open wheel. Talk closes the wheel and starts the

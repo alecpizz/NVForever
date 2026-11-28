@@ -1,0 +1,710 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6_t2_observed_matches",
+  "description": "Wave 6 Tier 2 strictly read-only console-only probes confirming parity matches across yUI/ySI, ShowOff, JohnnyGuitar, JIP LN, and xNVSE for [hypothesis] -> [observed] promotions.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)",
+    "JohnnyGuitarNVSE": "528",
+    "ShowOffNVSE Plugin": "184",
+    "yUI": "140 (v1.4d)"
+  },
+  "batches": [
+    {
+      "id": "w6_t2_observed_matches",
+      "title": "Wave 6 Tier 2 - Confirmed Parity Matches",
+      "extender": "xNVSE 6.4.9 + JIP LN 57.30 + JohnnyGuitar 528 + ShowOff 184 + yUI 140",
+      "required_plugins": [
+        "jip_nvse.dll",
+        "johnnyguitar.dll",
+        "ShowOffNVSE.dll",
+        "yUI.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6t2_26_ysi_traits_set_get_and_metadata",
+          "bucket": "B",
+          "extender": "yUI 140",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "yUI.dll"
+          ],
+          "optional_extender": true,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-small.md",
+          "spec_line": 62,
+          "functions_tested": [
+            "YSISetTrait",
+            "YSIGetTrait"
+          ],
+          "claim": "Verify YSISetTrait return values for \"string\", \"tag\", \"icon\", \"filename\", and metadata traits (\"template\", \"systemcolor\", \"category\", \"name\", \"tab\", \"count\", \"unknown\"), plus YSIGetTrait readback.",
+          "expected": "set(str=1,ic=1,tpl=0,cat=0,unk=0)|g1=W6T2Tag,fn=w6t2_ic.dds|meta(,,,,,)",
+          "script_lines": [
+            "ref rStim = GetFormFromMod \"FalloutNV.esm\" \"15169\"",
+            "string_var sOrig = YSIGetTrait \"tag\" rStim",
+            "int rStr = YSISetTrait \"string\" \"W6T2Tag\" rStim",
+            "string_var sG1 = YSIGetTrait \"tag\" rStim",
+            "int rIc = YSISetTrait \"icon\" \"w6t2_ic.dds\" rStim",
+            "string_var sFn = YSIGetTrait \"filename\" rStim",
+            "int rTpl = YSISetTrait \"template\" \"x\" rStim",
+            "int rCat = YSISetTrait \"category\" \"x\" rStim",
+            "int rUnk = YSISetTrait \"__unknown__\" \"x\" rStim",
+            "string_var gTpl = YSIGetTrait \"template\" rStim",
+            "string_var gCol = YSIGetTrait \"systemcolor\" rStim",
+            "string_var gCat = YSIGetTrait \"category\" rStim",
+            "string_var gNam = YSIGetTrait \"name\" rStim",
+            "string_var gTab = YSIGetTrait \"tab\" rStim",
+            "string_var gCnt = YSIGetTrait \"count\" rStim",
+            "YSISetTrait \"tag\" sOrig rStim",
+            "PrintToConsole \"PROBE|w6t2_26_ysi_traits_set_get_and_metadata|set(str=%g,ic=%g,tpl=%g,cat=%g,unk=%g)|g1=%z,fn=%z|meta(%z,%z,%z,%z,%z,%z)\" rStr rIc rTpl rCat rUnk sG1 sFn gTpl gCol gCat gNam gTab gCnt"
+          ]
+        },
+        {
+          "id": "w6t2p3_04_fire_god_melee",
+          "bucket": "B",
+          "extender": "ShowOff 184 + JIP LN 57.30",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-showoff.md",
+          "spec_line": 397,
+          "functions_tested": [
+            "ShowOff:OnFireWeapon",
+            "SetOnFireWeaponEventHandler"
+          ],
+          "claim": "Verify ShowOff:OnFireWeapon vs JIP SetOnFireWeaponEventHandler under normal, ToggleGodMode, and melee.",
+          "expected": "norm(so=1,jp=1)|god(so=1,jp=0)|melee(so=1,jp=1)",
+          "script_lines": [
+            "ref cbSO = CompileScript \"nvseprobe_s_p3_04_so.gek\"",
+            "ref cbJP = CompileScript \"nvseprobe_s_p3_04_jp.gek\"",
+            "Player.AuxVarSetRef \"*p3_04_cbso\" cbSO",
+            "Player.AuxVarSetRef \"*p3_04_cbjp\" cbJP",
+            "Player.AuxVarSetFlt \"*p3_04_so\" 0",
+            "Player.AuxVarSetFlt \"*p3_04_jp\" 0",
+            "SetEventHandlerAlt \"ShowOff:OnFireWeapon\" cbSO",
+            "SetOnFireWeaponEventHandler cbJP 1",
+            "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+            "ref rA10 = GetFormFromMod \"FalloutNV.esm\" \"4241\"",
+            "Player.AddItem r10 1 1",
+            "Player.AddItem rA10 20 1",
+            "Player.EquipItem r10 0 1",
+            "Player.SetWeaponOut 1"
+          ],
+          "wait_ticks_after": 2,
+          "helper_scripts": {
+            "nvseprobe_s_p3_04_so.gek": [
+              "begin Function { ref rW }",
+              "Player.AuxVarSetFlt \"*p3_04_so\" ((Player.AuxVarGetFlt \"*p3_04_so\") + 1)"
+            ],
+            "nvseprobe_s_p3_04_jp.gek": [
+              "begin Function { ref rW }",
+              "Player.AuxVarSetFlt \"*p3_04_jp\" ((Player.AuxVarGetFlt \"*p3_04_jp\") + 1)"
+            ]
+          },
+          "extra_steps": [
+            {
+              "suffix": "norm",
+              "wait_ticks": 2,
+              "script_lines": [
+                "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+                "Player.FireWeapon r10"
+              ]
+            },
+            {
+              "suffix": "god",
+              "wait_ticks": 2,
+              "script_lines": [
+                "Player.AuxVarSetFlt \"*p3_04_so_n\" (Player.AuxVarGetFlt \"*p3_04_so\")",
+                "Player.AuxVarSetFlt \"*p3_04_jp_n\" (Player.AuxVarGetFlt \"*p3_04_jp\")",
+                "ToggleGodMode",
+                "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+                "Player.FireWeapon r10"
+              ]
+            },
+            {
+              "suffix": "melee",
+              "wait_ticks": 2,
+              "script_lines": [
+                "Player.AuxVarSetFlt \"*p3_04_so_g\" (Player.AuxVarGetFlt \"*p3_04_so\")",
+                "Player.AuxVarSetFlt \"*p3_04_jp_g\" (Player.AuxVarGetFlt \"*p3_04_jp\")",
+                "ToggleGodMode",
+                "ref rBat = GetFormFromMod \"FalloutNV.esm\" \"421C\"",
+                "Player.AddItem rBat 1 1",
+                "Player.EquipItem rBat 0 1",
+                "Player.SetWeaponOut 1",
+                "Player.FireWeapon rBat"
+              ]
+            },
+            {
+              "suffix": "read",
+              "wait_ticks": 0,
+              "script_lines": [
+                "int soN = Player.AuxVarGetFlt \"*p3_04_so_n\"",
+                "int jpN = Player.AuxVarGetFlt \"*p3_04_jp_n\"",
+                "int soG = (Player.AuxVarGetFlt \"*p3_04_so_g\") - soN",
+                "int jpG = (Player.AuxVarGetFlt \"*p3_04_jp_g\") - jpN",
+                "int soM = (Player.AuxVarGetFlt \"*p3_04_so\") - (Player.AuxVarGetFlt \"*p3_04_so_g\")",
+                "int jpM = (Player.AuxVarGetFlt \"*p3_04_jp\") - (Player.AuxVarGetFlt \"*p3_04_jp_g\")",
+                "RemoveEventHandler \"ShowOff:OnFireWeapon\" (Player.AuxVarGetRef \"*p3_04_cbso\")",
+                "SetOnFireWeaponEventHandler (Player.AuxVarGetRef \"*p3_04_cbjp\") 0",
+                "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+                "ref rA10 = GetFormFromMod \"FalloutNV.esm\" \"4241\"",
+                "ref rBat = GetFormFromMod \"FalloutNV.esm\" \"421C\"",
+                "Player.UnequipItem rBat 0 1",
+                "Player.RemoveItem rBat 1 1",
+                "Player.RemoveItem r10 1 1",
+                "Player.RemoveItem rA10 20 1",
+                "PrintToConsole \"PROBE|w6t2p3_04_fire_god_melee|norm(so=%g,jp=%g)|god(so=%g,jp=%g)|melee(so=%g,jp=%g)\" soN jpN soG jpG soM jpM"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "w6t2_02_showoff_pre_activate_inv_alt",
+          "bucket": "B",
+          "extender": "ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/preactivation-events.md",
+          "spec_line": 95,
+          "functions_tested": [
+            "ShowOff:OnPreActivateInventoryItem",
+            "ShowOff:OnPreActivateInventoryItemAlt"
+          ],
+          "claim": "Verify ShowOff:OnPreActivateInventoryItem vs ShowOff:OnPreActivateInventoryItemAlt on scripted EquipItem: ThisAlt, all 5 args (rBase, rRef, bNotPrev, iKey, bEquipping), and SetFunctionValue 0 veto.",
+          "expected": "reg=1/1|eq=0,na=0,al=1,selfP=1,isRef=1,key=0,bEq=1|unAl=1,unBEq=1|vetoEq=0",
+          "script_lines": [
+            "ref cbNA = CompileScript \"nvseprobe_s_w6t2_02_noalt.gek\"",
+            "ref cbAL = CompileScript \"nvseprobe_s_w6t2_02_alt.gek\"",
+            "Player.AuxVarSetFlt \"*w6t2_02_na\" 0",
+            "Player.AuxVarSetFlt \"*w6t2_02_al\" 0",
+            "Player.AuxVarSetFlt \"*w6t2_02_veto\" 0",
+            "int r1 = SetEventHandlerAlt \"ShowOff:OnPreActivateInventoryItem\" cbNA 0::Player",
+            "int r2 = SetEventHandlerAlt \"ShowOff:OnPreActivateInventoryItemAlt\" cbAL 0::Player",
+            "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+            "Player.AddItem r10 1 1",
+            "Player.EquipItem r10 0 1",
+            "int eq1 = Player.GetEquipped r10",
+            "int al1 = Player.AuxVarGetFlt \"*w6t2_02_al\"",
+            "int na1 = Player.AuxVarGetFlt \"*w6t2_02_na\"",
+            "int key1 = Player.AuxVarGetFlt \"*w6t2_02_key\"",
+            "int eqa1 = Player.AuxVarGetFlt \"*w6t2_02_eq\"",
+            "int isr1 = Player.AuxVarGetFlt \"*w6t2_02_isref\"",
+            "int selfP = ((Player.AuxVarGetRef \"*w6t2_02_self\") == Player)",
+            "Player.UnequipItem r10 0 1",
+            "int alUn = Player.AuxVarGetFlt \"*w6t2_02_al\"",
+            "int eqUn = Player.AuxVarGetFlt \"*w6t2_02_eq\"",
+            "Player.AuxVarSetFlt \"*w6t2_02_veto\" 1",
+            "Player.EquipItem r10 0 1",
+            "int eqVeto = Player.GetEquipped r10",
+            "Player.UnequipItem r10 0 1",
+            "Player.RemoveItem r10 1 1",
+            "RemoveEventHandler \"ShowOff:OnPreActivateInventoryItem\" cbNA",
+            "RemoveEventHandler \"ShowOff:OnPreActivateInventoryItemAlt\" cbAL",
+            "PrintToConsole \"PROBE|w6t2_02_showoff_pre_activate_inv_alt|reg=%g/%g|eq=%g,na=%g,al=%g,selfP=%g,isRef=%g,key=%g,bEq=%g|unAl=%g,unBEq=%g|vetoEq=%g\" r1 r2 eq1 na1 al1 selfP isr1 key1 eqa1 alUn eqUn eqVeto"
+          ],
+          "wait_ticks_after": 2,
+          "helper_scripts": {
+            "nvseprobe_s_w6t2_02_noalt.gek": [
+              "begin Function { ref rB, ref rR, int iAllow, int iKey }",
+              "Player.AuxVarSetFlt \"*w6t2_02_na\" ((Player.AuxVarGetFlt \"*w6t2_02_na\") + 1)"
+            ],
+            "nvseprobe_s_w6t2_02_alt.gek": [
+              "begin Function { ref rB, ref rR, int iAllow, int iKey, int iEq }",
+              "ref rSelf = GetSelfAlt",
+              "int n = Player.AuxVarGetFlt \"*w6t2_02_al\"",
+              "Player.AuxVarSetFlt \"*w6t2_02_al\" (n + 1)",
+              "Player.AuxVarSetRef \"*w6t2_02_self\" rSelf",
+              "Player.AuxVarSetRef \"*w6t2_02_b\" rB",
+              "Player.AuxVarSetFlt \"*w6t2_02_isref\" (IsReference rR)",
+              "Player.AuxVarSetFlt \"*w6t2_02_alw\" iAllow",
+              "Player.AuxVarSetFlt \"*w6t2_02_key\" iKey",
+              "Player.AuxVarSetFlt \"*w6t2_02_eq\" iEq",
+              "if Player.AuxVarGetFlt \"*w6t2_02_veto\" == 1",
+              "  SetFunctionValue 0",
+              "endif"
+            ]
+          }
+        },
+        {
+          "id": "w6t2p2_02_pre_activate_inv_alt_allow_vs_omit",
+          "bucket": "B",
+          "extender": "ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/preactivation-events.md",
+          "spec_line": 95,
+          "functions_tested": [
+            "ShowOff:OnPreActivateInventoryItem",
+            "ShowOff:OnPreActivateInventoryItemAlt"
+          ],
+          "claim": "Verify ShowOff:OnPreActivateInventoryItemAlt SetFunctionValue omit vs 1 vs 0, UnequipItem firing, and bNotPrevented arg.",
+          "expected": "omit(eq=0,al=1,alw=1)|one(eq=0,al=2)|un(eq=0,al=2,bEq=1)|zero(eq=0)",
+          "script_lines": [
+            "ref cbAL = CompileScript \"nvseprobe_s_p2_02_alt.gek\"",
+            "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+            "Player.AddItem r10 1 1",
+            "Player.AuxVarSetFlt \"*p2_02_al\" 0",
+            "Player.AuxVarSetFlt \"*p2_02_mode\" 0",
+            "SetEventHandlerAlt \"ShowOff:OnPreActivateInventoryItemAlt\" cbAL 0::Player",
+            "Player.EquipItem r10 0 1",
+            "int eqOmit = Player.GetEquipped r10",
+            "int alwOmit = Player.AuxVarGetFlt \"*p2_02_alw\"",
+            "int al1 = Player.AuxVarGetFlt \"*p2_02_al\"",
+            "Player.UnequipItem r10 0 1",
+            "Player.AuxVarSetFlt \"*p2_02_mode\" 1",
+            "Player.EquipItem r10 0 1",
+            "int eqOne = Player.GetEquipped r10",
+            "int al2 = Player.AuxVarGetFlt \"*p2_02_al\"",
+            "Player.UnequipItem r10 0 1",
+            "int eqUn = Player.GetEquipped r10",
+            "int alUn = Player.AuxVarGetFlt \"*p2_02_al\"",
+            "int bEqUn = Player.AuxVarGetFlt \"*p2_02_eq\"",
+            "Player.AuxVarSetFlt \"*p2_02_mode\" 2",
+            "Player.EquipItem r10 0 1",
+            "int eqZero = Player.GetEquipped r10",
+            "Player.UnequipItem r10 0 1",
+            "Player.RemoveItem r10 1 1",
+            "RemoveEventHandler \"ShowOff:OnPreActivateInventoryItemAlt\" cbAL",
+            "PrintToConsole \"PROBE|w6t2p2_02_pre_activate_inv_alt_allow_vs_omit|omit(eq=%g,al=%g,alw=%g)|one(eq=%g,al=%g)|un(eq=%g,al=%g,bEq=%g)|zero(eq=%g)\" eqOmit al1 alwOmit eqOne al2 eqUn alUn bEqUn eqZero"
+          ],
+          "helper_scripts": {
+            "nvseprobe_s_p2_02_alt.gek": [
+              "begin Function { ref rB, ref rR, int iAllow, int iKey, int iEq }",
+              "Player.AuxVarSetFlt \"*p2_02_al\" ((Player.AuxVarGetFlt \"*p2_02_al\") + 1)",
+              "Player.AuxVarSetFlt \"*p2_02_alw\" iAllow",
+              "Player.AuxVarSetFlt \"*p2_02_eq\" iEq",
+              "int md = Player.AuxVarGetFlt \"*p2_02_mode\"",
+              "if md == 1",
+              "  SetFunctionValue 1",
+              "elseif md == 2",
+              "  SetFunctionValue 0",
+              "endif"
+            ]
+          }
+        },
+        {
+          "id": "w6t2p2_07_spread_anim_7_9_2_1_0",
+          "bucket": "B",
+          "extender": "ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/nvse-stubs-persistent-fall-spread-unique.md",
+          "spec_line": 114,
+          "functions_tested": [
+            "GetCalculatedActorSpread"
+          ],
+          "claim": "Verify GetCalculatedActorSpread with weapon drawn (SetWeaponOut 1 + wait) for anim 8 (Minigun 0x433F), anim 9 (Missile Launcher 0x4340), anim 2 (Baseball Bat 0x421C).",
+          "expected": "t8(0.6212,0.4232,0.4232,0.5157)|t9(0.1781,0.3631,0.3631,0.4556)|t2(1.0000,1.0000)",
+          "script_lines": [
+            "ref rW = GetFormFromMod \"FalloutNV.esm\" \"433F\"",
+            "Player.AddItem rW 1 1",
+            "Player.EquipItem rW 0 1",
+            "Player.SetWeaponOut 1",
+            "Player.AuxVarSetFlt \"*p2_07_a7\" (GetWeaponType rW)"
+          ],
+          "wait_ticks_after": 3,
+          "extra_steps": [
+            {
+              "suffix": "t7r",
+              "wait_ticks": 1,
+              "script_lines": [
+                "Player.AuxVarSetFlt \"*p2_07_7n\" (Player.GetCalculatedActorSpread)",
+                "Player.DamageAV RightAttackCondition 100"
+              ]
+            },
+            {
+              "suffix": "t7l",
+              "wait_ticks": 1,
+              "script_lines": [
+                "Player.AuxVarSetFlt \"*p2_07_7r\" (Player.GetCalculatedActorSpread)",
+                "Player.RestoreAV RightAttackCondition 100",
+                "Player.DamageAV LeftAttackCondition 100"
+              ]
+            },
+            {
+              "suffix": "t7b",
+              "wait_ticks": 1,
+              "script_lines": [
+                "Player.AuxVarSetFlt \"*p2_07_7l\" (Player.GetCalculatedActorSpread)",
+                "Player.DamageAV RightAttackCondition 100"
+              ]
+            },
+            {
+              "suffix": "t9init",
+              "wait_ticks": 3,
+              "script_lines": [
+                "Player.AuxVarSetFlt \"*p2_07_7b\" (Player.GetCalculatedActorSpread)",
+                "Player.RestoreAV RightAttackCondition 100",
+                "Player.RestoreAV LeftAttackCondition 100",
+                "ref rOld = GetFormFromMod \"FalloutNV.esm\" \"433F\"",
+                "Player.UnequipItem rOld 0 1",
+                "Player.RemoveItem rOld 1 1",
+                "ref rW = GetFormFromMod \"FalloutNV.esm\" \"4340\"",
+                "Player.AddItem rW 1 1",
+                "Player.EquipItem rW 0 1",
+                "Player.SetWeaponOut 1",
+                "Player.AuxVarSetFlt \"*p2_07_a9\" (GetWeaponType rW)"
+              ]
+            },
+            {
+              "suffix": "t9r",
+              "wait_ticks": 1,
+              "script_lines": [
+                "Player.AuxVarSetFlt \"*p2_07_9n\" (Player.GetCalculatedActorSpread)",
+                "Player.DamageAV RightAttackCondition 100"
+              ]
+            },
+            {
+              "suffix": "t9l",
+              "wait_ticks": 1,
+              "script_lines": [
+                "Player.AuxVarSetFlt \"*p2_07_9r\" (Player.GetCalculatedActorSpread)",
+                "Player.RestoreAV RightAttackCondition 100",
+                "Player.DamageAV LeftAttackCondition 100"
+              ]
+            },
+            {
+              "suffix": "t9b",
+              "wait_ticks": 1,
+              "script_lines": [
+                "Player.AuxVarSetFlt \"*p2_07_9l\" (Player.GetCalculatedActorSpread)",
+                "Player.DamageAV RightAttackCondition 100"
+              ]
+            },
+            {
+              "suffix": "m2init",
+              "wait_ticks": 3,
+              "script_lines": [
+                "Player.AuxVarSetFlt \"*p2_07_9b\" (Player.GetCalculatedActorSpread)",
+                "Player.RestoreAV RightAttackCondition 100",
+                "Player.RestoreAV LeftAttackCondition 100",
+                "ref rOld = GetFormFromMod \"FalloutNV.esm\" \"4340\"",
+                "Player.UnequipItem rOld 0 1",
+                "Player.RemoveItem rOld 1 1",
+                "ref rW = GetFormFromMod \"FalloutNV.esm\" \"421C\"",
+                "Player.AddItem rW 1 1",
+                "Player.EquipItem rW 0 1",
+                "Player.SetWeaponOut 1",
+                "Player.AuxVarSetFlt \"*p2_07_a2\" (GetWeaponType rW)"
+              ]
+            },
+            {
+              "suffix": "m2b",
+              "wait_ticks": 1,
+              "script_lines": [
+                "Player.AuxVarSetFlt \"*p2_07_2n\" (Player.GetCalculatedActorSpread)",
+                "Player.DamageAV RightAttackCondition 100",
+                "Player.DamageAV LeftAttackCondition 100"
+              ]
+            },
+            {
+              "suffix": "read",
+              "wait_ticks": 0,
+              "script_lines": [
+                "float b2 = Player.GetCalculatedActorSpread",
+                "Player.RestoreAV RightAttackCondition 100",
+                "Player.RestoreAV LeftAttackCondition 100",
+                "ref rOld = GetFormFromMod \"FalloutNV.esm\" \"421C\"",
+                "Player.UnequipItem rOld 0 1",
+                "Player.RemoveItem rOld 1 1",
+                "int a7 = Player.AuxVarGetFlt \"*p2_07_a7\"",
+                "float n7 = Player.AuxVarGetFlt \"*p2_07_7n\"",
+                "float r7 = Player.AuxVarGetFlt \"*p2_07_7r\"",
+                "float l7 = Player.AuxVarGetFlt \"*p2_07_7l\"",
+                "float b7 = Player.AuxVarGetFlt \"*p2_07_7b\"",
+                "int a9 = Player.AuxVarGetFlt \"*p2_07_a9\"",
+                "float n9 = Player.AuxVarGetFlt \"*p2_07_9n\"",
+                "float r9 = Player.AuxVarGetFlt \"*p2_07_9r\"",
+                "float l9 = Player.AuxVarGetFlt \"*p2_07_9l\"",
+                "float b9 = Player.AuxVarGetFlt \"*p2_07_9b\"",
+                "int a2 = Player.AuxVarGetFlt \"*p2_07_a2\"",
+                "float n2 = Player.AuxVarGetFlt \"*p2_07_2n\"",
+                "string_var s1 = sv_Construct \"t%g(%.4f,%.4f,%.4f,%.4f)\" a7 n7 r7 l7 b7",
+                "string_var s2 = sv_Construct \"t%g(%.4f,%.4f,%.4f,%.4f)\" a9 n9 r9 l9 b9",
+                "PrintToConsole \"PROBE|w6t2p2_07_spread_anim_7_9_2_1_0|%z|%z|t%g(%.4f,%.4f)\" s1 s2 a2 n2 b2"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "w6t2p2_27_jg10_apply_poison_and_muzzle_hex",
+          "bucket": "B",
+          "extender": "JohnnyGuitar 528",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "johnnyguitar.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-jg10.md",
+          "spec_line": 24,
+          "functions_tested": [
+            "ApplyWeaponPoison",
+            "GetEquippedWeaponPoison",
+            "DisableMuzzleFlashLights"
+          ],
+          "claim": "Verify ApplyWeaponPoison unarmed, non-ALCH rejection preserving existing poison, and DisableMuzzleFlashLights exact uint32 value.",
+          "expected": "unarm=0,ok=1,bad=0,kept=1,clr=1|muz=4294967295,neg=4.29497e+09",
+          "script_lines": [
+            "ref rBleak = GetFormFromMod \"FalloutNV.esm\" \"1613D0\"",
+            "int rUnarm = Player.ApplyWeaponPoison rBleak",
+            "Player.AuxVarSetFlt \"*p2_27_unarm\" rUnarm",
+            "ref rKnife = GetFormFromMod \"FalloutNV.esm\" \"4326\"",
+            "Player.AddItem rKnife 1 1",
+            "Player.EquipItem rKnife 0 1",
+            "Player.SetWeaponOut 1"
+          ],
+          "wait_ticks_after": 1,
+          "extra_steps": [
+            {
+              "suffix": "apply",
+              "wait_ticks": 0,
+              "script_lines": [
+                "ref rKnife = GetFormFromMod \"FalloutNV.esm\" \"4326\"",
+                "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+                "ref rBleak = GetFormFromMod \"FalloutNV.esm\" \"1613D0\"",
+                "int rUnarm = Player.AuxVarGetFlt \"*p2_27_unarm\"",
+                "int rOk = Player.ApplyWeaponPoison rBleak",
+                "int rBad = Player.ApplyWeaponPoison r10",
+                "ref rAfter = Player.GetEquippedWeaponPoison",
+                "int kept = (rAfter == rBleak)",
+                "int rClr = Player.ApplyWeaponPoison",
+                "Player.UnequipItem rKnife 0 1",
+                "Player.RemoveItem rKnife 1 1",
+                "float fMuz = DisableMuzzleFlashLights 99",
+                "int mCur = DisableMuzzleFlashLights -1",
+                "DisableMuzzleFlashLights 0",
+                "PrintToConsole \"PROBE|w6t2p2_27_jg10_apply_poison_and_muzzle_hex|unarm=%g,ok=%g,bad=%g,kept=%g,clr=%g|muz=%.0f,neg=%g\" rUnarm rOk rBad kept rClr fMuz mCur"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "w6t2_30_jg5_get_weapons_for_mod_and_armor_alt_tex",
+          "bucket": "A",
+          "extender": "JohnnyGuitar 528 + JIP LN 57.30",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "johnnyguitar.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": false,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-jg5.md",
+          "spec_line": 25,
+          "functions_tested": [
+            "GetWeaponsForMod",
+            "ClearArmorAltTexture"
+          ],
+          "claim": "Verify GetWeaponsForMod on 10mm Silencer IMOD (0x129878) vs non-IMOD (Stimpak -> ar_Null?), and ClearArmorAltTexture return values for modelID 0/1/4/5 and index -1/0/99 on Leather Armor (0x20423).",
+          "expected": "wMod(n=3,w0=00176E5B,bad=-1)|clr(1m1=1,10=0,4m1=1,0m1=0,5m1=0,199=0)",
+          "script_lines": [
+            "ref rSil = GetFormFromMod \"FalloutNV.esm\" \"129878\"",
+            "ref rStim = GetFormFromMod \"FalloutNV.esm\" \"15169\"",
+            "ref rArm = GetFormFromMod \"FalloutNV.esm\" \"20423\"",
+            "array_var aW = GetWeaponsForMod rSil",
+            "int nW = ar_Size aW",
+            "string_var sW0 = \"none\"",
+            "if nW > 0",
+            "  ref rW0 = aW[0]",
+            "  let sW0 := GetFormIDString rW0",
+            "endif",
+            "array_var aBad = GetWeaponsForMod rStim",
+            "int nBad = ar_Size aBad",
+            "int c1m1 = ClearArmorAltTexture rArm 1 -1",
+            "int c10 = ClearArmorAltTexture rArm 1 0",
+            "int c4m1 = ClearArmorAltTexture rArm 4 -1",
+            "int c0m1 = ClearArmorAltTexture rArm 0 -1",
+            "int c5m1 = ClearArmorAltTexture rArm 5 -1",
+            "int c199 = ClearArmorAltTexture rArm 1 99",
+            "PrintToConsole \"PROBE|w6t2_30_jg5_get_weapons_for_mod_and_armor_alt_tex|wMod(n=%g,w0=%z,bad=%g)|clr(1m1=%g,10=%g,4m1=%g,0m1=%g,5m1=%g,199=%g)\" nW sW0 nBad c1m1 c10 c4m1 c0m1 c5m1 c199"
+          ]
+        },
+        {
+          "id": "w6t2_08_showoff_equipped_weight_and_ally_temp",
+          "bucket": "B",
+          "extender": "ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-showoff.md",
+          "spec_line": 146,
+          "functions_tested": [
+            "GetBaseEquippedWeight",
+            "GetCalculatedEquippedWeight",
+            "GetNumActorsInRangeFromRef",
+            "SetAllyTemp",
+            "SetEnemyTemp"
+          ],
+          "claim": "Verify GetBaseEquippedWeight / GetCalculatedEquippedWeight minWeight >= boundary, GetNumActorsInRangeFromRef caller self-exclusion at distance 10, and SetAllyTemp / SetEnemyTemp precedence over SetAlly / SetEnemy.",
+          "expected": "wt(0.0,0.0,0.0,c=0.0)|rng(10=0,2k=1)|fac(0,0,0,0)",
+          "script_lines": [
+            "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+            "Player.AddItem r10 1 1",
+            "Player.EquipItem r10 0 1",
+            "float w0 = Player.GetBaseEquippedWeight 0 32",
+            "float wEq = Player.GetBaseEquippedWeight 3 32",
+            "float wHi = Player.GetBaseEquippedWeight 3.1 32",
+            "float wcEq = Player.GetCalculatedEquippedWeight 3 32",
+            "Player.UnequipItem r10 0 1",
+            "Player.RemoveItem r10 1 1",
+            "int nrSelf = Player.GetNumActorsInRangeFromRef 10 0",
+            "int nrWide = Player.GetNumActorsInRangeFromRef 2000 0",
+            "ref rF1 = GetFormFromMod \"FalloutNV.esm\" \"1B2A4\"",
+            "ref rF2 = GetFormFromMod \"FalloutNV.esm\" \"104C6E\"",
+            "int rInit = GetFactionReaction rF1 rF2",
+            "SetAllyTemp rF1 rF2 0 0",
+            "int rAllyT = GetFactionReaction rF1 rF2",
+            "SetEnemy rF1 rF2 0 0",
+            "int rAfterEn = GetFactionReaction rF1 rF2",
+            "SetAlly rF1 rF2 0 0",
+            "SetEnemyTemp rF1 rF2 0 0",
+            "int rEnT = GetFactionReaction rF1 rF2",
+            "PrintToConsole \"PROBE|w6t2_08_showoff_equipped_weight_and_ally_temp|wt(%.1f,%.1f,%.1f,c=%.1f)|rng(10=%g,2k=%g)|fac(%g,%g,%g,%g)\" w0 wEq wHi wcEq nrSelf nrWide rInit rAllyT rAfterEn rEnT"
+          ]
+        },
+        {
+          "id": "w6t2_23_jg_dds_texture_format_and_bounds",
+          "bucket": "A",
+          "extender": "JohnnyGuitar 528",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "johnnyguitar.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": false,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-jg8.md",
+          "spec_line": 50,
+          "functions_tested": [
+            "GetTextureWidth",
+            "GetTextureHeight",
+            "GetTextureMipMapCount",
+            "GetTextureFormat",
+            "GetNiBound"
+          ],
+          "claim": "Verify GetTextureWidth/Height/MipMapCount/Format on vanilla BSA DDS textures and missing paths, plus GetNiBound center elements [0..2] on a missing node.",
+          "expected": "dds(w=64,h=64,m=0,fmt=5,miss=0)|bndMiss(sz=4,0.0,0.0,0.0,0.0)",
+          "script_lines": [
+            "int w1 = GetTextureWidth \"interface\\icons\\world map\\icon_map_encampment.dds\"",
+            "int h1 = GetTextureHeight \"interface\\icons\\world map\\icon_map_encampment.dds\"",
+            "int m1 = GetTextureMipMapCount \"interface\\icons\\world map\\icon_map_encampment.dds\"",
+            "int f1 = GetTextureFormat \"interface\\icons\\world map\\icon_map_encampment.dds\"",
+            "int fMiss = GetTextureFormat \"interface\\does_not_exist_w6t2.dds\"",
+            "array_var aMiss = Player.GetNiBound \"__NoSuchNode_W6T2__\"",
+            "int szM = ar_Size aMiss",
+            "float b0 = aMiss[0]",
+            "float b1 = aMiss[1]",
+            "float b2 = aMiss[2]",
+            "float b3 = aMiss[3]",
+            "PrintToConsole \"PROBE|w6t2_23_jg_dds_texture_format_and_bounds|dds(w=%g,h=%g,m=%g,fmt=%g,miss=%g)|bndMiss(sz=%g,%.1f,%.1f,%.1f,%.1f)\" w1 h1 m1 f1 fMiss szM b0 b1 b2 b3"
+          ]
+        },
+        {
+          "id": "w6t2_32_showoff_matrix_edges_and_get_weapon_mod_flags",
+          "bucket": "A",
+          "extender": "ShowOff 184 + JIP LN 57.30",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": false,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-showoff.md",
+          "spec_line": 256,
+          "functions_tested": [
+            "Matrix_Transpose",
+            "Matrix_ApplyOperationWithScalar",
+            "Matrix3x3_GetQuaternion",
+            "GetWeaponItemModValue1",
+            "GetPerkModifier"
+          ],
+          "claim": "Verify 1-D Matrix_Transpose shape, Matrix_ApplyOperationWithScalar div-by-0 behavior, Matrix3x3_GetQuaternion w-sign on 180-deg rotation, GetWeaponItemModValue1 on 10mm Pistol, and GetPerkModifier on unperked Player.",
+          "expected": "tr(sz=3,sub=1)|div0=3|q(sz=4,w=0.00,z=1.00)|imod(4.00,0.40)|pm=100.0",
+          "script_lines": [
+            "array_var aRow = ar_List 1, 2, 3",
+            "array_var aT = Matrix_Transpose aRow",
+            "int tSz = ar_Size aT",
+            "int tSub = -1",
+            "if tSz > 0",
+            "  array_var aT0 = aT[0]",
+            "  let tSub := ar_Size aT0",
+            "endif",
+            "array_var aDiv = Matrix_ApplyOperationWithScalar aRow \"/\" 0",
+            "int divSz = ar_Size aDiv",
+            "array_var aM = ar_List (ar_List -1, 0, 0), (ar_List 0, -1, 0), (ar_List 0, 0, 1)",
+            "array_var aQ = Matrix3x3_GetQuaternion aM",
+            "int qSz = ar_Size aQ",
+            "float qw = aQ[0]",
+            "float qz = aQ[3]",
+            "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+            "float m1 = GetWeaponItemModValue1 1 r10",
+            "float m2 = GetWeaponItemModValue1 2 r10",
+            "float pm = Player.GetPerkModifier 0 100",
+            "PrintToConsole \"PROBE|w6t2_32_showoff_matrix_edges_and_get_weapon_mod_flags|tr(sz=%g,sub=%g)|div0=%g|q(sz=%g,w=%.2f,z=%.2f)|imod(%.2f,%.2f)|pm=%.1f\" tSz tSub divSz qSz qw qz m1 m2 pm"
+          ]
+        }
+      ]
+    }
+  ]
+}

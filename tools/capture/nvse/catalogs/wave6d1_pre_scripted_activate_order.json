@@ -1,0 +1,224 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6d1_pre_scripted_activate_order",
+  "description": "Wave 6D-1 strictly read-only console-only clean-room probe catalog verifying ShowOff:OnPreScriptedActivate runs before xNVSE OnActivate (with veto suppressing OnActivate), fires on pre-destroyed doors, and OnActivate has GetSelfAlt == 0.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)",
+    "ShowOffNVSE Plugin": "184",
+    "lStewieAl's Tweaks": "1005"
+  },
+  "batches": [
+    {
+      "id": "w6d1_pre_scripted_activate_order",
+      "title": "Wave 6D-1 - ShowOff:OnPreScriptedActivate Order and OnActivate Null Self",
+      "extender": "xNVSE 6.4.9 + JIP LN 57.30 + ShowOffNVSE 184",
+      "required_plugins": [
+        "jip_nvse.dll",
+        "ShowOffNVSE.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6d1p2_11_on_activate_and_pre_scripted_order",
+          "bucket": "A",
+          "extender": "xNVSE 6.4.9 + ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/preactivation-events.md",
+          "spec_line": 73,
+          "functions_tested": [
+            "OnActivate",
+            "ShowOff:OnPreScriptedActivate"
+          ],
+          "claim": "Verify OnActivate vs ShowOff:OnPreScriptedActivate ordering, OnActivate GetSelfAlt & args, and whether OnActivate fires when preactivation vetoes.",
+          "expected": "OnActivate runs before ShowOff:OnPreScriptedActivate and still fires when ShowOff:OnPreScriptedActivate vetoes.",
+          "script_lines": [
+            "ref rCapB = GetFormFromMod \"FalloutNV.esm\" \"F\"",
+            "ref rRef = Player.PlaceAtMe rCapB 1",
+            "ref cbAct = CompileScript \"nvseprobe_s_w6d1p2_11_act.gek\"",
+            "ref cbPre = CompileScript \"nvseprobe_s_w6d1p2_11_pre.gek\"",
+            "Player.AuxVarSetStr \"*p2_11_ord\" \"S:\"",
+            "SetEventHandler \"OnActivate\" cbAct \"first\"::rRef \"second\"::Player",
+            "SetEventHandlerAlt \"ShowOff:OnPreScriptedActivate\" cbPre 0::rRef",
+            "int c0 = Player.GetItemCount rCapB",
+            "rRef.Activate Player 0",
+            "int c1 = Player.GetItemCount rCapB",
+            "string_var sOut = Player.AuxVarGetStr \"*p2_11_ord\"",
+            "int actS0 = ((Player.AuxVarGetRef \"*p2_11_act_s\") == 0)",
+            "int actSR = ((Player.AuxVarGetRef \"*p2_11_act_s\") == rRef)",
+            "int actA1R = ((Player.AuxVarGetRef \"*p2_11_act_a1\") == rRef)",
+            "int actA2P = ((Player.AuxVarGetRef \"*p2_11_act_a2\") == Player)",
+            "RemoveEventHandler \"OnActivate\" cbAct",
+            "RemoveEventHandler \"ShowOff:OnPreScriptedActivate\" cbPre",
+            "rRef.Disable 0",
+            "rRef.MarkForDelete",
+            "PrintToConsole \"PROBE|w6d1p2_11_on_activate_and_pre_scripted_order|ord=%z|caps=%g->%g|act(s0=%g,sR=%g,a1R=%g,a2P=%g)\" sOut c0 c1 actS0 actSR actA1R actA2P"
+          ],
+          "helper_scripts": {
+            "nvseprobe_s_w6d1p2_11_act.gek": [
+              "begin Function { ref rT, ref rA }",
+              "string_var s = Player.AuxVarGetStr \"*p2_11_ord\"",
+              "Player.AuxVarSetStr \"*p2_11_ord\" (s + \"ACT,\")",
+              "Player.AuxVarSetRef \"*p2_11_act_s\" (GetSelfAlt)",
+              "Player.AuxVarSetRef \"*p2_11_act_a1\" rT",
+              "Player.AuxVarSetRef \"*p2_11_act_a2\" rA"
+            ],
+            "nvseprobe_s_w6d1p2_11_pre.gek": [
+              "begin Function { ref rA, int iBlk, int iOk }",
+              "string_var s = Player.AuxVarGetStr \"*p2_11_ord\"",
+              "Player.AuxVarSetStr \"*p2_11_ord\" (s + \"PRE,\")",
+              "SetFunctionValue 0"
+            ]
+          }
+        },
+        {
+          "id": "w6d1p3_11_on_activate_noveto",
+          "bucket": "A",
+          "extender": "xNVSE 6.4.9 + ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/preactivation-events.md",
+          "spec_line": 73,
+          "functions_tested": [
+            "OnActivate",
+            "ShowOff:OnPreScriptedActivate"
+          ],
+          "claim": "Verify OnActivate vs ShowOff:OnPreScriptedActivate ordering when NOT vetoed (Activate Player 0 and Activate Player 1), plus OnActivate GetSelfAlt & args.",
+          "expected": "Establish exact firing order between OnActivate and ShowOff:OnPreScriptedActivate.",
+          "script_lines": [
+            "ref rCapB = GetFormFromMod \"FalloutNV.esm\" \"F\"",
+            "ref rRef1 = Player.PlaceAtMe rCapB 1",
+            "ref rRef2 = Player.PlaceAtMe rCapB 1",
+            "ref cbAct = CompileScript \"nvseprobe_s_w6d1p3_11_act.gek\"",
+            "ref cbPre = CompileScript \"nvseprobe_s_w6d1p3_11_pre.gek\"",
+            "Player.AuxVarSetStr \"*p3_11_ord\" \"S:\"",
+            "SetEventHandler \"OnActivate\" cbAct \"first\"::rRef1",
+            "SetEventHandlerAlt \"ShowOff:OnPreScriptedActivate\" cbPre 0::rRef1",
+            "rRef1.Activate Player 0",
+            "string_var sOrd0 = Player.AuxVarGetStr \"*p3_11_ord\"",
+            "int actS0 = ((Player.AuxVarGetRef \"*p3_11_as\") == 0)",
+            "int actSR = ((Player.AuxVarGetRef \"*p3_11_as\") == rRef1)",
+            "int actA1 = ((Player.AuxVarGetRef \"*p3_11_a1\") == rRef1)",
+            "int actA2 = ((Player.AuxVarGetRef \"*p3_11_a2\") == Player)",
+            "RemoveEventHandler \"OnActivate\" cbAct",
+            "RemoveEventHandler \"ShowOff:OnPreScriptedActivate\" cbPre",
+            "Player.AuxVarSetStr \"*p3_11_ord\" \"S:\"",
+            "SetEventHandler \"OnActivate\" cbAct \"first\"::rRef2",
+            "SetEventHandlerAlt \"ShowOff:OnPreScriptedActivate\" cbPre 0::rRef2",
+            "rRef2.Activate Player 1",
+            "string_var sOrd1 = Player.AuxVarGetStr \"*p3_11_ord\"",
+            "RemoveEventHandler \"OnActivate\" cbAct",
+            "RemoveEventHandler \"ShowOff:OnPreScriptedActivate\" cbPre",
+            "Player.RemoveItem rCapB (Player.GetItemCount rCapB) 1",
+            "PrintToConsole \"PROBE|w6d1p3_11_on_activate_noveto|ord0=%z|ord1=%z|act(s0=%g,sR=%g,a1=%g,a2=%g)\" sOrd0 sOrd1 actS0 actSR actA1 actA2"
+          ],
+          "helper_scripts": {
+            "nvseprobe_s_w6d1p3_11_act.gek": [
+              "begin Function { ref rT, ref rA }",
+              "string_var s = Player.AuxVarGetStr \"*p3_11_ord\"",
+              "Player.AuxVarSetStr \"*p3_11_ord\" (s + \"ACT,\")",
+              "Player.AuxVarSetRef \"*p3_11_as\" (GetSelfAlt)",
+              "Player.AuxVarSetRef \"*p3_11_a1\" rT",
+              "Player.AuxVarSetRef \"*p3_11_a2\" rA"
+            ],
+            "nvseprobe_s_w6d1p3_11_pre.gek": [
+              "begin Function { ref rA, int iB, int iOk }",
+              "string_var s = Player.AuxVarGetStr \"*p3_11_ord\"",
+              "Player.AuxVarSetStr \"*p3_11_ord\" (s + \"PRE,\")"
+            ]
+          }
+        },
+        {
+          "id": "w6d1_14_pre_scripted_destroyed_mutation",
+          "bucket": "A",
+          "extender": "ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/preactivation-events.md",
+          "spec_line": 82,
+          "functions_tested": [
+            "ShowOff:OnPreScriptedActivate",
+            "SetDestroyed",
+            "GetDestroyed"
+          ],
+          "claim": "Verify whether SetDestroyed 1 before Activate prevents ShowOff:OnPreScriptedActivate, and whether mutating SetDestroyed 1 (or 1->0) inside a void callback affects activation.",
+          "expected": "Check pre-activation firing when target is already destroyed vs destroyed inside callback.",
+          "script_lines": [
+            "ref rDoor = GetFormFromMod \"FalloutNV.esm\" \"103E61\"",
+            "ref cb = CompileScript \"nvseprobe_s_w6d1_14_cb.gek\"",
+            "Player.AuxVarSetFlt \"*w6d1_14_n\" 0",
+            "Player.AuxVarSetFlt \"*w6d1_14_mode\" 0",
+            "SetEventHandlerAlt \"ShowOff:OnPreScriptedActivate\" cb 0::rDoor",
+            "rDoor.SetDestroyed 1",
+            "rDoor.Activate Player 0",
+            "int nPreDest = Player.AuxVarGetFlt \"*w6d1_14_n\"",
+            "rDoor.SetDestroyed 0",
+            "rDoor.SetOpenState 0",
+            "Player.AuxVarSetFlt \"*w6d1_14_mode\" 1",
+            "rDoor.Activate Player 0",
+            "int nMut1 = Player.AuxVarGetFlt \"*w6d1_14_n\"",
+            "int opMut1 = rDoor.GetOpenState",
+            "rDoor.SetDestroyed 0",
+            "rDoor.SetOpenState 0",
+            "Player.AuxVarSetFlt \"*w6d1_14_mode\" 2",
+            "rDoor.Activate Player 0",
+            "int nMut2 = Player.AuxVarGetFlt \"*w6d1_14_n\"",
+            "int opMut2 = rDoor.GetOpenState",
+            "rDoor.SetOpenState 0",
+            "rDoor.SetDestroyed 0",
+            "RemoveEventHandler \"ShowOff:OnPreScriptedActivate\" cb",
+            "PrintToConsole \"PROBE|w6d1_14_pre_scripted_destroyed_mutation|preDest=%g|mut1(n=%g,op=%g)|mut2(n=%g,op=%g)\" nPreDest nMut1 opMut1 nMut2 opMut2"
+          ],
+          "helper_scripts": {
+            "nvseprobe_s_w6d1_14_cb.gek": [
+              "begin Function { ref rA, int iB, int iOk }",
+              "Player.AuxVarSetFlt \"*w6d1_14_n\" ((Player.AuxVarGetFlt \"*w6d1_14_n\") + 1)",
+              "ref rS = GetSelfAlt",
+              "int m = Player.AuxVarGetFlt \"*w6d1_14_mode\"",
+              "if m == 1",
+              "  rS.SetDestroyed 1",
+              "elseif m == 2",
+              "  rS.SetDestroyed 1",
+              "  rS.SetDestroyed 0",
+              "endif"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

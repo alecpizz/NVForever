@@ -147,7 +147,8 @@ a later frame with different resolution or presentation settings; the game and l
 (`bevy_render-0.20.1/src/lib.rs:493-505`). No custom render-to-main transfer is required.
 [observed] Telemetry snapshots those main-world resources on its first collection update, after the
 settings loaded in `PostStartup`, settings UI, window mode application and frame pacing application.
-It records enabled nvforever features `default`, `intro-video` and `profile` from compile-time cfg.
+It records enabled nvforever features `default`, `dev-aids`, `intro-video`, `profile`, `tracy` and
+`tracy-memory` from compile-time cfg.
 The collector follows `PlaySet::Sync`, the loading gate and handoff reveal. It emits `phase_enter` before
 the corresponding frame, using a startup accumulator independent of the stress sample aid. Window mode,
 physical size, sync, effective cap, refresh and present mode changes end the capture before another frame.

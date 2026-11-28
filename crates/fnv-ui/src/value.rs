@@ -147,12 +147,21 @@ impl Value {
         }
     }
 
-    /// The value as text: a whole number without a point [hypothesis: how the original
-    /// prints a number into a string trait is not captured].
+    /// The value as text: a whole number without a point; another number as the shortest
+    /// text that reads back as the same single-precision number, so a code-written
+    /// fraction times a file's constant prints as the product, not with the double-precision
+    /// tail of the fraction's rounding (`0.62` written at single precision, times 800, prints
+    /// `496`, not `496.00000381469727`) [hypothesis: how the original prints a number into a
+    /// string trait is not captured; single precision is taken to be the precision it keeps
+    /// a trait's number at]. A number single precision cannot hold (beyond its range, or a
+    /// tiny one that would read 0) keeps its double-precision text [design].
     pub fn text(&self) -> String {
         match self {
             Value::Num(n) if n.fract() == 0.0 && n.abs() < 1e15 => format!("{}", *n as i64),
-            Value::Num(n) => format!("{n}"),
+            Value::Num(n) => {
+                let single = *n as f32;
+                if single.is_finite() && single != 0.0 { format!("{single}") } else { format!("{n}") }
+            }
             Value::Str(s) => s.clone(),
             Value::Sym(s) => format!("&{s};"),
         }

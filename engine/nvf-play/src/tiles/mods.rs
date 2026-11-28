@@ -143,6 +143,18 @@ pub fn prepare_column(ui: &mut Ui, files: Option<&dyn fnv_ui::Source>) -> bool {
     true
 }
 
+/// Leave the Mods page: unload `StartMenu` so `OnMenuClose 1013` handlers see the start
+/// menu closed (and a subsequent Pause open or return to the Mods page rebuilds a fresh
+/// `StartMenu` tree without stale MCM or MCM Extender traits), send JIP's close handlers
+/// for `menus::START`, and reset [`ModsPage`] [design: issue #3916].
+pub fn close(game: &mut fnv_game::Game<'_>, page: &mut ModsPage) {
+    if let Some(root) = game.ui_tree.menu(START_MENU) {
+        game.ui_tree.unload_tile(root);
+    }
+    game.page_menu_event(menus::START, false);
+    *page = ModsPage::default();
+}
+
 /// One frame of the start menu's scripts under the Mods page: the column made ready
 /// ([`prepare_column`]), MCM's trigger clicked at [`CLICK_AT`] if its window is not open,
 /// then only the `MenuMode 1013` blocks run (`Game::page_tick`; no GameMode block, no game
@@ -168,7 +180,9 @@ pub fn tick(game: &mut fnv_game::Game<'_>, page: &mut ModsPage) {
     let open = |ui: &Ui| ui.get_float(&format!("{MCM}/_Menu")) == Some(1.0);
     // The click is held until MCM's window is open, at most [`CLICK_FOR`] frames: MCM skips
     // a click in the frame after it reset itself (its `_UnClick`) [observed: MCM's script
-    // source; the original opened with `_clicked` left at 1, menu-xml.md §10.1].
+    // source; the original opened with `_clicked` left at 1, menu-xml.md §10.1]. Keep
+    // asserting `1.0` while holding so `_UnClick` re-evaluations do not drop the held click
+    // before MCM opens [design: issue #3916].
     let clicked = format!("{MCM_TRIGGER}/_clicked");
     if click_now(page, ui.find_tile(MCM_TRIGGER).is_some(), open(ui), listed) {
         ui.set_float(&clicked, 1.0);
@@ -191,6 +205,8 @@ pub fn tick(game: &mut fnv_game::Game<'_>, page: &mut ModsPage) {
         }
         ui.set_float(&clicked, 0.0);
         page.clicking = false;
+    } else if page.clicking {
+        ui.set_float(&clicked, 1.0);
     }
     game.page_tick(menus::START);
     // Let go as soon as the window is open: a click held into the next frame is a second
@@ -266,5 +282,86 @@ mod tests {
         let mut ui = Ui::new();
         ui.load_menu(&added, path).unwrap();
         assert!(available(on, &ui, Some(&added), &mut None));
+    }
+
+    #[test]
+    fn close_unloads_start_menu_before_close_event_and_resets_page() {
+        let mut state = crate::script::ScriptState::over_no_plugins();
+        let game = &mut state.rt.as_mut().unwrap().game;
+        let src = MemSource::default()
+            .with(r"menus\main\hud_main_menu.xml", r#"<menu name="HUDMainMenu"><class>&HUDMainMenu;</class><_CloseVis>0</_CloseVis></menu>"#)
+            .with(r"menus\options\start_menu.xml", r#"<menu name="StartMenu"><class>&StartMenu;</class><visible>1</visible><_MCMExt+Init>1</_MCMExt+Init></menu>"#);
+        game.ui_tree.load_menu(&src, r"menus\main\hud_main_menu.xml").unwrap();
+        game.ui_tree.load_menu(&src, r"menus\options\start_menu.xml").unwrap();
+        game.ui_tree.update();
+        assert!(game.ui_tree.menu(START_MENU).is_some());
+
+        game.run_query(
+            "Begin Function { }\nSetOnMenuCloseEventHandler (begin function {int i}\nSetUIFloat \"HUDMainMenu/_CloseVis\" (GetUIFloatAlt \"StartMenu\\visible\")\nend) 1 1013\nEnd\n",
+            Default::default(),
+        )
+        .unwrap();
+
+        let mut page = ModsPage { frames: 5, mcm_open: true, closed: false, clicking: true, clicked_at: Some(3) };
+        close(game, &mut page);
+
+        assert!(game.ui_tree.menu(START_MENU).is_none(), "StartMenu must be unloaded on close");
+        assert_eq!(page, ModsPage::default(), "ModsPage must reset to default");
+        assert_eq!(
+            game.ui_tree.get_float("HUDMainMenu/_CloseVis"),
+            Some(-999.0),
+            "OnMenuClose 1013 handler must observe StartMenu already unloaded"
+        );
+    }
+
+    #[test]
+    fn held_click_survives_unclick_expression_until_mcm_opens() {
+        let mut state = crate::script::ScriptState::over_no_plugins();
+        let game = &mut state.rt.as_mut().unwrap().game;
+        let src = MemSource::default().with(
+            r"menus\options\start_menu.xml",
+            r#"<menu name="StartMenu">
+                <class>&StartMenu;</class>
+                <rect name="NOGLOW_BRANCH"><rect name="main_container"/></rect>
+                <rect name="MCM">
+                    <_Menu>0</_Menu>
+                    <_UnClick>1</_UnClick>
+                    <hotrect name="MCM_Trigger">
+                        <clicked>0</clicked>
+                        <_clicked>
+                            <sub src="MCM" trait="_UnClick"/>
+                            <add src="me()" trait="clicked"/>
+                            <max>0</max>
+                            <min>1</min>
+                        </_clicked>
+                    </hotrect>
+                </rect>
+            </menu>"#,
+        );
+        game.ui_tree.load_menu(&src, r"menus\options\start_menu.xml").unwrap();
+        game.ui_tree.update();
+
+        // Advance past WAIT_FOR (empty MCMMods) so click_now triggers on CLICK_AT + WAIT_FOR.
+        let mut page = ModsPage { frames: CLICK_AT + WAIT_FOR, ..Default::default() };
+        tick(game, &mut page);
+        assert!(page.clicking);
+        assert_eq!(game.ui_tree.get_float(&format!("{MCM_TRIGGER}/_clicked")), Some(1.0));
+
+        // Simulate MCM flipping _UnClick 1 -> 0 and ui.update() re-evaluating _clicked back to 0.
+        assert!(game.ui_tree.set_float(&format!("{MCM}/_UnClick"), 0.0));
+        game.ui_tree.update();
+        assert_eq!(game.ui_tree.get_float(&format!("{MCM_TRIGGER}/_clicked")), Some(0.0));
+
+        // Next tick must re-assert _clicked = 1.0 while holding until MCM opens.
+        tick(game, &mut page);
+        assert!(page.clicking);
+        assert_eq!(game.ui_tree.get_float(&format!("{MCM_TRIGGER}/_clicked")), Some(1.0));
+
+        // Once MCM opens (_Menu = 1), tick releases the click and marks mcm_open.
+        assert!(game.ui_tree.set_float(&format!("{MCM}/_Menu"), 1.0));
+        tick(game, &mut page);
+        assert!(!page.clicking);
+        assert!(page.mcm_open);
+        assert_eq!(game.ui_tree.get_float(&format!("{MCM_TRIGGER}/_clicked")), Some(0.0));
     }
 }

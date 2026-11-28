@@ -86,7 +86,12 @@ root's ECS `Visibility` synchronized with `Rig::shown`.
 
 - **The clip** [observed]: `pipboy.kf` is one sequence `Pipboy`, 0.7333 s, clamped, with
   text keys `start` 0, `Blend: 8` 0.033, `Hit` 0.333, `end` 0.733. It drives
-  `Camera1st` (a small move, no turn) and both arms from the spine out. Measured on the
+  `Camera1st` (a small move, no turn) and both arms from the spine out. A replacement
+  clip of another length is played on the Pip-Boy's own (vanilla) clock: the raise maps
+  onto its start..`Hit`, the lowering onto `Hit`..its end, and with no `Hit` key the
+  vanilla share of it [design, #4492: a 0.067 s replacement, `Hit` at 0.033, held at
+  0.333 s sat past its end with the arm put away, observed in FadedLight's Nuclear Sunset
+  fork]. Measured on the
   arms rig, the screen's place before the eye through the clip:
 
   | seconds | screen against the eye |
@@ -439,6 +444,15 @@ root's ECS `Visibility` synchronized with `Rig::shown`.
   boxed), 9 rows at once (51 a row in a list 468 high). A row (its box) runs from the
   scroll bar to 5 short of the list's right edge, as the DATA lists' [design: it was the
   Repair page's 393, which ran over the item's figures; owner's screenshot 2026-11-01].
+  - **Ammo the weapon cannot fire is dim** (#3442): a row of ammo the weapon in hand
+    cannot fire is drawn at half brightness; the weapon's other kinds (the slug with the
+    shotgun, the .38 with the .357) stay full, every ammo row is dim with the fists out,
+    and a dim row can still be selected [observed: observer check 288, run 2026-11-22,
+    text colour about half; results on PR #3466]. Ours: `Row::dim` from
+    `FormStore::ammo_choices` of `Combat::player_weapon`, alpha 0.5 in the hand-built list
+    and 128 in the list drawn from the menu file; only in the player's inventory, not in a
+    container's or a trade's columns [design]. Not observed: a holstered weapon (ours
+    treats it as equipped), dropping a dim row or putting it on a hotkey (ours allows both).
   - Added 2026-10-23 (owner's playtest list 7, items 5, 6, 15, 20, 33):
     - **HP** is the STATS page's health out of its whole; **DT** the threshold a hit on
       the player meets (worn armour at its condition plus the Damage Threshold actor
@@ -715,8 +729,8 @@ is the top left 85 × 92 of `head.dds`) [observed].
   The list 500 wide from 40, 100, nine rows [hypothesis: the file's height, 542 from
   100, would reach the tab line]. Reputations: those with fame or infamy [hypothesis],
   the selected one's picture (REPU ICON, zoom 150) and its title by the levels of fame
-  and infamy (Accepted, Liked, Mixed …) [documented: GECK wiki GetReputationThreshold;
-  hypothesis: "Dark Hero" with more infamy, "Soft-Hearted Devil" with more fame], and
+  and infamy, in NVForever's own words (`crate::reputation::TITLES`) [design, #2982;
+  the data holds no title setting], and
   "Fame n, Infamy n" [design]. Statistics: the 43 New Vegas names [documented: GECK wiki
   GetPCMiscStat] in the order of their codes [observed: the owner's screenshot of the
   original's list, 2026-10-14] with their counters (docs/spec-notes/misc-stats.md; "--"
@@ -725,11 +739,16 @@ is the top left 85 × 92 of `head.dds`) [observed].
   [hypothesis: alignments by the globals `KarmaVeryEvil`, `KarmaEvil`, `KarmaGood`,
   `KarmaVeryGood`; pictures `karma_evil`, `_bad`, `_neutral`, `_good`, `_saintly`].
   The karma title is the game setting `sKarmicTitle<Good|Neutral|Evil><level>` (levels
-  1–30, 30 for 30 and over) [observed: FalloutNV.esm holds 50 of the 90, e.g.
-  `sKarmicTitleNeutral1` "Drifter", `sKarmicTitleEvil29` "Demon Spawn"; the rest are
-  presumably the executable's defaults], else the owner's table (`todo 5.txt`,
-  `stats::model::KARMA_TITLES`); Good and Very Good take the good column, Evil and Very
-  Evil the evil one [hypothesis]. The reputation list (the other mode) is the hook for
+  1–30, 30 for 30 and over; levels below 10 spelled with two digits,
+  `sKarmicTitleNeutral01`) [observed: `fnvtool esm inventory`: FalloutNV.esm holds 53 of
+  the 90, levels 1, 2, 9, 11, 13, 15 and 20–30 in each column, 14 for Good and Evil, 28
+  for Neutral and Evil, 8 for Evil; the DLC masters hold none]. The original shows a
+  title at the other levels too, from text that is not in the data, which NVForever
+  does not copy (LEGAL.md; #2983): a level without a setting takes the nearest level
+  below with one in the same column, else the nearest above, and a load order with no
+  title in the column shows the alignment word [design: `fnv_game::karma_titles`]. A
+  `TTW.ini` `[Karma Titles]` entry comes first (ext-small.md). Good and Very Good take
+  the good column, Evil and Very Evil the evil one [hypothesis]. The reputation list (the other mode) is the hook for
   the reputation workstream.
 - **Keys** [design: `engine/nvf-play/src/pipboy.rs::keys`, `stats/mod.rs::keys`]:
   Up/Down choose CND, RAD, EFF; Left/Right step tabs on every view. A/D also step
@@ -1177,7 +1196,7 @@ page's:
 | E inside a Misc folder | The file's Cancel: `Back`. Outside one E does nothing, as on the hand-built page |
 | A right click on a row, no key held | `Hover` then `Drop`, with Shift `DropStack` [owner 2026-11-02, #1393] |
 | A tab | `PipBoyInput::Tab(i)`; the pointer onto it, `TabHovered(i)` |
-| Cancel | `Back` inside a folder, else `Close` |
+| Cancel | `Back` inside a folder; ignored outside one (the button is hidden and does not close the Pip-Boy, #3915) [design] |
 | Equip, Drop (a script's click: not shown) | `One`, `Drop` |
 | Repair, Mod | `RepairInput::Open`, `ModInput::Open` |
 | The bar's arrows, page areas, marker | The list's view, no command of the model's |
@@ -1861,7 +1880,7 @@ is drawn.
 | The widths | the hotrect's `user0` 24, `user1` 56, `user2` 40 | The hand-built page's sizes (§5.3). |
 | The markers the player knows (`known`), by reference | `MapMarkerTemplate` rows under the hotrect, kept by the marker's FormID: `_x`/`_y` (§5.3's projection, each marker by its own worldspace's numbers), `filename` (its icon, `model::marker_icon`), `_selected` (the marker the highlight box is on, the model's pick), `_LocationName`, `_MarkerIndex` | Made once and kept across frames and while the page goes down and up; a marker found or gone adds or unloads its row alone, and a frame whose markers did not change writes none of them (a pan or a zoom writes only the picture). The original makes them every update. |
 | The active quest's targets, by reference; the custom marker | `WorldMapQuestMarkerTemplate` rows under the hotrect: `_x`/`_y`, `filename` (`glow_hud_compass_objective_marker.dds`; the custom marker's `glow_hud_compass_pc_marker.dds` at depth 5) | The custom marker from the quest markers' template [hypothesis: the capture shows it as wide as they are, §5.3]. |
-| The dotted lines (#2054) | `WaypointTemplate` nodes under the hotrect at the arrow (named `WaypointStart`) and at each line's end (`WaypointIcon`); under the start node a `PathLineTemplate` line to each end: `user0` its length at a magnification of 1 (the window's units), `rotateangle` its direction (radians, from the window's x axis, y down) | As the hand-built lines (§5.3); one line per end from the arrow [hypothesis there]. The tile painter turns the line by `rotateangle` about the file's `rotateaxisx`/`rotateaxisy` (its left middle), clockwise with y down, as the hand-built line turns [hypothesis: the sense]. The nodes' and lines' size, `zoom`, `tile` and brightness are the file's (their brightness the arrow's, above). The original's line to the custom marker shows as small separate dots; its node read `width` 17.41, its line `height` 5.804, `rotateangle` 0.377 and -0.01 (radians) and `user0` the line's width plus 4 [observed: a capture of the original's World Map at 1280x720, 2026-11, heading 0]: radians and the length less 4 as here; its nodes are 0.8 of a marker width of 21.76 where NVForever gives 24 (`user0`, the hand-built page's), a known difference. |
+| The dotted lines (#2054) | `WaypointTemplate` nodes under the hotrect at the arrow (named `WaypointStart`) and at each line's end (`WaypointIcon`); under the start node a `PathLineTemplate` line to each end: `user0` its length at a magnification of 1 (the window's units), `rotateangle` its direction (radians, from the window's x axis, y down); each line marked `OUTSIDE_CLIP`, so the map's window cuts it and its node's `clips` does not (#4685: the node's box had cut it to nothing outside the node) | As the hand-built lines (§5.3); one line per end from the arrow [hypothesis there]. The tile painter turns the line by `rotateangle` about the file's `rotateaxisx`/`rotateaxisy` (its left middle), clockwise with y down, as the hand-built line turns [hypothesis: the sense]. The nodes' and lines' size, `zoom`, `tile` and brightness are the file's (their brightness the arrow's, above). The original's line to the custom marker shows as small separate dots; its node read `width` 17.41, its line `height` 5.804, `rotateangle` 0.377 and -0.01 (radians) and `user0` the line's width plus 4 [observed: a capture of the original's World Map at 1280x720, 2026-11, heading 0]: radians and the length less 4 as here; its nodes are 0.8 of a marker width of 21.76 where NVForever gives 24 (`user0`, the hand-built page's), a known difference. |
 | The player's arrow | `MM_WorldMapCursor`: `_x`/`_y`, `rotateangle` the heading and the picture's own angle (radians, clockwise; `data::arrow_turn`, §5.3), `visible` while the player is on this map; `brightness` 255 when it has none | Its place, size and `zoom` (its width × 3.5, which draws `glow_cursor.dds`, 32 × 64 texels with its arrow in the top half, at 1.4 times its texels cut to the box) are the file's; the tile painter turns it about its middle (the file's axis traits). The original's arrow is a sharp triangle [observed: a capture of the original's World Map at 1280x720, 2026-11, heading 0], as this crop draws it. The brightness: the waypoint nodes and the dotted lines copy the arrow's, which the file does not give; a trait a tile does not have reads 0 in the tree while the painter draws a tile without one at 255, so the code gives the arrow 255 while nothing else gave it one (else the copies draw black). |
 | The highlight box, its name and a marker's reputation | `MM_MapHighlightBox`: `x`/`y` its middle on the model's highlight (in its own window's units: the map's window's offset from it added), `visible` 1, `_Title` the name and on a second line the reputation's (`model::reputation_line`) | The model's highlight: at the pointer over the map, else where it was left; on a marker within reach that marker's place [hypothesis there]. |
 | The windows | `MM_WorldMap_ClipWindow/visible`, `MM_Highlight_ClipWindow/visible` 1; the clip windows turned on (`item_menu::mark_menu`) | Put right on every pass. |

@@ -104,7 +104,23 @@ pub(super) fn update(world: &mut World) {
     if world.contains_resource::<PendingEngine>() {
         return;
     }
+    // In co-op a player at 0 Health is down, waiting to be revived: co-op's own rules
+    // decide what follows (`crate::coop_progress`: everyone down loads the last shared
+    // save, a guest down alone its own last save). Recovering here would send a downed
+    // player to the Load menu mid-revive and race the host's shared-save load [design].
+    if world.get_resource::<crate::coop_progress::CoopProgress>().is_some_and(|p| p.role != crate::coop_progress::Role::Solo) {
+        *world.resource_mut::<DeathRecovery>() = DeathRecovery::default();
+        return;
+    }
     let Some(rt) = world.get_resource::<ScriptState>().and_then(|s| s.rt.as_ref()) else { return };
+    // In co-op a player at 0 Health is down, waiting to be revived or to respawn: co-op's
+    // own rules decide what follows (`nvforever`'s `coop.rs` and `coop/revive.rs`, the
+    // downed screen `crate::coop_downed`). Recovering here would send a downed player to
+    // the Load menu mid-revive [design].
+    if rt.game.coop_game {
+        *world.resource_mut::<DeathRecovery>() = DeathRecovery::default();
+        return;
+    }
     let dead = rt.game.is_dead(FormId::PLAYER_REF);
     let delay = rt.game.world.setting_f32(DELAY_SETTING).filter(|v| v.is_finite() && *v >= 0.0).unwrap_or(DEFAULT_DELAY);
     if !dead {
@@ -249,6 +265,27 @@ mod tests {
         assert!(app.world().resource::<DeathRecovery>().handled);
         assert!(app.world().resource::<Paused>().0);
         assert_eq!(app.world().resource::<PageRequest>().0, Some(Page::Load { selected: 0 }));
+    }
+
+    #[test]
+    fn a_player_down_in_coop_is_left_to_coop() {
+        use crate::coop_progress::{CoopProgress, Role};
+        for role in [Role::Host, Role::Guest] {
+            let dir = Scratch::new();
+            let mut app = app(Some(dir.0.clone()), Some(1.0));
+            save(&app, &dir.0, "living", 1, SaveKind::Manual, &body(&app));
+            app.world_mut().insert_resource(CoopProgress { role, ..Default::default() });
+            kill(&mut app);
+            tick(&mut app, 30.0);
+            assert!(requests(&app).is_empty(), "{role:?}");
+            assert!(!app.world().resource::<Paused>().0);
+            assert!(app.world().resource::<PageRequest>().0.is_none());
+            // Back to solo while still dead (the link closed): recovery runs as usual.
+            app.world_mut().resource_mut::<CoopProgress>().role = Role::Solo;
+            tick(&mut app, 0.0);
+            tick(&mut app, 1.5);
+            assert_eq!(requests(&app).len(), 1, "{role:?}");
+        }
     }
 
     #[test]

@@ -13,6 +13,11 @@ use rand_core::RngCore;
 /// that showed it), and a message box without buttons waits for its OK, button 0
 /// (#2925). Duration does nothing [documented: GECK wiki ShowMessage notes].
 pub fn show_message(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
+    // Muted while co-op replays claimed stages: given live already, or a scene for a
+    // player who wasn't there (`crate::coop_joint`) [design].
+    if g.coop_replaying {
+        return none();
+    }
     let m = a.form(0)?;
     let def = g.data.messages.get(&m).ok_or_else(|| format!("{} is not a message", g.data.name(m)))?;
     // SetMessageFlags' Message Box bit (`nvse_jip6`).
@@ -21,6 +26,12 @@ pub fn show_message(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> 
     // "A disabled message will never be displayed by the game" [documented:
     // SetMessageDisabled].
     if g.message_disabled(m) {
+        return none();
+    }
+    // A co-op guest is in the host's game: the DLCs' "has been loaded" start messages
+    // its own start quests show are not for it [design]. Its
+    // own save keeps none of this session's quest stages, so it sees them in its own game.
+    if g.coop_guest && g.data.edid_of.get(&m).is_some_and(|e| dlc_start_message(e)) {
         return none();
     }
     // Too few variables for the text: the message does not show [documented: GECK wiki
@@ -64,6 +75,29 @@ pub fn show_message(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> 
         g.queue_corner_message(&shown, &icon, seconds.map_or(crate::nvse_hud::CORNER_SECONDS, f64::from));
     }
     none()
+}
+
+/// The DLC start quests' messages: Dead Money's (NVDLC01LoadedMsg, NVDLC01DownloadMessage),
+/// and NVDLC02-05's LoadMessage01/02 (Honest Hearts, Old World Blues, Lonesome Road, Gun
+/// Runners' Arsenal) [observed: `fnvtool esm inventory` of the five DLC masters].
+pub fn dlc_start_message(edid: &str) -> bool {
+    let e = edid.to_ascii_lowercase();
+    e == "nvdlc01loadedmsg" || e == "nvdlc01downloadmessage" || (e.starts_with("nvdlc0") && !e.contains("reload") && (e.ends_with("loadmessage01") || e.ends_with("loadmessage02")))
+}
+
+#[cfg(test)]
+mod dlc_start_tests {
+    use super::dlc_start_message;
+
+    #[test]
+    fn the_dlc_load_messages_are_known_and_others_are_not() {
+        for e in ["NVDLC01LoadedMsg", "NVDLC01DownloadMessage", "NVDLC02LoadMessage01", "NVDLC02LoadMessage02", "NVDLC03LoadMessage01", "NVDLC04LoadMessage02", "NVDLC05LoadMessage01"] {
+            assert!(dlc_start_message(e), "{e}");
+        }
+        for e in ["NVDLC04ReloadMessage", "NVDLC01ToxicCloudStartMsg", "NVDLC01Gala02ElevatorStartMsg", "VMS21LoadMessage01"] {
+            assert!(!dlc_start_message(e), "{e}");
+        }
+    }
 }
 
 /// The numbers for a message's format specifiers: the arguments after the message. A
@@ -245,20 +279,28 @@ pub fn menu_mode(g: &mut Game, _ctx: &Ctx, a: &Args) -> Result<Value, String> {
 /// `speaker.SayTo target topic [forceSubtitleFlag] [noTargetLookFlag]`: the speaker
 /// says the topic's first line it can say to the target (`Game::say`,
 /// docs/spec-notes/scripts.md §7.7). The two turn to each other while it is said
-/// (`Game::facings`). With `noTargetLookFlag` 1 nobody turns, body or head
-/// (`LineLook::Nobody`): the target is not made to look at the speaker [documented: GECK
-/// wiki SayTo, owner export: "Joe is not forced to look at the speaker"] and the speaker
-/// does not turn to the target either [hypothesis, observer check 218, #2796: the name
-/// reads as "no look at the target", and 22 shipped calls pass it with the player as
-/// target, where the wiki's reading alone would do nothing; Curtis's radio call in the
-/// McCarran tower needs him to keep his back to the player]. The subtitle flag shows the
-/// subtitle even out of hearing, as Say's ForceSubtitles.
+/// (`Game::facings`). With `noTargetLookFlag` 1 the target is not made to look at the
+/// speaker [documented: GECK wiki SayTo, owner export: "Joe is not forced to look at the
+/// speaker"], and the speaker still turns to the target (`LineLook::Speaker`) [observed:
+/// observer check 218, base game 2026-11-25: a standing Ringo turned his body to the
+/// player in about 0.8 s with flag 1 as with flag 0, 3 of 3 and 2 of 2 runs; walking on
+/// his package he turned with neither; #3989]. Curtis keeping his back to the player for
+/// his radio call in the McCarran tower (#2796) is then his package's or idle's, not the
+/// flag's (still open in the check). The subtitle flag shows the subtitle even out of
+/// hearing, as Say's ForceSubtitles.
 pub fn say_to(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
     let speaker = ctx.subject()?;
     let (target, topic) = (a.form(0)?, a.form(1)?);
+    // While co-op replays claimed stages nothing is said (a scene for a player who wasn't
+    // there), but the line the speaker would say still has its effect: its result
+    // scripts run at once (`Game::coop_replay_say_to`, `crate::coop_joint`) [design].
+    if g.coop_replaying {
+        g.coop_replay_say_to(speaker, target, topic);
+        return none();
+    }
     if g.say_by_script(speaker, Some(target), topic, true).is_some() {
         if a.num_or(3, 0.0) != 0.0 {
-            g.set_line_look(speaker, LineLook::Nobody);
+            g.set_line_look(speaker, LineLook::Speaker);
         }
         // forceSubtitleFlag as Say's ForceSubtitles (207 shipped calls pass 1).
         g.set_line_flags(speaker, a.num_or(2, 0.0) != 0.0, false);
@@ -303,6 +345,10 @@ pub fn say(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
 /// head-track and allow-movement in a conversation with the player (the player's
 /// conversation holds the world anyway).
 pub fn start_conversation(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
+    // Muted while co-op replays claimed stages (`crate::coop_joint`) [design].
+    if g.coop_replaying {
+        return none();
+    }
     let speaker = ctx.subject()?;
     let target = a.form(0)?;
     if target != fnv_sim::FormId::PLAYER_REF {
@@ -454,7 +500,7 @@ pub fn show_repair_menu(g: &mut Game, ctx: &Ctx, _a: &Args) -> Result<Value, Str
 /// The No Casino Bet Limit tweak's limit: more than any purse holds [design: docs/design/tweaks.md].
 pub const NO_BET_LIMIT: u32 = 1_000_000;
 
-pub fn show_blackjack_menu(g: &mut Game, _ctx: &Ctx, a: &Args) -> Result<Value, String> {
+pub fn show_blackjack_menu(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
     let casino = a.form(0)?;
     if !g.data.casinos.contains_key(&casino) {
         return Err(format!("{casino} is not a casino"));
@@ -464,7 +510,7 @@ pub fn show_blackjack_menu(g: &mut Game, _ctx: &Ctx, a: &Args) -> Result<Value, 
     // The player's tweak lifts the table's limit [design: docs/design/tweaks.md].
     let max_bet = if g.tweaks.no_max_casino_bet { NO_BET_LIMIT } else { max_bet };
     let max_winnings = a.num_or(3, 0.0).max(0.0) as u32;
-    g.blackjack_requests.push(crate::blackjack::BlackjackRequest { casino, min_bet, max_bet, max_winnings });
+    g.blackjack_requests.push(crate::blackjack::BlackjackRequest { casino, min_bet, max_bet, max_winnings, table: ctx.self_ref });
     none()
 }
 
@@ -473,7 +519,7 @@ pub fn show_blackjack_menu(g: &mut Game, _ctx: &Ctx, a: &Args) -> Result<Value, 
 /// opens it) [documented: GECK wiki ShowRouletteMenuParams; docs/spec-notes/roulette.md
 /// §1]. Left out, the bets run from 1 to 200 (every table's script passes those
 /// [observed]); a max winnings of 0 is the casino's own [hypothesis].
-pub fn show_roulette_menu(g: &mut Game, _ctx: &Ctx, a: &Args) -> Result<Value, String> {
+pub fn show_roulette_menu(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
     let casino = a.form(0)?;
     if !g.data.casinos.contains_key(&casino) {
         return Err(format!("{casino} is not a casino"));
@@ -482,7 +528,7 @@ pub fn show_roulette_menu(g: &mut Game, _ctx: &Ctx, a: &Args) -> Result<Value, S
     let max_bet = (a.num_or(2, 200.0).max(0.0) as u32).max(min_bet);
     let max_bet = if g.tweaks.no_max_casino_bet { NO_BET_LIMIT } else { max_bet };
     let max_winnings = a.num_or(3, 0.0).max(0.0) as u32;
-    g.roulette_requests.push(crate::roulette::RouletteRequest { casino, min_bet, max_bet, max_winnings });
+    g.roulette_requests.push(crate::roulette::RouletteRequest { casino, min_bet, max_bet, max_winnings, table: ctx.self_ref });
     none()
 }
 
@@ -491,7 +537,7 @@ pub fn show_roulette_menu(g: &mut Game, _ctx: &Ctx, a: &Args) -> Result<Value, S
 /// the casino's chips and is not banned there) [documented: GECK wiki
 /// ShowSlotMachineMenuParams; docs/spec-notes/slots.md §1]. Left out, the bets are 1 to 75
 /// [hypothesis: The Tops' machines'].
-pub fn show_slot_machine_menu(g: &mut Game, _ctx: &Ctx, a: &Args) -> Result<Value, String> {
+pub fn show_slot_machine_menu(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
     let casino = a.form(0)?;
     if !g.data.casinos.contains_key(&casino) {
         return Err(format!("{casino} is not a casino"));
@@ -500,7 +546,7 @@ pub fn show_slot_machine_menu(g: &mut Game, _ctx: &Ctx, a: &Args) -> Result<Valu
     let max_bet = (a.num_or(2, 75.0).max(0.0) as u32).max(min_bet);
     let max_bet = if g.tweaks.no_max_casino_bet { NO_BET_LIMIT } else { max_bet };
     let max_winnings = a.num_or(3, 0.0).max(0.0) as u32;
-    g.slots_requests.push(crate::slots::SlotsRequest { casino, min_bet, max_bet, max_winnings });
+    g.slots_requests.push(crate::slots::SlotsRequest { casino, min_bet, max_bet, max_winnings, machine: ctx.self_ref });
     none()
 }
 
@@ -560,13 +606,16 @@ pub fn apply_image_space_modifier(g: &mut Game, _ctx: &Ctx, a: &Args) -> Result<
         return Err(format!("{m} is not an image space modifier"));
     }
     g.apply_image_modifier(m);
+    g.script_image_modifiers.insert(m);
     none()
 }
 
 /// `RemoveImageSpaceModifier modifier`: the modifier leaves the screen [documented: GECK
 /// wiki RemoveImageSpaceModifier, owner export]; nothing happens when it is not on it.
 pub fn remove_image_space_modifier(g: &mut Game, _ctx: &Ctx, a: &Args) -> Result<Value, String> {
-    g.remove_image_modifier(a.form(0)?);
+    let m = a.form(0)?;
+    g.remove_image_modifier(m);
+    g.script_image_modifiers.remove(&m);
     none()
 }
 
@@ -709,6 +758,17 @@ impl TextureSwaps {
         swaps.retain(|(s, _)| *s != shape);
         swaps.push((shape, texture));
         self.generation += 1;
+    }
+
+    /// A co-op guest: draw the host's swap of `on`'s `shape` (names as
+    /// [`texture_swap_names`] gives them) when this game does not have it yet. Whether it
+    /// was new.
+    pub fn follow_host(&mut self, on: fnv_sim::FormId, shape: String, texture: String) -> bool {
+        if self.by_ref.get(&on).is_some_and(|l| l.iter().any(|(s, t)| *s == shape && *t == texture)) {
+            return false;
+        }
+        self.swap(on, shape, texture);
+        true
     }
 
     /// Show `texture` (a path as [`texture_swap_names`] gives it) on the Securitron
@@ -977,6 +1037,9 @@ pub fn set_actor_alpha(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, Strin
 pub fn reset_3d_state(g: &mut Game, ctx: &Ctx, _: &Args) -> Result<Value, String> {
     let on = ctx.subject()?;
     g.anims.reset(on);
+    if let Some(out) = g.coop_effects.as_mut().filter(|o| o.len() < crate::sound::MAX_PENDING) {
+        out.push(crate::sound::CoopEffect::AnimReset(on));
+    }
     none()
 }
 

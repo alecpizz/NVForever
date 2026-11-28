@@ -428,10 +428,10 @@ mod tests {
             }
             Struct { fields }
         };
-        let (mesh, _, stored) = crate::nif_spawn::build_mesh(&block(true)).unwrap();
+        let (mesh, _, stored) = crate::nif_spawn::build_mesh(&block(true)).unwrap().unwrap();
         assert_eq!(stored, StoredArrays { tangents: vec![[0.0, 1.0, 0.0]; 3], bitangents: vec![[1.0, 0.0, 0.0]; 3] });
         assert_eq!(for_mesh(&stored, &mesh).unwrap().tangents, vec![[1.0, 0.0, 0.0, -1.0]; 3]);
-        let (mesh, _, none) = crate::nif_spawn::build_mesh(&block(false)).unwrap();
+        let (mesh, _, none) = crate::nif_spawn::build_mesh(&block(false)).unwrap().unwrap();
         assert_eq!(none, StoredArrays::default());
         assert_eq!(for_mesh(&none, &mesh), Err(Unusable::Absent));
     }

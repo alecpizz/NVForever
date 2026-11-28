@@ -283,7 +283,7 @@ fn draw_lens(commands: &mut Commands, model: &nvf_assets::model::PreparedModel, 
             Projection::Perspective(PerspectiveProjection { fov: 0.1, near: 5.0, far: crate::sky::OUTDOOR_FAR, aspect_ratio: 1.0, ..default() }),
             crate::sky::initial_fog(),
             bevy::core_pipeline::prepass::DepthPrepass,
-            RenderLayers::from_layers(&[0, crate::reflection::WATER_LAYER, crate::decals::DECAL_LAYER]),
+            RenderLayers::from_layers(&[0, crate::reflection::WATER_LAYER, crate::decals::DECAL_LAYER, crate::volumetric_clouds::FLAT_CLOUD_LAYER]),
             (crate::imagespace::ImageSpaceGrade::default(), crate::imagespace::LensGrade),
             Transform::IDENTITY,
         ))

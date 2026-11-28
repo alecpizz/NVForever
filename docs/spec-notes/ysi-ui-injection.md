@@ -43,6 +43,23 @@ No native plugin DLL or C++ source was read.
   against an existing live child of the target name (default `ySIImage`), and returns
   `None` cleanly on blank, missing, or malformed templates without panicking or mutating
   the parent's traits.
+- **Row spacing** [documented: Sorting Icons 1.4b package, `menus/ySI/ySI.xml`: the icon's
+  `<x>` is "set in code", `user0` is the "additional space left between equip square and
+  icon" and `user1` the "additional space left between icon and text"; no yUI/ySI DLL or
+  source consulted]: `ui_ysi::apply_row_icon` puts `ySIImage` at the text's base place plus
+  `_ySISpaceLeft` and moves `ListItemText` right by `_ySISpaceLeft` + `_ySIWidth` +
+  `_ySISpaceRight` (no move for an untagged row with `_ySIBlanks` 0).
+  - A literal `ListItemText/x` keeps its file value in the private `_ysi_base_x` and is
+    written as base plus the move [design].
+  - An expression `ListItemText/x` (VUI+ works it out from the font and the equip square's
+    `_SquarePadding`) keeps the file's operators: they move to `_ysi_base_x` and `x`
+    becomes `_ysi_base_x` plus the private `_ysi_x_shift`, so the expression still follows
+    its sources and the text moves once however often the row is written; a later
+    replacement of `x`'s operators is wrapped again [design]. Before, an expression `x` was
+    left where it was and the icon drew over the name's first letters.
+  - `ui_ysi::remove_row_icon` (icons switched off, `yUI.ini` `bAddInventoryIcons=0`) takes
+    the icon off and puts the text back at its base place [design].
+  - Without `menus/ySI/ySI.xml` none of this runs: rows keep their file traits.
 
 ## 3. Scope boundaries
 

@@ -200,6 +200,14 @@ impl LensSway {
     }
 }
 
+impl AimZoom {
+    /// Zoomed all the way down the sights: `base` unzoomed, `sight` on the camera (tests).
+    #[cfg(test)]
+    pub(crate) fn down_the_sights(base: f32, sight: f32) -> AimZoom {
+        AimZoom { blend: 1.0, aimed: true, sight: Some(sight), base: Some(base), main: 1.0, applied: Some(sight), told: true, ..AimZoom::default() }
+    }
+}
+
 pub struct AimZoomPlugin;
 
 impl Plugin for AimZoomPlugin {
@@ -215,7 +223,7 @@ pub(crate) fn zoom(
     control: Res<PlayerControl>,
     anim: Res<WeaponAnim>,
     combat: Option<Res<Combat>>,
-    free: Option<Res<FreeCam>>,
+    (free, photo): (Option<Res<FreeCam>>, Option<Res<crate::photo_mode::PhotoMode>>),
     mut z: ResMut<AimZoom>,
     mut scope: ResMut<Scope>,
     lens: Res<Scope3d>,
@@ -235,7 +243,7 @@ pub(crate) fn zoom(
         z.base = Some(seen);
         z.applied = None;
     }
-    let playing = *state.get() == PlayState::Playing && !free.is_some_and(|f| f.on);
+    let playing = *state.get() == PlayState::Playing && !free.is_some_and(|f| f.on) && !photo.as_deref().is_some_and(|p| p.on);
     // A reload or a jam holds the sights down (`combat::sights_held_down`): the zoom and a
     // scope go, and come back after it while Block is still held.
     let sight = combat.as_deref().filter(|c| !c.player_sights_held_down()).and_then(Combat::sight_fov).filter(|_| playing && control.aiming && control.weapon_out && anim.ready);
@@ -263,18 +271,24 @@ pub(crate) fn zoom(
     // times; without, straight over ZOOM_SECONDS and eased by `zoomed_fov`.
     // Smooth weapon animations switched on or off part-way through a zoom: the other way
     // goes on from where the view is, instead of from the start (review, 2026-11-15).
-    let settled = inertia.as_deref().filter(|i| i.smooth_hands()).map(|i| {
-        if !z.settled_on {
-            let at = zoom_share(z.blend);
-            z.settled.place(at, sight.is_some());
-        }
-        // Weapon Handling's pace (heavier weapons come up slower), else the game's.
-        let v = z.settled.step(sight.is_some(), time.delta_secs().min(0.25), i.aim_seconds(true) * scope_time, i.aim_seconds(false) * scope_time);
-        // `blend` stays the progress the rest reads: 1 only when fully in, 0 only when out.
-        z.blend = if z.settled.is_up() { 1.0 } else if z.settled.is_down() { 0.0 } else { v.clamp(1e-4, 1.0 - 1e-4) };
-        v
-    });
-    if settled.is_none() {
+    // Photo mode holds the zoom where it opened: it closes on the view it opened on.
+    let held = photo.as_deref().is_some_and(|p| p.on);
+    let settled = if held {
+        z.settled_on.then(|| z.settled.value())
+    } else {
+        inertia.as_deref().filter(|i| i.smooth_hands()).map(|i| {
+            if !z.settled_on {
+                let at = zoom_share(z.blend);
+                z.settled.place(at, sight.is_some());
+            }
+            // Weapon Handling's pace (heavier weapons come up slower), else the game's.
+            let v = z.settled.step(sight.is_some(), time.delta_secs().min(0.25), i.aim_seconds(true) * scope_time, i.aim_seconds(false) * scope_time);
+            // `blend` stays the progress the rest reads: 1 only when fully in, 0 only when out.
+            z.blend = if z.settled.is_up() { 1.0 } else if z.settled.is_down() { 0.0 } else { v.clamp(1e-4, 1.0 - 1e-4) };
+            v
+        })
+    };
+    if !held && settled.is_none() {
         if z.settled_on {
             z.blend = zoom_share_inv(z.settled.value());
         }
@@ -283,7 +297,9 @@ pub(crate) fn zoom(
         let step = time.delta_secs().min(0.25) / seconds;
         z.blend = if sight.is_some() { (z.blend + step).min(1.0) } else { (z.blend - step).max(0.0) };
     }
-    z.settled_on = settled.is_some();
+    if !held {
+        z.settled_on = settled.is_some();
+    }
     // The scope: up at full zoom in first person, down as soon as the aim is let go.
     let scoped = sight.filter(|_| !control.third_person_view()).and_then(|(w, deg)| {
         let stats = combat.as_deref()?.player_stats(w)?;

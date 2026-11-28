@@ -1,0 +1,85 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6d2_set_current_climate_return_zero",
+  "description": "Wave 6D-2 read-only probe confirming SetCurrentClimate does not return the set climate (retSet != rCl2).",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "jip_ln_nvse": "57.30 (5730)",
+    "showoff_nvse": "184"
+  },
+  "batches": [
+    {
+      "id": "w6d2_set_current_climate",
+      "title": "Wave 6D-2: SetCurrentClimate return value",
+      "extender": "JIP LN NVSE 57.30 + ShowOffNVSE 184",
+      "required_plugins": [
+        "jip_nvse.dll",
+        "ShowOffNVSE.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6d2_18_force_set_current_climate_and_isnight",
+          "bucket": "A",
+          "extender": "JIP LN 57.30 + ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/jip-world-12.md",
+          "spec_line": 48,
+          "functions_tested": [
+            "ForceClimate",
+            "SetCurrentClimate",
+            "GetCurrentClimate",
+            "IsNight",
+            "GetMoonTexture",
+            "SetMoonTexture"
+          ],
+          "claim": "Verify ForceClimate, SetCurrentClimate return value (jip-world-12.md:48 [hypothesis: returns the climate set]), IsNight with explicit vs omitted climate indoors (nvse_gaps.rs:1696), and GetMoonTexture/SetMoonTexture phase bounds.",
+          "expected": "Confirm SetCurrentClimate return value, ForceClimate override/clear, IsNight indoors with/without arg, and GetMoonTexture OOB phase 8.",
+          "script_lines": [
+            "ref rCl1 = GetFormFromMod \"FalloutNV.esm\" \"17907\"",
+            "ref rCl2 = GetFormFromMod \"FalloutNV.esm\" \"161242\"",
+            "ref cur0 = GetCurrentClimate",
+            "ref retSet = SetCurrentClimate rCl2",
+            "ref curAftSet = GetCurrentClimate",
+            "ForceClimate rCl1",
+            "ref curFrc = GetCurrentClimate",
+            "ForceClimate",
+            "ref curClr = GetCurrentClimate",
+            "if cur0",
+            "  SetCurrentClimate cur0",
+            "endif",
+            "int nOmit = IsNight",
+            "int nExp = IsNight rCl1",
+            "string_var m0 = GetMoonTexture 0",
+            "string_var m4 = GetMoonTexture 4",
+            "string_var m8 = GetMoonTexture 8",
+            "SetMoonTexture 0 \"Textures\\Sky\\w6d2_moon.dds\"",
+            "string_var m0Set = GetMoonTexture 0",
+            "SetMoonTexture 0 m0",
+            "PrintToConsole \"PROBE|w6d2_18_force_set_current_climate_and_isnight|cur0z=%g|setRet=%g,aftSet=%g,frc=%g,clr=%g|night=%g/%g|m(len0=%g,len4=%g,len8=%g,set=[%z])\" (cur0 == 0) (retSet == rCl2) (curAftSet == rCl2) (curFrc == rCl1) (curClr == 0) nOmit nExp (sv_Length m0) (sv_Length m4) (sv_Length m8) m0Set"
+          ]
+        }
+      ]
+    }
+  ]
+}

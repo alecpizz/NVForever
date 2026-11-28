@@ -890,6 +890,9 @@ where
         });
 
         slab.buffer = Some(new_buffer.clone());
+        let new_bytes = slab.current_slot_capacity as u64 * slab.element_layout.slot_size();
+        let copied = old_buffer.as_ref().map_or(0, |_| slab_to_grow.old_slot_capacity as u64 * slab.element_layout.slot_size());
+        crate::mesh::allocator::nvf_count_slab(new_bytes, copied);
 
         let Some(old_buffer) = old_buffer else { return };
 

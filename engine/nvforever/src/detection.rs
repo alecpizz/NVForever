@@ -160,6 +160,7 @@ pub struct DetectionPlugin;
 impl Plugin for DetectionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DetectionState>()
+            .add_message::<crate::coop::PuppetShot>()
             .add_systems(Update, measure.after(nvf_play::PlaySet::Scripts).before(crate::residents::drive))
             .add_systems(Last, report);
     }
@@ -781,9 +782,11 @@ fn measure(
     mut phys: Option<ResMut<PhysState>>,
     (player, intent, control, location, combat, sky, flashlight): Inputs,
     mut shots: MessageReader<ShotFired>,
-    (mut impacts, mut hits, mut booms): (MessageReader<ImpactFx>, MessageReader<ActorHit>, MessageReader<ExplosionFx>),
+    (mut impacts, mut hits, mut booms, mut puppet_shots): (MessageReader<ImpactFx>, MessageReader<ActorHit>, MessageReader<ExplosionFx>, MessageReader<crate::coop::PuppetShot>),
     (sfx, visuals): (Option<Res<Sfx>>, Option<Res<ShotVisuals>>),
-    actors: Query<Watched>,
+    // Co-op puppets (coop.rs) are other players: on the host, targets as the player is
+    // (their actors' AI is off, so they watch nobody); elsewhere, not measured at all.
+    actors: Query<(Watched, Has<crate::coop::Puppet>)>,
     (point_lights, spot_lights, camera, world): Scene,
     mut gauges: Option<ResMut<nvf_play::sneak_gauges::SneakGauges>>,
     mut cover: Option<ResMut<nvf_play::sound_cover::SoundCover>>,
@@ -792,6 +795,14 @@ fn measure(
     // Shots, heard at the next measurement.
     for s in shots.read() {
         hear_shot(state, combat.as_deref().and_then(|c| c.forms.weapons.get(&s.weapon)), s);
+    }
+    // The other players' shots too (coop.rs), heard as the player's are.
+    for s in puppet_shots.read() {
+        let level = combat.as_deref().and_then(|c| c.forms.weapons.get(&s.weapon)).and_then(|w| w.sound_level.as_deref());
+        let loud = level.map_or(0.0, |l| state.settings.unwrap_or_default().firing_sound(l));
+        let heard = state.shots.entry(s.shooter.0).or_default();
+        *heard = heard.max(loud);
+        state.shot_levels.insert(s.shooter.0, loud);
     }
     let settings_now = state.settings.unwrap_or_default();
     let level = |l: Option<&str>| l.map(|l| settings_now.firing_sound(l));
@@ -907,8 +918,8 @@ fn measure(
     // The drawn bodies (dying or dead), measured from the player's camera alone for
     // GetLineOfSight ([`bodies_seen`]), at the point the camera looks for.
     let mut bodies: Vec<(u32, [f32; 3])> = Vec::new();
-    for (rig, g, vis, dying, corpse, name) in &actors {
-        if !vis.get() {
+    for ((rig, g, vis, dying, corpse, name), puppet) in &actors {
+        if !vis.get() || (puppet && !rt.game.is_coop_actor(FormId(rig.reference))) {
             continue;
         }
         if dying || corpse || rt.game.is_dead(FormId(rig.reference)) {

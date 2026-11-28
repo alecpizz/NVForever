@@ -18,6 +18,7 @@
 // mapping to frequencies are chosen by eye (speedtree.md §6).
 //
 // The fragment shader (leaf cards and billboards, main pass) is Bevy's standard one with
+// the sun's shadow taken outside the crown on leaf cards (NVF_CROWN_SHADOW) and
 // soft cut-out edges where the view is multisampled (SOFT_EDGES; nvf_assets
 // nif_material.rs `soft_edges`).
 
@@ -45,6 +46,9 @@ struct TreeWind {
     motion: vec4<f32>,
     previous_wind: vec4<f32>,
     change_frame: vec4<u32>,
+    // Leaf cards: the crown sphere (local units: centre xyz, radius w) for the sun's
+    // shadow (NVF_CROWN_SHADOW); zero elsewhere.
+    crown: vec4<f32>,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> tree_wind: TreeWind;
@@ -150,7 +154,15 @@ fn vertex(vertex: Vertex) -> VertexOutput {
         }
         out.previous_world_position = vec4(previous_world, 1.0);
     }
-    @if(!PREPASS_PIPELINE && VERTEX_NORMALS) out.world_normal = mesh_functions::mesh_normal_local_to_world(vertex.normal, vertex.instance_index);
+    @if(!PREPASS_PIPELINE && VERTEX_NORMALS) {
+        var wn = mesh_functions::mesh_normal_local_to_world(vertex.normal, vertex.instance_index);
+        // Canopy shading (Physical lighting): a leaf card's normal bent out toward its
+        // corners, so a card reads as part of a rounded clump [design, #3828's branch].
+        @if(!PREPASS_PIPELINE && TREE_LEAVES && VERTEX_UVS_B && NVF_CANOPY) {
+            wn = normalize(wn + (right * corner.x + up * corner.y) * (0.28 / max(size, 1.0)));
+        }
+        out.world_normal = wn;
+    }
 
     @if(VERTEX_COLORS) out.color = vertex.color;
     @if(VERTEX_OUTPUT_INSTANCE_INDEX) out.instance_index = vertex.instance_index;
@@ -178,6 +190,16 @@ fn fragment(
     // samples it covers and the depth test is for equality: nothing to test here.
     @if(!PREPASS_PIPELINE && PREPASS_COVERAGE) pbr_input.material.base_color.a = 1.0;
     @if(!PREPASS_PIPELINE && !SOFT_EDGES && !PREPASS_COVERAGE) pbr_input.material.base_color = alpha_discard(pbr_input.material.flags, pbr_input.material.alpha_cutoff, pbr_input.material.base_color);
+    // Leaf cards receive no shadows (tree.rs `spawn`); the sun's comes from where its ray
+    // leaves the crown (vendored bevy_pbr pbr_functions.wesl, "crown shadow"), the crown
+    // rocking with the tree.
+    @if(!PREPASS_PIPELINE && NVF_CROWN_SHADOW) {
+        let world_from_local = mesh_functions::get_world_from_local(in.instance_index);
+        let crown = tree_wind.crown.xyz;
+        let centre = mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(crown, 1.0)).xyz
+            + rock(world_from_local, crown, tree_wind.wind, globals.time);
+        pbr_input.nvf_crown = vec4<f32>(centre, tree_wind.crown.w * length(world_from_local[0].xyz));
+    }
     var out: FragmentOutput;
     out.color = apply_pbr_lighting(pbr_input);
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);

@@ -1,0 +1,178 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6d1_aux_timer_stop_deferred_and_self",
+  "description": "Wave 6D-1 strictly read-only console-only clean-room probe catalog verifying ShowOff SetOnAuxTimerStopHandler next-frame deferral and null calling reference (GetSelfAlt == 0) in Start/Stop callbacks.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)",
+    "ShowOffNVSE Plugin": "184",
+    "lStewieAl's Tweaks": "1005"
+  },
+  "batches": [
+    {
+      "id": "w6d1_aux_timer_stop_deferred_and_self",
+      "title": "Wave 6D-1 - ShowOff Aux Timer Stop Handler Deferral and Null Self",
+      "extender": "xNVSE 6.4.9 + JIP LN 57.30 + ShowOffNVSE 184",
+      "required_plugins": [
+        "jip_nvse.dll",
+        "ShowOffNVSE.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6d1p3_27_aux_timer_stop",
+          "bucket": "A",
+          "extender": "ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-showoff.md",
+          "spec_line": 44,
+          "functions_tested": [
+            "SetOnAuxTimerStopHandler",
+            "AuxTimerStart",
+            "AuxTimerStop"
+          ],
+          "claim": "Verify SetOnAuxTimerStopHandler same-frame vs next-frame registration, AuxTimerStop 0 vs 1, GetSelfAlt, name case, owner, and removal timing.",
+          "expected": "Establish same-frame vs next-frame timing, GetSelfAlt, and name case.",
+          "script_lines": [
+            "ref rP = GetFormFromMod \"FalloutNV.esm\" \"14\"",
+            "ref cb = CompileScript \"nvseprobe_s_w6d1p3_27_cb.gek\"",
+            "Player.AuxVarSetRef \"*p3_27_cb\" cb",
+            "Player.AuxVarSetFlt \"*p3_27_n\" 0",
+            "SetOnAuxTimerStopHandler 1 cb \"*W6D1_StopT\" rP",
+            "rP.AuxTimerStart \"*W6D1_StopT\" 10",
+            "rP.AuxTimerStop \"*W6D1_StopT\" 1",
+            "Player.AuxVarSetFlt \"*p3_27_same\" (Player.AuxVarGetFlt \"*p3_27_n\")"
+          ],
+          "wait_ticks_after": 2,
+          "helper_scripts": {
+            "nvseprobe_s_w6d1p3_27_cb.gek": [
+              "begin Function { string_var sNm, ref rOwn }",
+              "Player.AuxVarSetFlt \"*p3_27_n\" ((Player.AuxVarGetFlt \"*p3_27_n\") + 1)",
+              "Player.AuxVarSetStr \"*p3_27_nm\" sNm",
+              "Player.AuxVarSetRef \"*p3_27_own\" rOwn",
+              "Player.AuxVarSetRef \"*p3_27_self\" (GetSelfAlt)"
+            ]
+          },
+          "extra_steps": [
+            {
+              "suffix": "nextframe",
+              "wait_ticks": 0,
+              "script_lines": [
+                "ref rP = GetFormFromMod \"FalloutNV.esm\" \"14\"",
+                "Player.AuxVarSetFlt \"*p3_27_n\" 0",
+                "rP.AuxTimerStart \"*W6D1_StopT\" 10",
+                "rP.AuxTimerStop \"*W6D1_StopT\" 0",
+                "int noev = Player.AuxVarGetFlt \"*p3_27_n\"",
+                "rP.AuxTimerStart \"*W6D1_StopT\" 10",
+                "rP.AuxTimerStop \"*W6D1_StopT\" 1",
+                "int nextN = Player.AuxVarGetFlt \"*p3_27_n\"",
+                "ref cb = Player.AuxVarGetRef \"*p3_27_cb\"",
+                "SetOnAuxTimerStopHandler 0 cb \"*W6D1_StopT\" rP",
+                "Player.AuxVarSetFlt \"*p3_27_n\" 0",
+                "rP.AuxTimerStart \"*W6D1_StopT\" 10",
+                "rP.AuxTimerStop \"*W6D1_StopT\" 1",
+                "int remSame = Player.AuxVarGetFlt \"*p3_27_n\"",
+                "int sameN = Player.AuxVarGetFlt \"*p3_27_same\"",
+                "int s0 = ((Player.AuxVarGetRef \"*p3_27_self\") == 0)",
+                "int sP = ((Player.AuxVarGetRef \"*p3_27_self\") == rP)",
+                "int ownP = ((Player.AuxVarGetRef \"*p3_27_own\") == rP)",
+                "string_var sNm = Player.AuxVarGetStr \"*p3_27_nm\"",
+                "PrintToConsole \"PROBE|w6d1p3_27_aux_timer_stop|same=%g,noev=%g,next=%g,remSame=%g|nm=[%z],ownP=%g,s0=%g,sP=%g\" sameN noev nextN remSame sNm ownP s0 sP"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "w6d1p3_28_aux_timer_start_and_clear",
+          "bucket": "A",
+          "extender": "ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-showoff.md",
+          "spec_line": 183,
+          "functions_tested": [
+            "SetOnAuxTimerStartHandler",
+            "ClearShowoffSavedData"
+          ],
+          "claim": "Verify SetOnAuxTimerStartHandler GetSelfAlt & name case, and ClearShowoffSavedData 0 1 vs 0 2 on temp/public/private aux timers.",
+          "expected": "0 1 clears private perm; 0 2 clears public _; * timer survives.",
+          "script_lines": [
+            "ref rP = GetFormFromMod \"FalloutNV.esm\" \"14\"",
+            "ref cbS = CompileScript \"nvseprobe_s_w6d1p3_28_st.gek\"",
+            "Player.AuxVarSetRef \"*p3_28_cbs\" cbS",
+            "Player.AuxVarSetFlt \"*p3_28_sn\" 0",
+            "SetOnAuxTimerStartHandler 1 cbS \"*W6D1_Tmp\" rP"
+          ],
+          "wait_ticks_after": 2,
+          "helper_scripts": {
+            "nvseprobe_s_w6d1p3_28_st.gek": [
+              "begin Function { string_var sNm, ref rOwn }",
+              "Player.AuxVarSetFlt \"*p3_28_sn\" ((Player.AuxVarGetFlt \"*p3_28_sn\") + 1)",
+              "Player.AuxVarSetStr \"*p3_28_snm\" sNm",
+              "Player.AuxVarSetRef \"*p3_28_ss\" (GetSelfAlt)"
+            ]
+          },
+          "extra_steps": [
+            {
+              "suffix": "clear",
+              "wait_ticks": 0,
+              "script_lines": [
+                "ref rP = GetFormFromMod \"FalloutNV.esm\" \"14\"",
+                "rP.AuxTimerStart \"*W6D1_Tmp\" 60",
+                "rP.AuxTimerStart \"_W6D1_Pub\" 60",
+                "rP.AuxTimerStart \"W6D1_Priv\" 60",
+                "int bTmp = (rP.AuxTimerTimeLeft \"*W6D1_Tmp\") > 0",
+                "int bPub = (rP.AuxTimerTimeLeft \"_W6D1_Pub\") > 0",
+                "int bPriv = (rP.AuxTimerTimeLeft \"W6D1_Priv\") > 0",
+                "ClearShowoffSavedData 0 1",
+                "int c1Tmp = (rP.AuxTimerTimeLeft \"*W6D1_Tmp\") > 0",
+                "int c1Pub = (rP.AuxTimerTimeLeft \"_W6D1_Pub\") > 0",
+                "int c1Priv = (rP.AuxTimerTimeLeft \"W6D1_Priv\") > 0",
+                "ClearShowoffSavedData 0 2",
+                "int c2Tmp = (rP.AuxTimerTimeLeft \"*W6D1_Tmp\") > 0",
+                "int c2Pub = (rP.AuxTimerTimeLeft \"_W6D1_Pub\") > 0",
+                "int c2Priv = (rP.AuxTimerTimeLeft \"W6D1_Priv\") > 0",
+                "rP.AuxTimerStop \"*W6D1_Tmp\" 0",
+                "rP.AuxTimerStop \"_W6D1_Pub\" 0",
+                "rP.AuxTimerStop \"W6D1_Priv\" 0",
+                "SetOnAuxTimerStartHandler 0 (Player.AuxVarGetRef \"*p3_28_cbs\") \"*W6D1_Tmp\" rP",
+                "int sn = Player.AuxVarGetFlt \"*p3_28_sn\"",
+                "string_var snm = Player.AuxVarGetStr \"*p3_28_snm\"",
+                "int sS0 = ((Player.AuxVarGetRef \"*p3_28_ss\") == 0)",
+                "int sSP = ((Player.AuxVarGetRef \"*p3_28_ss\") == rP)",
+                "PrintToConsole \"PROBE|w6d1p3_28_aux_timer_start_and_clear|st(n=%g,nm=[%z],s0=%g,sP=%g)|pre=%g,%g,%g|c1=%g,%g,%g|c2=%g,%g,%g\" sn snm sS0 sSP bTmp bPub bPriv c1Tmp c1Pub c1Priv c2Tmp c2Pub c2Priv"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

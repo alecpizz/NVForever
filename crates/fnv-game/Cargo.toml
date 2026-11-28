@@ -49,6 +49,10 @@ name = "anim_folders"
 path = "tests/anim_folders.rs"
 
 [[test]]
+name = "mo2_mod_files"
+path = "tests/mo2_mod_files.rs"
+
+[[test]]
 name = "build_shortcuts"
 path = "tests/build_shortcuts.rs"
 

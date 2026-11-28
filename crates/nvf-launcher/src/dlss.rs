@@ -82,6 +82,8 @@ pub fn progress_words(p: &Progress) -> (String, Option<f32>) {
 /// The graphics cards of the displays attached to the desktop (EnumDisplayDevicesW's
 /// DeviceString), each once.
 #[cfg(windows)]
+// The Win32 calls (#4592): the crate denies unsafe code everywhere else.
+#[allow(unsafe_code)]
 pub fn gpu_names() -> Vec<String> {
     use windows_sys::Win32::Graphics::Gdi::{EnumDisplayDevicesW, DISPLAY_DEVICEW, DISPLAY_DEVICE_ATTACHED_TO_DESKTOP};
     let mut out: Vec<String> = Vec::new();

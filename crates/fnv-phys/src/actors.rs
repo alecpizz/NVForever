@@ -121,7 +121,7 @@ fn same_parts(a: &[PartCapsule], b: &[PartCapsule]) -> bool {
 }
 
 /// In no group and colliding with none: queries (whose filter has no groups) still see it.
-const NO_CONTACTS: InteractionGroups = InteractionGroups::new(Group::NONE, Group::NONE, InteractionTestMode::And);
+pub(crate) const NO_CONTACTS: InteractionGroups = InteractionGroups::new(Group::NONE, Group::NONE, InteractionTestMode::And);
 
 /// Shapes are rebuilt only when their size changes by more than this, game units.
 const RESIZE: f32 = 0.5;

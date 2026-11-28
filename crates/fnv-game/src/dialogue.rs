@@ -22,7 +22,7 @@
 
 use crate::cond::{CondResult, Operand, RunOn};
 use crate::data::{info_flag, InfoDef};
-use crate::game::{Game, LineKind, LineLook, RunCtx, Speech};
+use crate::game::{Game, LineKind, LineLook, Speech};
 use crate::trace::EventKind;
 use fnv_sim::{clock, FormId};
 use rand_core::RngCore;
@@ -686,7 +686,20 @@ impl<'a> Game<'a> {
     /// A conversation started from a GameMode block holds the rest of that frame's
     /// GameMode scripts, as any menu does. [`Game::menu`] stays as it is: the
     /// conversation is the menu ([`Game::in_menu`], dialogue.md §6).
+    ///
+    /// A co-op host's talk with a story NPC waits for the other players to come near it
+    /// ([`Game::story_gate`]).
     pub fn start_dialogue(&mut self, actor: FormId, topic: Option<FormId>) -> Result<FormId, String> {
+        if self.story_gate(actor) {
+            return Err(format!("{} waits until every player is near", self.data.name(actor)));
+        }
+        self.open_dialogue(actor, topic, false)
+    }
+
+    /// A script's activation of a talker with the player as the activator opens the
+    /// conversation as [`Game::start_dialogue`] does, except that the co-op story gate
+    /// does not hold it: it is the script's scene ([`Game::script_talks`]).
+    pub fn start_script_dialogue(&mut self, actor: FormId, topic: Option<FormId>) -> Result<FormId, String> {
         self.open_dialogue(actor, topic, false)
     }
 
@@ -732,6 +745,22 @@ impl<'a> Game<'a> {
             return Err(format!("{} is unconscious", data.name(actor)));
         }
         let topic = topic.or(data.greeting).ok_or("the load order has no GREETING topic")?;
+        // A co-op guest is spoken to by no script, and greeted by no line (their scripts
+        // could move the quests, which are the host's): its conversation opens on the
+        // choices, which trade, play and change chips only (`crate::coop`).
+        if self.coop_guest {
+            if forced {
+                return Err(format!("{} does not start conversations with a co-op guest", data.name(actor)));
+            }
+            let choices = self.guest_opening(actor, topic);
+            if !choices.iter().any(|c| Some(c.topic) != data.goodbye) {
+                return Err(format!("{} has nothing to trade or play with a co-op guest", data.name(actor)));
+            }
+            let first = choices[0].info;
+            self.dialogue = Some(Conversation { actor, through, line: None, choices, topic_list: true, lines: 0, then: None, ending: false });
+            self.emit(EventKind::DialogueStarted { actor, topic });
+            return Ok(first);
+        }
         let listener = Some(FormId::PLAYER_REF);
         // IsActorTalkingThroughActivator holds while its lines are chosen.
         self.talking_through = through.map(|t| (actor, t));
@@ -795,9 +824,9 @@ impl<'a> Game<'a> {
         // The line is up, whether or not a script of it runs: whoever started it reads it next.
         self.dialogue_transition();
         self.emit_response(actor, def, info, 0);
-        self.run_line_result(actor, def, false);
+        self.run_line_result(actor, def, info, false);
         if def.has(info_flag::RUN_IMMEDIATELY) {
-            self.run_line_result(actor, def, true);
+            self.run_line_result(actor, def, info, true);
         }
         self.jip_dialog_topic(actor, topic, info);
     }
@@ -813,7 +842,7 @@ impl<'a> Game<'a> {
         self.ask_response_idles(actor, Some(FormId::PLAYER_REF), info, r);
     }
 
-    fn run_line_result(&mut self, actor: FormId, def: &InfoDef, end: bool) {
+    fn run_line_result(&mut self, actor: FormId, def: &InfoDef, info: FormId, end: bool) {
         let data = self.data;
         if let Some(u) = if end { def.end } else { def.begin } {
             // An end script runs as the line goes: what it reads is up by then. A begin script
@@ -822,7 +851,11 @@ impl<'a> Game<'a> {
                 self.dialogue_transition();
             }
             self.emit(EventKind::ResultScript { unit: data.unit(u).key(), on: Some(actor) });
-            self.run_result(u, RunCtx { self_ref: Some(actor), action_ref: None, quest: def.quest });
+            // The stages it sets name this line, for joint progression's replay
+            // (`crate::coop_joint::Line`).
+            let outer = self.coop_line.replace((info, end));
+            self.run_info_result(actor, u, def.quest);
+            self.coop_line = outer;
         }
     }
 
@@ -927,7 +960,7 @@ impl<'a> Game<'a> {
         }
         self.emit(EventKind::LineEnded { speaker: actor, info, cut: false });
         if !def.has(info_flag::RUN_IMMEDIATELY) {
-            self.run_line_result(actor, def, true);
+            self.run_line_result(actor, def, info, true);
         }
         for t in self.player.topics.learn(&def.add_topics) {
             self.emit(EventKind::TopicAdded { topic: t, by: Some(info) });
@@ -1152,7 +1185,11 @@ impl<'a> Game<'a> {
         let mut links = self.player_links(topic, def);
         if !def.choices.is_empty() {
             links.sort_by(|a, b| priority(&b.topic).total_cmp(&priority(&a.topic)));
-            let out = self.offer(actor, &links);
+            let mut out = self.offer(actor, &links);
+            // A co-op guest trades, plays and changes chips only (`crate::coop`).
+            if self.coop_guest {
+                out = self.guest_choices(actor, out);
+            }
             return self.itr_menu(actor, out);
         }
         let mut listed: Vec<Link> = dv.top_level().iter().map(|&t| Link { topic: t, from: None }).collect();
@@ -1177,8 +1214,17 @@ impl<'a> Game<'a> {
                 out.extend(self.offer(actor, &[Link { topic: bye, from: None }]));
             }
         }
+        // A co-op guest trades, plays and changes chips only (`crate::coop`).
+        if self.coop_guest {
+            out = self.guest_choices(actor, out);
+        }
         // ITR's hide and order rules and custom entries (`crate::nvse_itr2`).
         self.itr_menu(actor, out)
+    }
+
+    /// The entry for `topic`, if the actor has a line for it ([`Game::offer`]).
+    pub(crate) fn offer_topic(&mut self, actor: FormId, topic: FormId) -> Vec<Choice> {
+        self.offer(actor, &[Link { topic, from: None }])
     }
 
     /// The links of a line ([`Game::links_after`]) that can be offered to the player: its
@@ -1417,9 +1463,11 @@ impl<'a> Game<'a> {
     /// A calculated chance greater than `fSpeechAutoSuccessThreshold` (default 0.9) always
     /// succeeds [documented: same] and is reported as `1.0` [hypothesis]. Each multiplier
     /// factor is floored at `0.0` before multiplication so two negative factors cannot yield
-    /// a positive chance [design]. When `SetDisposition`/`ModDisposition` overrode `actor`'s
-    /// disposition toward the player, that stored value replaces `Actor Disposition + Charisma
-    /// Value` so Charisma is not counted twice [design, matching `functions::actor::get_disposition`].
+    /// a positive chance [hypothesis: not yet probed in the running game]. When
+    /// `SetDisposition`/`ModDisposition` overrode `actor`'s disposition toward the player,
+    /// that stored value replaces `Actor Disposition + Charisma Value` so Charisma is not
+    /// counted twice [hypothesis: not yet probed in the running game; matches
+    /// `functions::actor::get_disposition`].
     pub fn speech_challenge_chance(&mut self, actor: FormId, difficulty: u32) -> f64 {
         let Some(&(diff_gmst, diff_default)) = (difficulty as usize).checked_sub(1).and_then(|i| SPEECH_CHALLENGE_DIFFICULTIES.get(i)) else {
             return 0.0;
@@ -1583,6 +1631,7 @@ impl<'a> Game<'a> {
             force_subtitles: false,
             two_d: false,
             end_ran: def.has(info_flag::RUN_IMMEDIATELY),
+            remote: false,
             leads_on: false,
             through: None,
         });
@@ -1880,6 +1929,38 @@ impl<'a> Game<'a> {
             return;
         }
         end(self, ended::NO_LINKS)
+    }
+
+    /// A line said by SayTo or Say (`said`, its end script and SayToDone blocks run) that
+    /// is a Conversation line with the next speaker Self and no Goodbye flag: the speaker
+    /// goes on with the first line after it in the topic's order that it can say to the
+    /// same listener, said the same way (SayTo or Say) [documented: xEdit wbNextSpeaker,
+    /// the names; hypothesis: what Self means outside a conversation, fit to the data:
+    /// Honest Hearts' arrival at Zion has a Dialogue package say a force-greet topic whose
+    /// first line (Self) ends with no script that says the topic again, and only its
+    /// second line (Goodbye) sets the step the next speaker's goodbye line waits for].
+    /// Nothing is said when a SayToDone block already made the speaker talk again (the
+    /// REPCONN tour's SayToDone blocks say the topic themselves), or when no later line
+    /// can be said. Called in a co-op game only ([`Game::coop_game`]); single player says
+    /// the line alone [design: co-op only].
+    pub(crate) fn continue_own_line(&mut self, said: &Speech) {
+        let data = self.data;
+        let speaker = said.speaker;
+        let Some(def) = data.infos.get(&said.info) else { return };
+        if !between_actors(def) || def.next_speaker != 1 || def.goodbye {
+            return;
+        }
+        if !self.present(speaker) || self.extra.get(&speaker).is_some_and(|e| e.dead) || self.is_talking(speaker) {
+            return;
+        }
+        let lines = data.lines_tried(said.topic);
+        let Some(at) = lines.iter().position(|&i| i == said.info) else { return };
+        let later: Vec<FormId> = lines[at + 1..].to_vec();
+        let listener = said.target.or(Some(FormId::PLAYER_REF));
+        let Some(info) = self.select_among(speaker, listener, &later, &|_: &InfoDef| true, false, Says::Actor) else { return };
+        let kind = if said.say_to { LineKind::SayTo } else { LineKind::Say };
+        self.say_line(speaker, said.target, said.topic, info, kind);
+        self.set_line_look(speaker, said.look);
     }
 
     /// The actor the player is in a conversation with.

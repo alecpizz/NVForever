@@ -10,7 +10,8 @@
 //!   add-on node) at random spots in it, and on about a third of patches a larger one
 //!   (`mps\mpsfiremed01.nif`);
 //! - each starts at [`START_SIZE`] of its size and grows to it over [`GROW_SECS`] (its
-//!   particles' size, `ModelEmitter::size`, and its spray, the holder's scale), and dies
+//!   spray from the holder's scale, and `ModelEmitter::size` dividing out that scale so
+//!   born particles' radius stays linear in the growth share, #3673), and dies
 //!   down over [`SHRINK_SECS`] when the patch burns out;
 //! - on about one patch in six, an orange point light that flickers and grows and dies
 //!   with the flames, at most [`MAX_LIGHTS`];
@@ -131,6 +132,7 @@ fn spawn(commands: &mut Commands, fx: &mut FlameFx, models: &mut ModelCtx, root:
     let (holder, _) = crate::shot_fx::spawn_playing_itself(commands, root, &pm, place, &full);
     let mut emitter = ModelEmitter::new(full);
     emitter.size = size;
+    emitter.scale_radius_with_holder = matches!(path, SMALL_FIRE | MEDIUM_FIRE);
     commands.entity(holder).insert(emitter);
     fx.effects += 1;
     Some(holder)
@@ -184,7 +186,10 @@ fn sync(
                     let at = Vec3::new(c[0] + (bits(shift, 4) - 0.5) * 48.0, c[1] + (bits(shift + 4, 4) - 0.5) * 48.0, z);
                     let size = 0.9 + 0.5 * bits(shift + 8, 4);
                     let place = Transform::from_translation(at).with_rotation(Quat::from_rotation_z(i as f32 * 2.1 + bits(24, 4) * std::f32::consts::TAU)).with_scale(Vec3::splat(START_SIZE));
-                    if let Some(h) = spawn(&mut commands, fx, &mut models, world_root, SMALL_FIRE, place, size * START_SIZE) {
+                    // `particles::emit` multiplies these flames' born radius by the holder's scale
+                    // (`START_SIZE`) as well as `ModelEmitter::size` (#3673), so passing
+                    // `size` keeps the initial radius factor at `size * START_SIZE`.
+                    if let Some(h) = spawn(&mut commands, fx, &mut models, world_root, SMALL_FIRE, place, size) {
                         commands.entity(h).insert(Flame { age: 0.0, out: None, size, scale: 1.0 });
                         made.push(h);
                     }
@@ -193,7 +198,7 @@ fn sync(
                 if r.is_multiple_of(3) {
                     let size = 0.8 + 0.3 * bits(28, 4);
                     let place = Transform::from_translation(Vec3::new(c[0], c[1], z)).with_scale(Vec3::splat(START_SIZE));
-                    if let Some(h) = spawn(&mut commands, fx, &mut models, world_root, MEDIUM_FIRE, place, size * START_SIZE) {
+                    if let Some(h) = spawn(&mut commands, fx, &mut models, world_root, MEDIUM_FIRE, place, size) {
                         commands.entity(h).insert(Flame { age: 0.0, out: None, size, scale: 1.0 });
                         made.push(h);
                     }
@@ -270,8 +275,9 @@ fn animate(
             Some(out) => grown(f.age - out) * (1.0 - out / SHRINK_SECS),
             None => grown(f.age),
         };
-        em.size = f.size * share;
-        t.scale = Vec3::splat(f.scale * (0.35 + 0.65 * share));
+        let (holder_scale, emitter_size) = flame_scales(f.size, f.scale, share);
+        em.size = emitter_size;
+        t.scale = Vec3::splat(holder_scale);
     }
     for (e, mut s, mut em) in &mut smoke {
         s.age += dt;
@@ -302,6 +308,18 @@ fn animate(
     }
 }
 
+/// Holder transform scale (spray) and `ModelEmitter::size` for a grass-fire flame of full
+/// particle factor `size` and full spray scale `scale` at growth `share`.
+///
+/// These emitters opt in to holder scaling. `emitter_size` divides out the holder scale so
+/// the effective born radius factor stays linear (`size * share`) without quadratic
+/// double-scaling [design].
+pub(crate) fn flame_scales(size: f32, scale: f32, share: f32) -> (f32, f32) {
+    let holder = scale * (0.35 + 0.65 * share);
+    let emitter_size = if holder > 1e-6 { (size * share) / holder } else { 0.0 };
+    (holder, emitter_size)
+}
+
 /// How far grown a flame is `age` seconds after it caught: [`START_SIZE`] to 1 over
 /// [`GROW_SECS`], fast at first [chosen].
 fn grown(age: f32) -> f32 {
@@ -330,6 +348,7 @@ fn report(mut exit: MessageReader<AppExit>, fx: Res<FlameFx>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
 
     #[test]
     fn flames_start_small_and_grow() {
@@ -337,5 +356,61 @@ mod tests {
         assert!(grown(GROW_SECS * 0.5) > 0.6);
         assert_eq!(grown(GROW_SECS), 1.0);
         assert_eq!(grown(100.0), 1.0);
+    }
+
+    /// [design, #3673] Grass-fire flames opt in to holder scaling and keep their born radius linear in
+    /// `size * share` across spawn, growth, full burn, shrink, and zero-scale guard.
+    #[test]
+    fn flame_effective_radius_stays_linear_without_double_scaling() {
+        for size in [0.8_f32, 1.15, 1.4] {
+            for scale in [0.5_f32, 1.0, 1.5] {
+                for share in [0.0_f32, START_SIZE, 0.5, 1.0] {
+                    let (holder, em_size) = flame_scales(size, scale, share);
+                    assert!((holder - scale * (0.35 + 0.65 * share)).abs() < 1e-6);
+                    assert!((holder * em_size - size * share).abs() < 1e-5, "size={size} scale={scale} share={share}");
+                }
+            }
+            // Zero-scale guard produces finite zero, never NaN or Inf.
+            let (holder, em_size) = flame_scales(size, 0.0, 0.5);
+            assert_eq!((holder, em_size), (0.0, 0.0));
+        }
+
+        // Real `animate` ECS system check across spawn -> growth -> full -> shrink.
+        let mut world = World::new();
+        world.insert_resource(Time::<()>::default());
+        world.insert_resource(FlameFx { effects: 1, ..default() });
+        let full_size = 1.2_f32;
+        let mut em = ModelEmitter::new(SMALL_FIRE);
+        em.size = full_size;
+        let e = world
+            .spawn((
+                Flame { age: 0.0, out: None, size: full_size, scale: 1.0 },
+                Transform::IDENTITY.with_scale(Vec3::splat(START_SIZE)),
+                em,
+            ))
+            .id();
+        // Spawn state before first animate tick: effective radius factor == full_size * START_SIZE.
+        let spawn_effective = world.get::<Transform>(e).unwrap().scale.x * world.get::<ModelEmitter>(e).unwrap().size;
+        assert!((spawn_effective - full_size * START_SIZE).abs() < 1e-5);
+
+        // Mid-growth (0.5 s) and full burn (2.5 s).
+        for (dt, expected_age) in [(0.5_f32, 0.5_f32), (2.0_f32, 2.5_f32)] {
+            world.resource_mut::<Time>().advance_by(std::time::Duration::from_secs_f32(dt));
+            world.run_system_once(animate).unwrap();
+            let t = world.get::<Transform>(e).unwrap();
+            let em = world.get::<ModelEmitter>(e).unwrap();
+            let share = grown(expected_age);
+            assert!((t.scale.x - (0.35 + 0.65 * share)).abs() < 1e-5, "spray scale preserved");
+            assert!((t.scale.x * em.size - full_size * share).abs() < 1e-5, "effective born radius stays linear");
+        }
+
+        // Shrinking after patch burns out (0.6 s of 1.2 s shrink).
+        world.get_mut::<Flame>(e).unwrap().out = Some(0.0);
+        world.resource_mut::<Time>().advance_by(std::time::Duration::from_secs_f32(0.6));
+        world.run_system_once(animate).unwrap();
+        let t = world.get::<Transform>(e).unwrap();
+        let em = world.get::<ModelEmitter>(e).unwrap();
+        let share = grown(2.5) * (1.0 - 0.6 / SHRINK_SECS);
+        assert!((t.scale.x * em.size - full_size * share).abs() < 1e-5, "shrink radius stays linear");
     }
 }

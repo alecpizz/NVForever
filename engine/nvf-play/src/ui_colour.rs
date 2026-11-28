@@ -208,6 +208,7 @@ struct Drawn {
 fn recolour(
     mut drawn: ResMut<Drawn>,
     roots: Query<Entity, With<crate::pipboy::PipBoyRoot>>,
+    owned: Query<Entity, With<crate::dialogue_touch::PaletteRoot>>,
     children: Query<&Children>,
     mut nodes: Query<(Entity, Option<&mut TextColor>, Option<&mut ImageNode>, Option<&mut BackgroundColor>, Option<&mut BorderColor>), (Or<(With<TextColor>, With<ImageNode>, With<BackgroundColor>, With<BorderColor>)>, Without<crate::pipboy::device_screen::ScreenFxNode>)>,
 ) {
@@ -216,7 +217,13 @@ fn recolour(
         return;
     }
     let pipboy: Vec<Entity> = roots.iter().flat_map(|r| std::iter::once(r).chain(children.iter_descendants(r))).collect();
+    let owned: bevy::ecs::entity::EntityHashSet = owned.iter()
+        .flat_map(|root| std::iter::once(root).chain(children.iter_descendants(root)))
+        .collect();
     for (e, text, image, back, border) in &mut nodes {
+        if owned.contains(&e) {
+            continue;
+        }
         let (old, new) = if pipboy.contains(&e) { (drawn.pipboy, now.pipboy) } else { (drawn.hud, now.hud) };
         if old == new {
             continue;
@@ -246,11 +253,15 @@ fn recolour(
     *drawn = now;
 }
 
+/// Owners with authoritative live palette painting run after generic recolouring.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct Recolour;
+
 pub struct UiColourPlugin;
 
 impl Plugin for UiColourPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(Drawn { hud: hud_rgb(), pipboy: pipboy_rgb() }).init_resource::<CustomColours>().add_systems(Update, recolour.after(crate::PlaySet::Ui).before(crate::PlaySet::Sync));
+        app.insert_resource(Drawn { hud: hud_rgb(), pipboy: pipboy_rgb() }).init_resource::<CustomColours>().add_systems(Update, recolour.in_set(Recolour).after(crate::PlaySet::Ui).before(crate::PlaySet::Sync));
         rows::<0>(
             app,
             "hud-colour",
@@ -343,6 +354,28 @@ mod tests {
         assert_ne!(app.world().get::<BackgroundColor>(hud).unwrap().0, full, "the HUD's takes the new colour");
         assert_eq!(app.world().get::<BackgroundColor>(fx).unwrap().0, full);
         assert_eq!(app.world().get::<ImageNode>(fx).unwrap().color, full);
+    }
+
+    #[test]
+    fn dialogue_owners_keep_their_current_palette_when_hud_retints() {
+        let _palette = crate::interface::colours_at([80, 100, 120], [30, 60, 90]);
+        let mut app = App::new();
+        app.edit_schedule(Update, |schedule| {
+            schedule.set_executor(bevy::ecs::schedule::SingleThreadedExecutor::new());
+        });
+        app.insert_resource(Drawn { hud: [80, 100, 120], pipboy: [30, 60, 90] })
+            .add_systems(Update, recolour);
+        let old = crate::interface::tint([80, 100, 120], 127.5).with_alpha(0.7);
+        let hud = app.world_mut().spawn(TextColor(old)).id();
+        let owner = app.world_mut().spawn(crate::dialogue_touch::PaletteRoot).id();
+        let casing = app.world_mut().spawn((ImageNode { color: old, ..default() }, ChildOf(owner))).id();
+        let screen = app.world_mut().spawn((TextColor(old), ChildOf(casing))).id();
+        set_hud_rgb([40, 50, 60]);
+        set_pipboy_rgb([15, 35, 55]);
+        app.update();
+        assert_eq!(app.world().get::<TextColor>(hud).unwrap().0, retint(old, [80, 100, 120], [40, 50, 60]).unwrap());
+        assert_eq!(app.world().get::<ImageNode>(casing).unwrap().color, old);
+        assert_eq!(app.world().get::<TextColor>(screen).unwrap().0, old);
     }
 
     #[test]

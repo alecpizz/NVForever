@@ -12,11 +12,22 @@
 use crate::game::{Game, Handler};
 use fnv_script::vm::{ArrayKind, XKey, XVal};
 
-/// The events xNVSE knows without a script registering them: the built-in events and
-/// the session events (docs/spec-notes/ext-events.md §2.1–2.2), lower case. Another name
-/// is a user-defined event, which exists once something listens for it: with no handler
-/// it gives ar_Null [observed: nvse-sixth, OnActorEquip 0 entries, an unknown name -1].
-const KNOWN: [&str; 49] = [
+/// The events xNVSE knows without a script registering them: the built-in events, the
+/// session events (docs/spec-notes/ext-events.md §2.1–2.2), and ShowOff's registered
+/// events, lower case. Another name (including `OnCrosshairOn` before registration) is
+/// absent until something listens for it: with no handler it gives ar_Null [observed:
+/// nvse-sixth, OnActorEquip 0 entries, an unknown name -1; observed 2026-11-24: Fallout:
+/// New Vegas 1.4.0.525 + xNVSE 6.4.9 + ShowOffNVSE 184 + JIP LN 57.30, 10 official base
+/// masters, `GSDocMitchellHouse` (`0x00103DF9`), isolated clean-room staging copy
+/// (read-only `PrintToConsole` probe; zero writes to game install or Saves), committed
+/// probe `w6t2_16_xnvse_get_event_handlers_filter_keys`
+/// (`tools/capture/nvse/catalogs/wave6_t2_get_event_handlers.json`):
+/// `PROBE|w6t2_16_xnvse_get_event_handlers_filter_keys|empty(cross=-1,soAdd=0)|std(first,second)|alt(0,1)`
+/// confirming `GetEventHandlers "ShowOff:OnAdd"` returns an empty Map (`ar_Size == 0`)
+/// while `GetEventHandlers "OnCrosshairOn"` returns `ar_Null` (`ar_Size == -1`); zero
+/// DLL, PDB, or third-party source consulted; hypothesis: the other 10 implemented
+/// `ShowOff:*` events are registered with xNVSE the same way as `ShowOff:OnAdd`].
+const KNOWN: [&str; 60] = [
     "onactivate", "onactorequip", "onequip", "onactorunequip", "onunequip", "onadd", "onclose", "onopen",
     "oncombatend", "ondeath", "ondrop", "onhit", "onhitwith", "onload", "onmagiceffecthit", "onmurder",
     "onpackagestart", "onpackagechange", "onpackagedone", "onreset", "onsell", "onstartcombat", "ontrigger",
@@ -24,10 +35,16 @@ const KNOWN: [&str; 49] = [
     "onlockpickbroken", "onterminalhacked", "onterminalhackfailed", "onrepair", "ondisable", "onenable",
     "loadgame", "postloadgame", "savegame", "newgame", "exitgame", "exittomainmenu", "qqq", "runtimescripterror",
     "deletegame", "renamegame", "renamenewgame", "deletegamename", "renamegamename", "renamenewgamename",
+    "showoff:onadd", "showoff:onexplosionhit", "showoff:onpreactivate", "showoff:onprescriptedactivate",
+    "showoff:onpreactivateinventoryitem", "showoff:onpreactivateinventoryitemalt", "showoff:onpovchange",
+    "showoff:oncompleteobjective", "showoff:ondisplayobjective", "showoff:onweaponunholster", "showoff:onfireweapon",
 ];
 
 /// The StringMap of a handler's filters: "first"/"second" for SetEventHandler, the
-/// argument index as text for SetEventHandlerAlt [hypothesis: the keys].
+/// argument index as text ("0"/"1"...) for SetEventHandlerAlt [observed 2026-11-24:
+/// `w6t2_16_xnvse_get_event_handlers_filter_keys`
+/// (`tools/capture/nvse/catalogs/wave6_t2_get_event_handlers.json`):
+/// `std(first,second)|alt(0,1)`; zero DLL, PDB, or third-party source consulted].
 fn filters(g: &mut Game, h: &Handler) -> XVal {
     let entries = h
         .filters
@@ -93,7 +110,8 @@ fn text(args: &[XVal], k: usize) -> String {
 /// The handlers matching GetEventHandlers' filters: event name (any case; "" for all),
 /// handler (0 for any), priority (0 for any).
 fn matching(g: &Game, args: &[XVal]) -> Vec<Handler> {
-    let event = text(args, 0).to_ascii_lowercase();
+    let raw = text(args, 0);
+    let event = if raw.is_empty() { String::new() } else { crate::game::canonical_event_name(&raw) };
     let func = args.get(1).filter(|v| !matches!(v, XVal::Num(x) if *x == 0.0) && !matches!(v, XVal::Ref(0)));
     let prio = match args.get(2) {
         Some(XVal::Num(x)) => *x as i32,
@@ -110,7 +128,7 @@ fn matching(g: &Game, args: &[XVal]) -> Vec<Handler> {
 /// The handler `args[1]` of event `args[0]` at priority `args[2]`, and the others of that
 /// event (`args[3..]`, the scripts and plugins to ignore, are not kept apart here).
 fn around(g: &Game, args: &[XVal]) -> Option<(Handler, Vec<Handler>)> {
-    let event = text(args, 0).to_ascii_lowercase();
+    let event = crate::game::canonical_event_name(&text(args, 0));
     let func = args.get(1)?;
     let prio = match args.get(2) {
         Some(XVal::Num(x)) => *x as i32,
@@ -130,7 +148,7 @@ pub(crate) fn call(g: &mut Game, name: &str, args: &[XVal]) -> Option<Result<XVa
             let event = text(args, 0);
             let prio_filtered = matches!(args.get(2), Some(XVal::Num(x)) if *x != 0.0);
             if !event.is_empty() {
-                let lower = event.to_ascii_lowercase();
+                let lower = crate::game::canonical_event_name(&event);
                 if hs.is_empty() && !KNOWN.contains(&lower.as_str()) && !g.handlers.iter().any(|h| h.event == lower) {
                     XVal::Array(0)
                 } else if prio_filtered {
@@ -175,13 +193,18 @@ pub(crate) fn call(g: &mut Game, name: &str, args: &[XVal]) -> Option<Result<XVa
             }
             None => XVal::Array(0),
         },
-        // First: none at a lower-or-equal priority; last: none at a higher-or-equal one;
-        // 0 when the handler is not at that priority [documented: IsEventHandlerFirst;
-        // IsEventHandlerLast, as the pages word them].
+        // Higher priority runs first; observed for priorities `10, 5a, 5b, 1` and
+        // absent `99`: `10->1/0`, `5a->0/0`, `1->0/1`, `99->0/0`, and equal-priority
+        // keys included in Higher/Lower maps (`k5=hi(1,1),lo(1,1)`) [observed:
+        // 2026-11-24, Fallout: New Vegas 1.4.0.525, xNVSE 6.4.9, JIP LN 57.30,
+        // GSDocMitchellHouse (0x00103DF9), 10 official base masters,
+        // `tools/capture/nvse/catalogs/wave6d1_event_handler_first_last.json` probe
+        // `w6d1p2_01_priority_first_last_higher_lower`; no DLL, PDB, or third-party
+        // source consulted]. Returning 0 on a top/bottom priority tie is [hypothesis].
         "iseventhandlerfirst" | "iseventhandlerlast" => match around(g, args) {
             Some((me, others)) => {
                 let first = name == "iseventhandlerfirst";
-                let none = others.iter().all(|h| if first { h.priority > me.priority } else { h.priority < me.priority });
+                let none = others.iter().all(|h| if first { h.priority < me.priority } else { h.priority > me.priority });
                 XVal::Num(f64::from(u8::from(none)))
             }
             None => XVal::Num(0.0),

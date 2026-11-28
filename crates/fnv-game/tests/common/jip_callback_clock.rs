@@ -167,15 +167,18 @@ fn registration_clocks_are_independent_and_nested_calls_share_one_interval() {
     let mut g = game(&f);
     configure(&mut g);
     register(&mut g, NPC_REF, 1, 1);
-    register(&mut g, 0x14, 3, 1);
-    ticks(&mut g, 6);
-    assert_eq!(read(&mut g, NPC_REF, "count"), 6.0);
+    register(&mut g, 0x14, 5, 1);
+    ticks(&mut g, 10);
+    assert_eq!(read(&mut g, NPC_REF, "count"), 10.0);
     assert_eq!(read(&mut g, 0x14, "count"), 2.0);
     assert_eq!(read(&mut g, NPC_AUTO_REF, "count"), 0.0, "unregistered subject remains untouched");
+    // Both delay=1 and delay=5 callbacks receive the single-frame delta, not accumulated time
+    // across skipped frames (w4g_03_jip_callback_getsecondspassed).
     assert_eq!(read(&mut g, NPC_REF, "elapsed"), 1.0 / 64.0);
-    assert_eq!(read(&mut g, 0x14, "elapsed"), 3.0 / 64.0);
+    assert_eq!(read(&mut g, 0x14, "elapsed"), 1.0 / 64.0);
+    assert_eq!(read(&mut g, NPC_REF, "sum"), 10.0 / 64.0);
+    assert_eq!(read(&mut g, 0x14, "sum"), 2.0 / 64.0);
     for actor in [NPC_REF, 0x14] {
-        assert_eq!(read(&mut g, actor, "sum"), 5.0 / 64.0);
         assert_eq!(read(&mut g, actor, "same"), 0.0);
         assert_eq!(read(&mut g, actor, "nested"), read(&mut g, actor, "elapsed"));
     }
@@ -240,7 +243,7 @@ fn load_removes_flag_eight_and_rebases_only_retained_registration_clocks() {
     ticks(&mut loaded, 1);
     assert_eq!(read(&mut loaded, NPC_REF, "count"), 0.0);
     assert_eq!(read(&mut loaded, 0x14, "count"), 1.0);
-    assert_eq!(read(&mut loaded, 0x14, "elapsed"), 0.0);
+    assert_eq!(read(&mut loaded, 0x14, "elapsed"), 1.0 / 64.0);
     ticks(&mut loaded, 1);
     assert_eq!(read(&mut loaded, 0x14, "elapsed"), 1.0 / 64.0);
 }
@@ -260,8 +263,17 @@ fn ordinary_udfs_results_and_persistent_instance_clocks_keep_their_contracts() {
         neighbor.tick();
         assert_eq!(query(&mut g, 0x14, "Q.fTimer"), query(&mut neighbor, 0x14, "Q.fTimer"));
     }
-    assert_eq!(query(&mut g, NPC_REF, "Call OwnedNested"), 0.0);
-    assert_eq!(query(&mut g, NPC_REF, "GetSecondsPassed"), 0.0);
+    // Ordinary stateless UDFs (direct Call, query UDF, and CallAfterSeconds) observe the
+    // single-frame delta, shared with repeated reads and nested Calls (w4g_03).
+    assert_eq!(query(&mut g, NPC_REF, "Call OwnedNested"), 1.0 / 64.0);
+    assert_eq!(query(&mut g, NPC_REF, "GetSecondsPassed"), 1.0 / 64.0);
+    command(&mut g, NPC_AUTO_REF, "CallAfterSeconds 0.05 OwnedObserve 1");
+    ticks(&mut g, 5);
+    assert_eq!(read(&mut g, NPC_AUTO_REF, "count"), 1.0);
+    assert_eq!(read(&mut g, NPC_AUTO_REF, "elapsed"), 1.0 / 64.0);
+    assert_eq!(read(&mut g, NPC_AUTO_REF, "same"), 0.0);
+    assert_eq!(read(&mut g, NPC_AUTO_REF, "nested"), 1.0 / 64.0);
+    // Result scripts (not UDFs, no persistent instance) still read zero.
     g.run_source("set TestGlobal to GetSecondsPassed", Default::default()).unwrap();
     assert_eq!(g.world.global(FormId(GLOBAL)).unwrap(), 0.0);
     assert!(read(&mut g, NPC_REF, "sum") > 1.0);

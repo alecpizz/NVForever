@@ -1059,6 +1059,9 @@ pub struct GameData {
     /// The name the player sees (FULL) of every winning record that has one.
     pub full_names: HashMap<FormId, String>,
     pub sigs: HashMap<FormId, [u8; 4]>,
+    /// Lazy cache for [`GameData::forms_of_type`], keyed by form type code, populated on
+    /// first query so repeat `GetLoadedTypeArray` calls avoid scanning all `sigs` [design].
+    forms_by_type_cache: std::sync::RwLock<HashMap<i32, Vec<FormId>>>,
     /// The decoded subrecords of the record types JIP's trait getters read
     /// ([`FIELD_SIGS`]; jip-records.md), enums as their numbers, decoded on first use.
     pub record_fields: RecordFields,
@@ -2068,6 +2071,7 @@ impl GameData {
             form_flags,
             full_names: HashMap::new(),
             sigs: HashMap::new(),
+            forms_by_type_cache: std::sync::RwLock::new(HashMap::new()),
             ini_texts: Vec::new(),
             record_fields,
             scripted_by_cell: BTreeMap::new(),
@@ -2564,9 +2568,27 @@ impl GameData {
     }
 
     /// Whether `form` is overridden by at least one plugin after its defining plugin in
-    /// the load order (`IsFormOverridden`).
+    /// the load order.
     pub fn is_form_overridden(&self, form: FormId) -> bool {
         self.form_overrides.get(&form).is_some_and(|v| v.len() > 1)
+    }
+
+    /// Whether `form` is overridden by a plugin loaded after `caller_plugin`
+    /// (`IsFormOverridden` [documented: GECK wiki `IsFormOverridden`, "overridden by a
+    /// plugin lower in the load order than the calling script"]).
+    ///
+    /// Returns `false` when `caller_plugin` is empty or not in `load_order` (runtime
+    /// scripts such as console, `CompileScript`, or Script Runner have no later plugin in
+    /// the load order [observed: `jg_01_form_override_index_edge`, `GetFormOverrideIndex`
+    /// `5` with `IsFormOverridden` `0`]).
+    pub fn is_form_overridden_after(&self, form: FormId, caller_plugin: &str) -> bool {
+        if caller_plugin.is_empty() {
+            return false;
+        }
+        let Some(caller_idx) = self.load_order.iter().position(|l| l.eq_ignore_ascii_case(caller_plugin)) else {
+            return false;
+        };
+        self.form_overrides.get(&form).is_some_and(|v| v.len() > 1 && v.last().copied().is_some_and(|win| usize::from(win) > caller_idx))
     }
 
     /// The load-order index of the winning (last) plugin that defines or overrides
@@ -2616,6 +2638,11 @@ impl GameData {
     /// Fists 1F4, then FalloutNV.esm's WEAP records as the file has them, the last
     /// plugin's last; hypothesis: the low forms' order].
     pub fn forms_of_type(&self, code: i32) -> Vec<FormId> {
+        if let Ok(cache) = self.forms_by_type_cache.read() {
+            if let Some(hit) = cache.get(&code) {
+                return hit.clone();
+            }
+        }
         let mut out: Vec<FormId> = self.sigs.iter().filter(|(_, s)| crate::functions::items::form_type_code(s) == Some(code)).map(|(&f, _)| f).collect();
         out.sort_by_key(|f| {
             if f.0 < 0x800 {
@@ -2627,6 +2654,9 @@ impl GameData {
                 }
             }
         });
+        if let Ok(mut cache) = self.forms_by_type_cache.write() {
+            cache.insert(code, out.clone());
+        }
         out
     }
 

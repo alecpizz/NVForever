@@ -296,6 +296,18 @@ pub fn rank_abilities(def: &crate::data::PerkDef, rank: u8) -> Vec<FormId> {
         .collect()
 }
 
+/// Whether `def` gives at least one Ability at `rank` matching `pred`, without
+/// allocating a `Vec` (mirrors [`rank_abilities`]).
+fn has_rank_ability(def: &crate::data::PerkDef, rank: u8, mut pred: impl FnMut(FormId) -> bool) -> bool {
+    let at = |e: &&PerkEntry| matches!(e.effect, PerkEffect::Ability(s) if s != FormId(0)) && e.rank < rank;
+    let Some(top) = def.entries.iter().filter(at).map(|e| e.rank).max() else { return false };
+    def.entries
+        .iter()
+        .filter(at)
+        .filter(|e| e.rank == top)
+        .any(|e| matches!(e.effect, PerkEffect::Ability(s) if pred(s)))
+}
+
 impl Game<'_> {
     /// The perks `actor` holds, with their ranks: the player's own (traits included); a
     /// teammate of the player holds the teammate perks (`AddPerk perk 1` on the player),
@@ -353,7 +365,7 @@ impl Game<'_> {
         }
         let Some(spells) = self.extra.get(&actor).map(|x| &x.spells).filter(|s| !s.is_empty()) else { return false };
         let data = self.data;
-        self.player.teammate_perks.iter().filter_map(|p| data.perks.get(p)).any(|d| rank_abilities(d, 1).iter().any(|a| spells.contains(a)))
+        self.player.teammate_perks.iter().filter_map(|p| data.perks.get(p)).any(|d| has_rank_ability(d, 1, |a| spells.contains(&a)))
     }
 
     /// The player's perks' abilities follow the perks: an ability of a perk the player

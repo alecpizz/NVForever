@@ -7,6 +7,7 @@ use crate::game::Game;
 use fnv_sim::FormId;
 
 pub use crate::casino::{add_earnings, opening, winnings_level, CasinoDef, Closed};
+
 use rand_chacha::ChaCha8Rng;
 use rand_core::RngCore;
 
@@ -508,11 +509,7 @@ impl Table {
         let live = self.hands.iter().any(|h| !h.bust() && !h.surrendered);
         // The dealer draws only against a hand still standing, and not against a natural.
         if live && !player_natural {
-            while self.dealer.len() < MAX_CARDS {
-                let (t, soft) = total(&self.dealer);
-                if t > 17 || (t == 17 && (!soft || self.rules.stay_soft17)) {
-                    break;
-                }
+            while self.dealer.len() < MAX_CARDS && !dealer_stands(&self.dealer, self.rules.stay_soft17) {
                 self.give(Seat::Dealer, true, ev);
             }
         }
@@ -560,6 +557,13 @@ impl Table {
     }
 }
 
+/// Whether the dealer stands on these cards: over 17, or a hard 17 (a soft one too when
+/// the casino stays on soft 17).
+pub fn dealer_stands(cards: &[Card], stay_soft17: bool) -> bool {
+    let (t, soft) = total(cards);
+    t > 17 || (t == 17 && (!soft || stay_soft17))
+}
+
 /// The help message to show as the menu opens, the first time only (as lockpicking's).
 pub fn first_help(g: &mut Game) -> Option<(String, String)> {
     // The player's tweak: no first-time help [design: docs/design/tweaks.md].
@@ -580,6 +584,8 @@ pub struct BlackjackRequest {
     pub max_bet: u32,
     /// 0: the casino's own.
     pub max_winnings: u32,
+    /// The reference whose script asked (the table activated), if any.
+    pub table: Option<FormId>,
 }
 
 #[cfg(test)]

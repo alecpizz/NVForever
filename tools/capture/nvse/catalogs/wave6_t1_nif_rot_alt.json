@@ -1,0 +1,111 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6_t1_nif_rot_alt",
+  "description": "Wave 6 Tier 1 strictly read-only console-only clean-room probe verifying JIP LN GetNifBlockTranslationAlt and GetNifBlockRotationAlt modes 0..3, missing-node variable preservation, and short aliases.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)",
+    "lStewieAl Tweaks": "1005"
+  },
+  "batches": [
+    {
+      "id": "w6_t1_nif_rot_alt",
+      "title": "Wave 6 Tier 1 - JIP LN GetNifBlockTranslationAlt & GetNifBlockRotationAlt",
+      "extender": "xNVSE 6.4.9 + JIP LN 57.30",
+      "required_plugins": [
+        "jip_nvse.dll"
+      ],
+      "default_wait_ticks": 1,
+      "probes": [
+        {
+          "id": "w6_t1_04_nif_trans_rot_alt",
+          "bucket": "A",
+          "extender": "JIP LN 57.30",
+          "required_plugins": [
+            "jip_nvse.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": false,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/jip-ui-9.md",
+          "spec_line": 55,
+          "functions_tested": [
+            "GetNifBlockTranslationAlt",
+            "GetNifBlockRotationAlt"
+          ],
+          "claim": "Verify GetNifBlockTranslationAlt (local & world, missing node) and GetNifBlockRotationAlt (modes 0/1/2/3, missing node) vs GetNifBlockTranslation / GetNifBlockRotation on Doc Mitchell (0x104C0F) plus short aliases GetNifTransAlt/GetNifRotAlt.",
+          "expected": "1 + exact matching XYZ for existing bone, 0 + unchanged pre-seeded vars for missing node.",
+          "script_lines": [
+            "ref rDoc = GetFormFromMod \"FalloutNV.esm\" \"104C0F\"",
+            "float ox = 111",
+            "float oy = 222",
+            "float oz = 333",
+            "int retT0 = rDoc.GetNifBlockTranslationAlt \"Bip01 Head\" (ox) (oy) (oz) 0",
+            "array_var aTr = rDoc.GetNifBlockTranslation \"Bip01 Head\" 0",
+            "float t0x = aTr[0]",
+            "float t0y = aTr[1]",
+            "float t0z = aTr[2]",
+            "float ltx = ox - t0x",
+            "float lty = oy - t0y",
+            "float ltz = oz - t0z",
+            "int retT1 = rDoc.GetNifBlockTranslationAlt \"Bip01 Head\" (ox) (oy) (oz) 1",
+            "float wtx = ox - (rDoc.GetPos X)",
+            "float wty = oy - (rDoc.GetPos Y)",
+            "float wtz = oz - (rDoc.GetPos Z)",
+            "ox = 111",
+            "oy = 222",
+            "oz = 333",
+            "int retTM = rDoc.GetNifBlockTranslationAlt \"NvfNoSuchNode\" (ox) (oy) (oz) 1",
+            "float mx = ox",
+            "float my = oy",
+            "float mz = oz",
+            "int retR0 = rDoc.GetNifBlockRotationAlt \"Bip01 Head\" (ox) (oy) (oz) 0",
+            "float r0x = ox",
+            "float r0y = oy",
+            "float r0z = oz",
+            "int retR1 = rDoc.GetNifBlockRotationAlt \"Bip01 Head\" (ox) (oy) (oz) 1",
+            "float r1x = ox",
+            "float r1y = oy",
+            "float r1z = oz",
+            "int retR2 = rDoc.GetNifBlockRotationAlt \"Bip01 Head\" (ox) (oy) (oz) 2",
+            "float r2x = ox",
+            "float r2y = oy",
+            "float r2z = oz",
+            "int retR3 = rDoc.GetNifBlockRotationAlt \"Bip01 Head\" (ox) (oy) (oz) 3",
+            "float r3x = ox",
+            "float r3y = oy",
+            "float r3z = oz",
+            "ox = 111",
+            "oy = 222",
+            "oz = 333",
+            "int retRM = rDoc.GetNifBlockRotationAlt \"NvfNoSuchNode\" (ox) (oy) (oz) 0",
+            "float rmx = ox",
+            "float rmy = oy",
+            "float rmz = oz",
+            "int rAliasT = rDoc.GetNifTransAlt \"Bip01 Head\" (ox) (oy) (oz) 0",
+            "int rAliasR = rDoc.GetNifRotAlt \"Bip01 Head\" (ox) (oy) (oz) 0",
+            "string_var s1 = sv_Construct \"t0=%g(d=%.2f,%.2f,%.2f)|t1=%g(rel=%.1f,%.1f,%.1f)|tm=%g(%.0f,%.0f,%.0f)\" retT0 ltx lty ltz retT1 wtx wty wtz retTM mx my mz",
+            "string_var s2 = sv_Construct \"r0=%g(%.1f,%.1f,%.1f)|r1=%g(%.1f,%.1f,%.1f)|r2=%g(%.1f,%.1f,%.1f)|r3=%g(%.1f,%.1f,%.1f)\" retR0 r0x r0y r0z retR1 r1x r1y r1z retR2 r2x r2y r2z retR3 r3x r3y r3z",
+            "string_var s3 = sv_Construct \"rm=%g(%.0f,%.0f,%.0f)|alias=(%g,%g)\" retRM rmx rmy rmz rAliasT rAliasR",
+            "PrintToConsole \"PROBE|w6_t1_04_nif_trans_rot_alt|%z|%z|%z\" s1 s2 s3"
+          ]
+        }
+      ]
+    }
+  ]
+}

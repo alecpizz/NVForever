@@ -33,6 +33,11 @@
 //!   later; it stays black while the player is dead. Real seconds, menus excluded, like
 //!   the blur: the slow motion does not stretch it. It is drawn over the blur and over
 //!   whatever fade a modifier puts on the screen (`imagespace.rs`, as sleeping's fade).
+//! - **In co-op** (`coop.rs` sets [`DeathCam::downed_in_coop`]): the
+//!   player is down, not dead, and waits to be revived or to respawn: no slow motion (the
+//!   host's clock is everyone's world); the blur and the fade to black stay [design: the respawn and revive lines are drawn on the black, `nvf_play::coop_downed`]. Revived, the screen stays black for [`REVIVED_HOLD`]
+//!   ("<name> is reviving you") and comes back over [`REVIVED_FADE`], in time to watch
+//!   the get-up.
 //! - The player alive again (a save loaded, a script resurrecting): the ragdoll leaves
 //!   the world, the body and the view are the player's again and the clock runs at full
 //!   speed.
@@ -76,6 +81,10 @@ pub const BLUR_IN: f32 = 2.5;
 /// seconds and then slowly fade the screen to black"; the duration is chosen as slow].
 pub const FADE_DELAY: f32 = 2.0;
 pub const FADE_SECONDS: f32 = 4.0;
+/// Co-op, revived: real seconds the screen stays as black as it was, then the real
+/// seconds it takes to come back [design: when revived, fade back in to watch the get-up].
+pub const REVIVED_HOLD: f32 = 1.2;
+pub const REVIVED_FADE: f32 = 1.0;
 /// Real seconds the third-person camera takes to turn to the body.
 pub const LOOK_IN: f32 = 0.8;
 /// The camera eases towards where it wants to be at this rate (per real second).
@@ -103,6 +112,10 @@ pub struct DeathCam {
     down: Option<Down>,
     /// Deaths shown, for the exit report.
     deaths: u32,
+    /// Co-op: a death is a downed player (module notes).
+    pub downed_in_coop: bool,
+    /// Co-op: revived, the black the screen had then and the real seconds since.
+    revived: Option<(f32, f32)>,
 }
 
 impl DeathCam {
@@ -127,7 +140,16 @@ impl DeathCam {
 
     /// How black the screen is now, 0 … 1 (`imagespace.rs`).
     pub fn black(&self) -> f32 {
+        if let Some((from, t)) = self.revived {
+            return revived_black(from, t);
+        }
         self.down.as_ref().map_or(0.0, |d| black_at(d.real))
+    }
+
+    /// Co-op: revived, the screen still black ([`REVIVED_HOLD`]): what was said on it
+    /// stays (`coop.rs`).
+    pub fn revived_hold(&self) -> bool {
+        self.revived.is_some_and(|(from, t)| from > 0.0 && t < REVIVED_HOLD)
     }
 }
 
@@ -198,6 +220,12 @@ pub fn black_at(t: f32) -> f32 {
     smoothstep((t - FADE_DELAY) / FADE_SECONDS)
 }
 
+/// Co-op, revived `t` real seconds ago with the screen `from` black: as black for
+/// [`REVIVED_HOLD`], then back over [`REVIVED_FADE`].
+pub fn revived_black(from: f32, t: f32) -> f32 {
+    from * (1.0 - smoothstep((t - REVIVED_HOLD) / REVIVED_FADE))
+}
+
 /// Start the death camera when the player dies, end it when the player lives again, and
 /// keep the clock's slow motion.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -220,6 +248,7 @@ pub(crate) fn watch(
     let cam = &mut *cam;
     match (cam.down.as_mut(), dead) {
         (None, true) => {
+            cam.revived = None;
             let third = control.third_person_view();
             // A pose kept from an earlier death would put the body back at rest there.
             ragdolls.rest.remove(&player);
@@ -237,13 +266,14 @@ pub(crate) fn watch(
                 _ => String::new(),
             };
             info!(
-                "death camera: the player died in {} person: {}; slow motion ×{SLOW} for {SLOW_END:.1} s, blur {BLUR}{played}",
+                "death camera: the player died in {} person: {}; {}, blur {BLUR}{played}",
                 if third { "third" } else { "first" },
                 match (&body, third) {
                     (Some(_), false) => "the body drops as a ragdoll, the view stays on its head",
                     (Some(_), true) => "the body drops as a ragdoll, the camera stays put and looks at it",
                     (None, _) => "no ragdoll for the body, the view sinks to the floor",
-                }
+                },
+                if cam.downed_in_coop { "no slow motion (down in co-op)".to_string() } else { format!("slow motion ×{SLOW} for {SLOW_END:.1} s") }
             );
             cam.deaths += 1;
             cam.down = Some(Down { third, real: 0.0, game: 0.0, body, view: None, last: None, rested: false, fading: false, black: false });
@@ -279,6 +309,14 @@ pub(crate) fn watch(
             }
         }
         (Some(d), false) => {
+            // Down in co-op and revived: the black goes slowly (module notes).
+            if cam.downed_in_coop {
+                let from = black_at(d.real);
+                if from > 0.0 {
+                    cam.revived = Some((from, 0.0));
+                    info!("death camera: revived in co-op with the screen {:.0}% black: it comes back over {REVIVED_FADE:.1} s after {REVIVED_HOLD:.1} s", from * 100.0);
+                }
+            }
             if let Some((root, _)) = d.body {
                 commands.entity(root).remove::<(PlayerRig, Corpse)>();
             }
@@ -289,9 +327,19 @@ pub(crate) fn watch(
             cam.down = None;
             info!("death camera: the player lives again: the body, the view and the clock are the player's");
         }
-        (None, false) => {}
+        (None, false) => {
+            if let Some((_, t)) = cam.revived.as_mut() {
+                if !virt.is_paused() {
+                    *t += real.delta_secs();
+                }
+                if *t >= REVIVED_HOLD + REVIVED_FADE {
+                    cam.revived = None;
+                    info!("death camera: the screen is back after the revive");
+                }
+            }
+        }
     }
-    let want = cam.down.as_ref().map_or(1.0, |d| slow_at(d.real));
+    let want = cam.down.as_ref().filter(|_| !cam.downed_in_coop).map_or(1.0, |d| slow_at(d.real));
     if let Some(s) = scale.as_deref_mut().filter(|s| s.0 != want) {
         s.0 = want;
     }
@@ -321,7 +369,7 @@ fn place_of(a: &Affine3A) -> (Vec3, Quat) {
 }
 
 /// `to`, or short of it in front of what lies between `from` and it (Bevy space).
-fn clear(phys: &mut PhysState, from: Vec3, to: Vec3) -> Vec3 {
+pub(crate) fn clear(phys: &mut PhysState, from: Vec3, to: Vec3) -> Vec3 {
     let d = to - from;
     let len = d.length();
     if len < 1e-3 {
@@ -456,6 +504,15 @@ mod tests {
         assert!(black_at(FADE_DELAY + 1.0) < 0.5);
         assert!((black_at(FADE_DELAY + FADE_SECONDS) - 1.0).abs() < 1e-6);
         assert_eq!(black_at(600.0), 1.0);
+    }
+
+    #[test]
+    fn revived_the_black_holds_then_goes() {
+        assert_eq!(revived_black(1.0, 0.0), 1.0);
+        assert_eq!(revived_black(1.0, REVIVED_HOLD - 0.01), 1.0);
+        assert!(revived_black(1.0, REVIVED_HOLD + REVIVED_FADE / 2.0) < 1.0);
+        assert_eq!(revived_black(1.0, REVIVED_HOLD + REVIVED_FADE), 0.0);
+        assert_eq!(revived_black(0.4, 0.0), 0.4);
     }
 
     #[test]

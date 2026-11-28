@@ -502,6 +502,16 @@ impl<'w, 's> RenderContext<'w, 's> {
         TrackedRenderPass::new(&self.render_device, render_pass)
     }
 
+    /// NVForever split encoders (2026-11-25, engine/vendor/README.md "hosted shadow views"):
+    /// what the system records from here goes into a new command encoder, submitted after
+    /// the one so far. A system's encoders are finished side by side on the compute threads
+    /// (early finish, above), so a system that records much can split what it records and
+    /// not have the submission wait for one long encoder.
+    pub fn nvf_split_encoder(&mut self) {
+        self.end_encoder_span();
+        self.state.flush_encoder();
+    }
+
     /// Adds a finished command buffer to be submitted later.
     pub fn add_command_buffer(&mut self, command_buffer: CommandBuffer) {
         self.end_encoder_span();

@@ -652,6 +652,15 @@ fn typing(
         let name = if rest.is_empty() { "home".to_string() } else { rest.to_ascii_lowercase() };
         match lower.as_str() {
             "cls" | "clear" | "clr" => c.lines.clear(),
+            // Joint progression's debug words (`fnv_game::coop_joint`, coop-shared-progress.md §3.2).
+            "coop.presence" | "coop.ledger" => match script.as_deref().and_then(|s| s.rt.as_ref()) {
+                None => c.print(format!("{head}: scripts are not running")),
+                Some(rt) if lower == "coop.ledger" => rt.game.coop_ledger_lines().into_iter().for_each(|l| c.print(l)),
+                Some(rt) => match fnv_game::functions::console::form(&rt.game, rest) {
+                    Ok(q) => rt.game.coop_presence_lines(q).into_iter().for_each(|l| c.print(l)),
+                    Err(e) => c.print(format!("coop.presence <quest>: {e}")),
+                },
+            },
             "sethome" if c.homes_on => match here {
                 Some(t) => {
                     c.print(format!("Home \"{name}\" set here"));
@@ -862,7 +871,7 @@ fn typing(
             "poker" => match crate::poker::Casino::from_letter(rest) {
                 Some(casino) => {
                     c.print(format!("Opening the poker table at {}", casino.title()));
-                    poker.write(crate::poker::OpenPoker { casino });
+                    poker.write(crate::poker::OpenPoker { casino, table: None });
                     close(&mut c, &mut next, &mut commands, &roots);
                     return;
                 }
@@ -1405,6 +1414,27 @@ fn step_along(along: &[u32], current: u32, by: i32) -> Option<u32> {
     Some(along[(i as i64 + by as i64).rem_euclid(n) as usize])
 }
 
+fn console_root_node(soft_keyboard: bool) -> Node {
+    let mut node = Node {
+        position_type: PositionType::Absolute,
+        left: Val::Px(0.0),
+        width: Val::Percent(100.0),
+        flex_direction: FlexDirection::Column,
+        padding: UiRect::all(Val::Px(8.0)),
+        row_gap: Val::Px(4.0),
+        ..default()
+    };
+    if soft_keyboard {
+        // Keep the console input clear of the bottom ~50% on-screen keyboard on Android.
+        node.top = Val::Percent(4.0);
+        node.max_height = Val::Percent(42.0);
+        node.overflow = Overflow::clip();
+    } else {
+        node.bottom = Val::Px(0.0);
+    }
+    node
+}
+
 fn spawn(commands: &mut Commands, shadow: bool) {
     let font = |size: f32| TextFont { font_size: FontSize::Px(size), ..default() };
     // The player's tweak: the scrollback a darker green over a faint shadow [design: docs/design/tweaks.md].
@@ -1413,16 +1443,7 @@ fn spawn(commands: &mut Commands, shadow: bool) {
     commands.spawn((
         ConsoleRoot,
         PointerState::None,
-        Node {
-            position_type: PositionType::Absolute,
-            left: Val::Px(0.0),
-            bottom: Val::Px(0.0),
-            width: Val::Percent(100.0),
-            flex_direction: FlexDirection::Column,
-            padding: UiRect::all(Val::Px(8.0)),
-            row_gap: Val::Px(4.0),
-            ..default()
-        },
+        console_root_node(cfg!(target_os = "android")),
         BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.72)),
         GlobalZIndex(120),
         children![

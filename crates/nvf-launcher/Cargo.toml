@@ -8,6 +8,24 @@ license.workspace = true
 [[bin]]
 name = "nvforever-launcher"
 path = "src/main.rs"
+required-features = ["desktop"]
+
+[features]
+default = ["desktop"]
+desktop = [
+    "dep:nvf-dlss-files", "dep:uuid", "dep:eframe", "dep:egui_extras", "dep:image",
+    "dep:egui_commonmark", "dep:ureq", "dep:sha2", "dep:zip", "dep:tar", "dep:flate2",
+    "dep:rfd", "dep:windows-sys", "dep:winresource",
+]
+mobile = []
+
+# #4592: unsafe code only where the launcher calls Win32 (display.rs `monitors`, dlss.rs
+# `gpu_names`, each allowed there), and every unsafe block says why it is sound.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
 
 [dependencies]
 fnv-install = { path = "../fnv-install" }
@@ -18,9 +36,9 @@ fnv-util = { path = "../fnv-util" }
 # beside NVForever.ini (src/catalog.rs), so the Settings page is the game's.
 nvf-settings-layout = { path = "../nvf-settings-layout" }
 # DLSS: NVIDIA's licence and the game's own download, checks and folder (src/dlss.rs, #2765).
-nvf-dlss-files = { path = "../nvf-dlss-files" }
+nvf-dlss-files = { path = "../nvf-dlss-files", optional = true }
 # A new install ID after "Delete them now" (src/reports.rs), as the game makes it.
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4"], optional = true }
 serde.workspace = true
 serde_json.workspace = true
 # The window (docs/design/launcher.md): egui through eframe on OpenGL (glow), not wgpu, so
@@ -29,30 +47,30 @@ serde_json.workspace = true
 # `clipboard` is not default-features-false optional: without it egui keeps a copy/paste buffer of
 # its own, so text cannot pass between the launcher and other programs (#3066). egui-winit's
 # clipboard on Linux is arboard (X11) and smithay-clipboard (Wayland); neither brings zbus.
-eframe = { version = "0.37", default-features = false, features = ["clipboard", "default_fonts", "glow", "wayland", "x11"] }
+eframe = { version = "0.37", default-features = false, features = ["clipboard", "default_fonts", "glow", "wayland", "x11"], optional = true }
 # Pictures (the logo, the newest save's thumbnail, news images) through egui's image loader.
-egui_extras = { version = "0.37", default-features = false, features = ["image"] }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+egui_extras = { version = "0.37", default-features = false, features = ["image"], optional = true }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"], optional = true }
 # The news posts are Markdown (the site's and the release notes). MIT/Apache-2.0.
-egui_commonmark = { version = "0.26", default-features = false, features = ["pulldown_cmark", "load-images"] }
+egui_commonmark = { version = "0.26", default-features = false, features = ["pulldown_cmark", "load-images"], optional = true }
 # The news: HTTPS through the system's TLS, as the player reports do (engine/nvforever/Cargo.toml).
-ureq = { version = "3", default-features = false, features = ["native-tls-no-default"] }
+ureq = { version = "3", default-features = false, features = ["native-tls-no-default"], optional = true }
 # The updater (docs/design/launcher.md "Updater", #2713): the release's SHA-256 check, its
 # Windows zip (deflate only: no AES, bzip2, lzma or zstd) and its Linux tar.gz. sha2 as
 # fnv-util has it; flate2 on zlib-rs as fnv-inflate has it. All MIT or MIT/Apache-2.0.
-sha2 = "0.10"
-zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
-tar = { version = "0.4", default-features = false }
-flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+sha2 = { version = "0.10", optional = true }
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"], optional = true }
+tar = { version = "0.4", default-features = false, optional = true }
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"], optional = true }
 
 # The game-folder and program pickers, as the game's first start has them. MIT. Windows only:
 # on Linux rfd's portal backend brings zbus/zvariant (unmaintained, RustSec), so the folder
 # is typed there, as the game's own setup asks for it on Linux (`--data` or `[Game] Path`).
 [target.'cfg(windows)'.dependencies]
-rfd = { version = "0.15", default-features = false, features = ["common-controls-v6"] }
+rfd = { version = "0.15", default-features = false, features = ["common-controls-v6"], optional = true }
 # The displays and their modes for the Resolution and Monitor lists (src/display.rs):
 # EnumDisplayDevicesW / EnumDisplaySettingsW. The version winit already brings. MIT/Apache-2.0.
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi"], optional = true }
 
 [target.'cfg(windows)'.build-dependencies]
-winresource = "0.1"
+winresource = { version = "0.1", optional = true }

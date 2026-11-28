@@ -504,25 +504,38 @@ pub fn global_value(lo: &LoadOrder, schema: &Schema, fid: u32) -> Option<f32> {
     Fields::new(r, pi, schema).ok()?.get(b"FLTV")?.as_f64().map(|v| v as f32)
 }
 
+/// How far outside the climate's sunrise begin and sunset end the night key lies, as a
+/// share of the sunrise's (sunset's) length [hypothesis, fitted: with the Mojave's sunrise
+/// 6:00-8:00 and sunset 18:00-20:00 the original leaves night about 40 minutes before
+/// 6:00 and reaches it about 35 minutes after 20:00. Under Lake Mead, 300 units down, the
+/// picture's red rises evenly from about 5:20 to 8:00 (32 at 5:30, 41, 48, 54, 60 and 67 at
+/// 6:00 to 8:00 by the half hour) and is night again at 20:30; the dusk sky fades to night
+/// from about 19:05 to 20:35 (observer job o35_uw_dawn, 2026-11-27, and world.md §6 "West
+/// sky at dusk"). A third of the 2-hour transitions is 40 minutes].
+pub const NIGHT_KEY_BEYOND: f32 = 1.0 / 3.0;
+
 /// Blend weights for the keyed times of day at `hour` [hypothesis: piecewise linear
-/// between keys: midnight at 0 h, night until sunrise begins, the sunrise colour in the
-/// middle of sunrise, day from its end, high noon at 12 h, day until sunset begins, the
-/// sunset colour in its middle, night from its end, midnight at 24 h. Without the
+/// between keys: midnight at 0 h, night until [`NIGHT_KEY_BEYOND`] of the sunrise's length
+/// before it begins, the sunrise colour in the middle of sunrise, day from its end, high
+/// noon at 12 h, day until sunset begins, the sunset colour in its middle, night from
+/// [`NIGHT_KEY_BEYOND`] of its length after its end, midnight at 24 h. Without the
 /// six-time layout, midnight and high noon fall back to night and day].
 pub fn time_keys(c: &Climate, hour: f32, six: bool) -> [(TimeOfDay, f32); 2] {
     use TimeOfDay::*;
     let (mid, noon) = if six { (Midnight, HighNoon) } else { (Night, Day) };
     let sr_mid = (c.sunrise.0 + c.sunrise.1) / 2.0;
     let ss_mid = (c.sunset.0 + c.sunset.1) / 2.0;
+    let dawn = (c.sunrise.0 - NIGHT_KEY_BEYOND * (c.sunrise.1 - c.sunrise.0).max(0.0)).max(0.0);
+    let dusk = (c.sunset.1 + NIGHT_KEY_BEYOND * (c.sunset.1 - c.sunset.0).max(0.0)).min(24.0);
     let keys = [
         (0.0, mid),
-        (c.sunrise.0, Night),
+        (dawn, Night),
         (sr_mid, Sunrise),
         (c.sunrise.1, Day),
         (12.0, noon),
         (c.sunset.0, Day),
         (ss_mid, Sunset),
-        (c.sunset.1, Night),
+        (dusk, Night),
         (24.0, mid),
     ];
     let h = hour.rem_euclid(24.0);
@@ -1001,6 +1014,14 @@ mod tests {
         assert!(k.iter().any(|&(t, w)| t == TimeOfDay::HighNoon && (w - 1.0).abs() < 1e-6));
         let k = time_keys(&c, 3.0, false);
         assert!(k.iter().all(|&(t, _)| t == TimeOfDay::Night));
+        // The night key lies a third of the transition outside it: with sunrise 6-8 and
+        // sunset 18-20, night until 5:20 and from 20:40; 6:00 is already part of the way.
+        let sr = c.sunrise.0 - NIGHT_KEY_BEYOND * (c.sunrise.1 - c.sunrise.0);
+        let ss = c.sunset.1 + NIGHT_KEY_BEYOND * (c.sunset.1 - c.sunset.0);
+        assert!((weight(time_keys(&c, sr, false), TimeOfDay::Night) - 1.0).abs() < 1e-5);
+        assert!((weight(time_keys(&c, ss, false), TimeOfDay::Night) - 1.0).abs() < 1e-5);
+        assert!(weight(time_keys(&c, c.sunrise.0, false), TimeOfDay::Sunrise) > 0.2);
+        assert!(weight(time_keys(&c, c.sunset.1, false), TimeOfDay::Sunset) > 0.2);
         for h in 0..48 {
             let k = time_keys(&c, h as f32 * 0.5, true);
             assert!((k[0].1 + k[1].1 - 1.0).abs() < 1e-5);

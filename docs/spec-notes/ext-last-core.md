@@ -46,7 +46,16 @@ the HUD captures in hud.md §14 [observed]. Changes last for the session unless 
   `Data\NVSE\user_defined_functions\<path>` compiled into a script that Call runs like a
   UDF, cached by path unless forceRecompile [documented]. Its id is NVForever's own, above
   every plugin's FormIDs [decision, as the lambdas', script-compiler.md §9]. A missing
-  file or a compile error gives no form [hypothesis].
+  file or a compile error returns `00000000` (no form) [observed: Fallout: New Vegas
+  1.4.0.525 + xNVSE 6.4.9, 2026-11-23, `GSDocMitchellHouse` (`0x00103DF9`), 10 official
+  base masters, read-only `PrintToConsole` probes
+  `core_10_compilescript_missing_and_escape`
+  (`tools/capture/nvse/catalogs/wave4a_extenders.json`, #3679):
+  `PROBE|core_10_compilescript_missing_and_escape|00000000,00000000` and
+  `b3_core_ex_02b_compilescript_real_err`
+  (`tools/capture/nvse/catalogs/wave4b_extenders.json`, #3679):
+  `PROBE|b3_core_ex_02b_compilescript_real_err|ref=00000000,valid=0`; no DLL or source
+  consulted].
 - PrintVar / DebugPrintVar (`PrintV`, `DPrintV`) print each variable as `name: value` on a
   line of its own, up to 15; DebugPrintVar only with the calling mod's debug mode on
   [documented: PrintVar, "fMyVariable: 2.5" and "aMyVariable: [2, 4]"; DebugPrintVar]. A

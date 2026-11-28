@@ -321,7 +321,10 @@ fn main(@builtin(global_invocation_id) global_invocation_id: vec3<u32>) {
     let max_depth_ndc = view_z_to_depth_ndc(max_depth_view);
 
     // Are we culled out?
-    if (max_depth_ndc < occluder_depth_ndc) {
+    // NVForever: meshes that opt out of frustum culling opt out of occlusion culling too
+    // (first-person shapes write a squeezed depth that their boxes do not describe).
+    if (max_depth_ndc < occluder_depth_ndc
+            && (current_input[input_index].flags & MESH_FLAGS_NO_FRUSTUM_CULLING_BIT) == 0u) {
 @if(EARLY_PHASE) {
         // If this is the early phase, we need to make a note of this mesh so
         // that we examine it again in the late phase, so that we handle the

@@ -10,6 +10,19 @@ use std::collections::{HashMap, HashSet};
 const MAX_NODES: usize = 4096;
 const MAX_IMAGES: usize = 64;
 
+// Original-game fallback widths for own-image tiles [observed:
+// w4g_09_global_image_metrics_missing, tools/capture/nvse/catalogs/wave4g_f2_extenders.json]:
+// - Missing DDS filenames resolve filewidth to 256.0 on both visible and hidden tiles
+//   (neither 0 nor stale previous width).
+// - Empty filenames ("") substitute "Interface\Shared\empty.dds" with filewidth 1024.0.
+// [hypothesis]: square fileheight == filewidth (256.0 for missing DDS; 1024.0 for empty /
+// Interface\Shared\empty.dds) and recovery to real decoded dimensions when restored after a
+// missing path (the committed catalog probe prints filewidth only on those steps).
+const MISSING_TEXTURE_SIZE: (f64, f64) = (256.0, 256.0);
+const EMPTY_IMAGE_FILENAME: &str = "Interface\\Shared\\empty.dds";
+const EMPTY_IMAGE_KEY: &str = "interface\\shared\\empty.dds";
+const EMPTY_TEXTURE_SIZE: (f64, f64) = (1024.0, 1024.0);
+
 #[derive(Default)]
 pub(super) struct Metrics {
     root: Option<TileId>,
@@ -49,33 +62,39 @@ fn write(ui: &mut Ui, state: &mut Metrics, read: &mut impl FnMut(&str) -> Option
         if images.len() == MAX_IMAGES {
             return Report { limited: true, ..Default::default() };
         }
-        let filename = tile.get("filename").map(Value::text).unwrap_or_default();
-        let filename = filename.trim().replace('/', "\\").to_ascii_lowercase();
+        let raw_filename = tile.get("filename").map(Value::text).unwrap_or_default();
+        let normalized = raw_filename.trim().replace('/', "\\").to_ascii_lowercase();
+        let is_empty = normalized.is_empty();
+        let key = if is_empty { EMPTY_IMAGE_KEY.to_string() } else { normalized };
         let zoom = match tile.get("zoom") {
             None => 100.0,
             Some(Value::Num(n)) if n.is_finite() && *n > 0.0 => *n,
             _ => 0.0,
         };
-        images.push((id, filename, zoom));
+        images.push((id, is_empty, key, zoom));
     }
-    let wanted: HashSet<_> = images.iter().map(|(_, filename, _)| filename.as_str()).collect();
+    let wanted: HashSet<_> = images.iter().map(|(_, _, key, _)| key.as_str()).collect();
     state.dimensions.retain(|name, _| wanted.contains(name.as_str()));
     let mut report = Report { images: images.len(), ..Default::default() };
-    for (id, filename, zoom) in images {
-        let dimensions = *state.dimensions.entry(filename.clone()).or_insert_with(|| {
-            (!filename.is_empty()).then(|| read(&filename)).flatten().filter(|(w,h)| {
-                [*w,*h].into_iter().all(|n| n.is_finite() && n > 0.0)
-            })
+    for (id, is_empty, key, zoom) in images {
+        if is_empty {
+            ui.set_trait(id, "filename", Value::Str(EMPTY_IMAGE_FILENAME.into()));
+        }
+        let dimensions = *state.dimensions.entry(key.clone()).or_insert_with(|| {
+            read(&key).filter(|(w, h)| [*w, *h].into_iter().all(|n| n.is_finite() && n > 0.0))
         });
-        let size = dimensions.map(|(w,h)| (w * zoom / 100.0, h * zoom / 100.0))
-            .filter(|(w,h)| [*w,*h].into_iter().all(f64::is_finite));
-        if size.is_some() { report.resolved += 1; } else { report.unavailable += 1; }
-        // Metadata is read-only in the source UI contract. A missing/unsafe new
-        // filename must not keep the previous picture's positive dimensions.
-        let (w,h) = size.unwrap_or((0.0,0.0));
-        for (name,value) in [("filewidth",w),("fileheight",h)] {
-            if ui.tile(id).get(name).is_none_or(|old| !matches!(old,Value::Num(n) if *n==value)) {
-                ui.set_trait(id,name,Value::Num(value));
+        let (base, is_resolved) = match dimensions {
+            Some(dim) => (dim, true),
+            None if key == EMPTY_IMAGE_KEY => (EMPTY_TEXTURE_SIZE, true),
+            None => (MISSING_TEXTURE_SIZE, false),
+        };
+        let scaled = (base.0 * zoom / 100.0, base.1 * zoom / 100.0);
+        let finite = [scaled.0, scaled.1].into_iter().all(f64::is_finite);
+        if is_resolved && finite { report.resolved += 1; } else { report.unavailable += 1; }
+        let (w, h) = if finite { scaled } else { (0.0, 0.0) };
+        for (name, value) in [("filewidth", w), ("fileheight", h)] {
+            if ui.tile(id).get(name).is_none_or(|old| !matches!(old, Value::Num(n) if *n == value)) {
+                ui.set_trait(id, name, Value::Num(value));
             }
         }
     }
@@ -142,13 +161,43 @@ mod tests {
     }
 
     #[test]
-    fn filename_changes_clear_missing_metrics_and_recover_without_stale_size_or_reads() {
-        let mut ui=ui();let id=calibration(&ui);let mut state=Metrics::default();let reads=std::cell::Cell::new(0);
-        let mut read=|name:&str|{reads.set(reads.get()+1);match name{"calibration.dds"=>Some((512.,512.)),"other.dds"=>Some((256.,128.)),_=>None}};
-        write(&mut ui,&mut state,&mut read);write(&mut ui,&mut state,&mut read);assert_eq!(number(&ui,id,"fileheight"),512.);
-        ui.set_trait(id,"filename",Value::Str("missing.dds".into()));let report=write(&mut ui,&mut state,&mut read);assert_eq!(report.unavailable,1);assert_eq!(number(&ui,id,"fileheight"),0.);
-        ui.set_trait(id,"filename",Value::Str("other.dds".into()));write(&mut ui,&mut state,&mut read);assert_eq!(number(&ui,id,"fileheight"),128.);
-        ui.set_trait(id,"filename",Value::Str(String::new()));write(&mut ui,&mut state,&mut read);assert_eq!(number(&ui,id,"fileheight"),0.);assert_eq!(reads.get(),3);
+    fn filename_changes_use_missing_and_empty_fallbacks_and_recover_without_stale_size_or_reads() {
+        let mut ui = ui();
+        let id = calibration(&ui);
+        let mut state = Metrics::default();
+        let reads = std::cell::Cell::new(0);
+        let mut read = |name: &str| {
+            reads.set(reads.get() + 1);
+            match name {
+                "calibration.dds" => Some((512., 512.)),
+                "other.dds" => Some((256., 128.)),
+                _ => None,
+            }
+        };
+        write(&mut ui, &mut state, &mut read);
+        write(&mut ui, &mut state, &mut read);
+        assert_eq!((number(&ui, id, "filewidth"), number(&ui, id, "fileheight")), (512., 512.));
+        // Missing DDS resolves to 256x256 (neither 0 nor stale 512x512).
+        ui.set_trait(id, "filename", Value::Str("missing.dds".into()));
+        let report = write(&mut ui, &mut state, &mut read);
+        assert_eq!(report.unavailable, 1);
+        assert_eq!((number(&ui, id, "filewidth"), number(&ui, id, "fileheight")), (256., 256.));
+        // Restoring a valid DDS updates back to its real dimensions.
+        ui.set_trait(id, "filename", Value::Str("other.dds".into()));
+        write(&mut ui, &mut state, &mut read);
+        assert_eq!((number(&ui, id, "filewidth"), number(&ui, id, "fileheight")), (256., 128.));
+        // Empty filename substitutes Interface\Shared\empty.dds at 1024x1024 and caches cleanly.
+        ui.set_trait(id, "filename", Value::Str(String::new()));
+        let report = write(&mut ui, &mut state, &mut read);
+        assert_eq!(report.resolved, 1);
+        assert_eq!(ui.tile(id).get("filename").map(Value::text).as_deref(), Some(EMPTY_IMAGE_FILENAME));
+        assert_eq!((number(&ui, id, "filewidth"), number(&ui, id, "fileheight")), (1024., 1024.));
+        assert_eq!(reads.get(), 4);
+        // Subsequent pass with no filename change makes zero additional reads or trait writes.
+        let counts = ui.trait_write_counts();
+        write(&mut ui, &mut state, &mut read);
+        assert_eq!(reads.get(), 4);
+        assert_eq!(ui.trait_write_counts(), counts);
     }
     #[test]
     fn zoom_changes_are_live_finite_and_do_not_read_a_cached_file_again() {
@@ -238,5 +287,92 @@ mod tests {
         assert!(report.limited);
         assert_eq!(overflow.trait_write_counts(), counts);
         assert_eq!(number(&overflow, id, "fileheight"), 73.0);
+    }
+
+    #[test]
+    fn scheduled_runtime_handles_visible_hidden_missing_empty_and_setuistringex_transitions() {
+        let files = Files::new();
+        let source = MemSource::default().with(
+            "menus\\globals.xml",
+            r#"<rect name="Globals">
+                <image name="Vis"><visible>1</visible><filename>calibration.dds</filename></image>
+                <image name="Hid"><visible>0</visible><filename>calibration.dds</filename></image>
+                <image name="InitMiss"><visible>1</visible><filename>interface\__w4g_missing__.dds</filename></image>
+                <image name="InitEmp"><visible>1</visible><filename></filename></image>
+            </rect>"#,
+        );
+        let mut ui = Ui::new();
+        assert!(ui.load_globals(&source));
+        ui.update();
+        let child = |ui: &Ui, name: &str| ui.tile(ui.globals()).children.iter().copied().find(|&id| ui.tile(id).name == name).unwrap();
+
+        let mut script = ScriptState::over_no_plugins();
+        {
+            let game = &mut script.rt.as_mut().unwrap().game;
+            game.ui_tree = ui;
+            game.ui_files = Some(Box::new(MemSource::default()));
+        }
+        fn settle(mut script: ResMut<ScriptState>) { script.rt.as_mut().unwrap().game.ui_tree.update(); }
+        let mut app = App::new();
+        app.init_resource::<Assets<Image>>()
+            .init_resource::<super::super::draw::TileFonts>()
+            .insert_resource(script)
+            .insert_resource(files.data())
+            .add_systems(Update, (update_globals, settle).chain());
+
+        // Tick 1: valid visible & hidden populate 512x512 (M054), init missing -> 256x256,
+        // init empty -> Interface\Shared\empty.dds at 1024x1024.
+        app.update();
+        {
+            let ui = &app.world().resource::<ScriptState>().rt.as_ref().unwrap().game.ui_tree;
+            for name in ["Vis", "Hid"] {
+                let id = child(ui, name);
+                assert_eq!((number(ui, id, "filewidth"), number(ui, id, "fileheight")), (512.0, 512.0), "{name}");
+            }
+            let init_miss = child(ui, "InitMiss");
+            assert_eq!((number(ui, init_miss, "filewidth"), number(ui, init_miss, "fileheight")), (256.0, 256.0));
+            let init_emp = child(ui, "InitEmp");
+            assert_eq!(ui.tile(init_emp).get("filename").map(Value::text).as_deref(), Some(EMPTY_IMAGE_FILENAME));
+            assert_eq!((number(ui, init_emp, "filewidth"), number(ui, init_emp, "fileheight")), (1024.0, 1024.0));
+        }
+
+        // Tick 2: mutate both Vis and Hid to missing DDS -> both update to 256x256 (not 0, not stale 512).
+        {
+            let mut script = app.world_mut().resource_mut::<ScriptState>();
+            let ui = &mut script.rt.as_mut().unwrap().game.ui_tree;
+            for name in ["Vis", "Hid"] {
+                let id = child(ui, name);
+                ui.set_trait(id, "filename", Value::Str("interface\\__w4g_missing__.dds".into()));
+            }
+        }
+        app.update();
+        {
+            let ui = &app.world().resource::<ScriptState>().rt.as_ref().unwrap().game.ui_tree;
+            for name in ["Vis", "Hid"] {
+                let id = child(ui, name);
+                assert_eq!((number(ui, id, "filewidth"), number(ui, id, "fileheight")), (256.0, 256.0), "{name} missing");
+            }
+        }
+
+        // Tick 3: SetUIStringEx "" on Vis -> substitutes Interface\Shared\empty.dds at 1024x1024,
+        // and restoring Hid to calibration.dds recovers 512x512.
+        {
+            let mut script = app.world_mut().resource_mut::<ScriptState>();
+            let game = &mut script.rt.as_mut().unwrap().game;
+            game.run_query(
+                "Begin Function {}\nstring_var sEmp\nlet sEmp := \"\"\nSetUIStringEx \"globals()/Vis/filename\" \"%z\" sEmp\nSetUIString \"globals()/Hid/filename\" \"calibration.dds\"\nEnd\n",
+                Default::default(),
+            )
+            .unwrap();
+        }
+        app.update();
+        {
+            let ui = &app.world().resource::<ScriptState>().rt.as_ref().unwrap().game.ui_tree;
+            let vis = child(ui, "Vis");
+            assert_eq!(ui.tile(vis).get("filename").map(Value::text).as_deref(), Some(EMPTY_IMAGE_FILENAME));
+            assert_eq!((number(ui, vis, "filewidth"), number(ui, vis, "fileheight")), (1024.0, 1024.0));
+            let hid = child(ui, "Hid");
+            assert_eq!((number(ui, hid, "filewidth"), number(ui, hid, "fileheight")), (512.0, 512.0));
+        }
     }
 }

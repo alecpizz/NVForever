@@ -342,6 +342,7 @@ pub fn keys(
     mut sounds: MessageWriter<UiSound>,
     prompt: Res<crate::menu::PromptKeys>,
     modding: Res<super::item_mod::PipItemMod>,
+    mut touch: crate::maintenance_touch::Requests,
     combat: Option<Res<crate::combat::Combat>>,
     mut taken: ResMut<super::KeysTaken>,
 ) {
@@ -349,8 +350,9 @@ pub fn keys(
     // Laid out in the Pip-Boy's screen texture, at its size whatever the UI scale (#1631).
     let _canvas = crate::interface::original_units();
     use KeyCode::*;
-    // [design, #2553] Only physical steps take keys; pointer/aid messages keep their path.
-    let mut steps: Vec<_> = aid.read().copied().map(|s| (s, false)).collect();
+    // Only physical steps take keys; aid and touch requests retain their original paths.
+    let mut steps: Vec<(RepairInput, Option<crate::maintenance_touch::Request>, bool)> = aid.read().copied().map(|s| (s, None, false)).collect();
+    let mobile = touch.take(crate::maintenance_touch::Kind::Repair);
     let items = pip.open() && pip.page == Page::Items && active.0.as_ref().is_some_and(|m| m.mode == Mode::Inventory);
     if !items {
         if repair.0.take().is_some() {
@@ -364,14 +366,41 @@ pub fn keys(
     }
     for (k, s) in [(&[KeyR, KeyR][..], RepairInput::Open), (&[ArrowUp, KeyW], RepairInput::Up), (&[ArrowDown, KeyS], RepairInput::Down), (&[Enter, NumpadEnter, Space], RepairInput::Use), (&[KeyE, Escape], RepairInput::Cancel)] {
         if keys.any_just_pressed(k.iter().copied()) {
-            steps.push((s, true));
+            steps.push((s, None, true));
         }
     }
     let mut script = script.map(|s| s.into_inner());
+    for request in mobile {
+        use crate::maintenance_touch::Action;
+        let step = match request.action { Action::Select(i) => RepairInput::Hover(i), Action::Confirm => RepairInput::Use, Action::Cancel => RepairInput::Cancel, Action::Scroll(_) => RepairInput::Hover(usize::MAX) };
+        steps.push((step, Some(request), false));
+    }
     let alt = keys.any_pressed([AltLeft, AltRight]);
-    for (step, physical) in steps {
+    for (step, request, physical) in steps {
         if physical && (repair.is_open() || step == RepairInput::Open) {
             taken.take();
+        }
+        if let Some(request) = &request {
+            if !crate::maintenance_touch::menu_allows(crate::maintenance_touch::Kind::Repair, script.as_deref().and_then(|s| s.rt.as_ref()).map(|rt| &rt.game)) { continue; }
+            if !request.repair(repair.0.as_ref()) { continue; }
+            // Re-evaluate the actual selected unit and available donors at consumption.
+            // A stale painted offer must never consume a donor for a missing target.
+            let live = current(&active, &mut sim, script.as_deref());
+            if repair.0.as_ref().is_none_or(|s| Some(&s.offer) != live.as_ref()) {
+                if let Some(s) = repair.0.as_mut() {
+                    if let Some(offer) = live { s.offer = offer; s.selected = 0; s.first = 0; } else { repair.0 = None; }
+                }
+                continue;
+            }
+            let skill = script.as_deref_mut().and_then(|s| s.rt.as_mut()).map_or(0.0, |rt| crate::script::with_world(rt, &mut sim, |rt| fnv_game::functions::actor_value_capped(&mut rt.game, FormId::PLAYER_REF, fnv_game::actor_values::REPAIR)) as f32);
+            let settings = MergeSettings::from_settings(|n| sim.forms.setting_f32(n));
+            if let Some(s) = repair.0.as_mut() {
+                if s.skill != skill || s.settings != settings { s.skill = skill; s.settings = settings; continue; }
+            }
+            if let crate::maintenance_touch::Action::Scroll(by) = request.action {
+                if let Some(s) = repair.0.as_mut() { s.first = crate::maintenance_touch::scroll(s.first, by, s.offer.parts.len() + 1); }
+                continue;
+            }
         }
         if let RepairInput::Click(i) = step {
             info!("pipboy repair: clicked row {i}");
@@ -492,6 +521,8 @@ pub fn keys(
                 if let Some(m) = active.0.as_mut() {
                     if let Err(e) = m.refresh(&mut sim.world) {
                         warn!("pipboy repair: the list: {e:?}");
+                    } else if let Some(rt) = script.as_deref_mut().and_then(|s| s.rt.as_mut()) {
+                        crate::menu::sync_ysi_model(m, &mut rt.game);
                     }
                 }
             }
@@ -513,7 +544,7 @@ pub fn hint_word(o: Option<&Offer>) -> (&'static str, bool) {
             };
             (word, o.usable())
         }
-        None => (super::labels::label("sInventoryRepair", "Repair"), false),
+        None => (super::labels::built_in_label("sInventoryRepair"), false),
     }
 }
 
@@ -522,8 +553,8 @@ pub fn hint_word(o: Option<&Offer>) -> (&'static str, bool) {
 pub(crate) fn stat(combat: Option<&crate::combat::Combat>, o: &Offer, condition: f32) -> Option<(&'static str, i32)> {
     let c = combat?;
     match o.gear {
-        Gear::Weapon => c.forms.weapons.get(&o.item).filter(|w| w.base_damage > 0).map(|w| (super::labels::label("sInventoryDamage", "DAM"), (w.base_damage as f32 * fnv_combat::damage::condition_mult(condition)).round() as i32)),
-        Gear::Armor => c.forms.armor.get(&o.item).map(|a| (super::labels::label("sInventoryDamageThreshold", "DT"), (a.dt * fnv_combat::condition::armor_mult(condition)).round() as i32)),
+        Gear::Weapon => c.forms.weapons.get(&o.item).filter(|w| w.base_damage > 0).map(|w| (super::labels::built_in_label("sInventoryDamage"), (w.base_damage as f32 * fnv_combat::damage::condition_mult(condition)).round() as i32)),
+        Gear::Armor => c.forms.armor.get(&o.item).map(|a| (super::labels::built_in_label("sInventoryDamageThreshold"), (a.dt * fnv_combat::condition::armor_mult(condition)).round() as i32)),
     }
 }
 
@@ -578,7 +609,7 @@ pub fn draw_list(p: &mut ChildSpawnerCommands, c: &mut Ctx, s: &Session, combat:
     let cr = Rect::from_corners(MAIN.min + COMPARE.min, MAIN.min + COMPARE.max);
     let half = cr.width() / 2.0;
     let cards = |p: &mut ChildSpawnerCommands, c: &mut Ctx, y: f32, cond: f32| {
-        frame::card(p, c, cr.min.x, y, half - 5.0, super::labels::label("sInventoryCondition", "CND"), "");
+        frame::card(p, c, cr.min.x, y, half - 5.0, super::labels::built_in_label("sInventoryCondition"), "");
         let m = Rect::new(cr.min.x + half - 5.0 - METER.x - 15.0, y + 17.0, cr.min.x + half - 5.0 - 15.0, y + 17.0 + METER.y);
         bar(p, m, cond, bright);
         let (t, v) = stat(combat, o, cond).map_or(("", String::new()), |(t, v)| (t, v.to_string()));

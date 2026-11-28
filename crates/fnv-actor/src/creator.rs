@@ -222,6 +222,23 @@ pub const ASYMMETRY_REACH: f64 = 2.0;
 pub const AGE_LABEL: &str = "Age - young / old";
 pub const MIN_AGE: f64 = 16.0;
 
+impl Creator {
+    /// Raise `look`'s age reading to [`MIN_AGE`] when it is younger, along the age
+    /// control's own directions (as the slider moves it). The reading before, when raised.
+    pub fn adult(&self, look: &mut Look) -> Option<f64> {
+        let sex = usize::from(look.female);
+        let age = self.sliders[sex].iter().find(|s| s.label == AGE_LABEL)?;
+        let race = self.catalogue.race(look.race).and_then(|r| r.facegen[sex].as_ref());
+        let was = age.value(&look.facegen, race);
+        if was >= MIN_AGE {
+            return None;
+        }
+        look.facegen = full(&look.facegen);
+        age.set(&mut look.facegen, race, MIN_AGE);
+        Some(was)
+    }
+}
+
 /// The controls file [observed: `facegen\si.ctl` in `Fallout - Misc.bsa`].
 pub const CTL_PATH: &str = "facegen\\si.ctl";
 

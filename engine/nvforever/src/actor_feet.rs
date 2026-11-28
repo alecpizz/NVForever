@@ -107,6 +107,31 @@ pub fn probe(
     info!("actor feet: {n} actors within {:.0} units of the camera, {lifted} with a foot bone over {LIFTED} units above the root", p.range);
 }
 
+/// The landscape height at game (x, y) in worldspace `world` (FormID), whichever one is
+/// drawn here (a co-op host simulates actors in its guests' worldspaces too).
+pub(crate) fn land_height_in(data: &WorldData, world: u32, x: f32, y: f32) -> Option<f32> {
+    let g = fnv_world::cell_of(x, y);
+    let cell = data.index.worldspaces.get(&world).and_then(|w| w.grid.get(&g)).and_then(|c| data.index.cells.get(c))?;
+    let land = fnv_world::land::load_land(data.lo, data.schema, cell.land?, fnv_world::land::LandParts::HEIGHTS)?;
+    let (ox, oy) = (g.0 as f32 * fnv_world::CELL_SIZE, g.1 as f32 * fnv_world::CELL_SIZE);
+    Some(fnv_world::grass::height_at(land.heights.as_ref()?, x - ox, y - oy))
+}
+
+/// How far below the land an undrawn actor's feet may be before they are put on it, game
+/// units [design: a little more than the land mesh's own error].
+pub const BELOW_LAND: f32 = 32.0;
+
+/// An actor's feet, put on the land when its AI has them under it ([`BELOW_LAND`]). The
+/// host's AI moves actors it does not draw on the navmesh alone, with no collision; where
+/// it has them under the land a guest drew them there, and they fought from there
+/// [observed: buckallobill, in game: lakelurks under the ground killed the guest].
+pub fn on_the_land(feet: [f32; 3], land: Option<f32>) -> [f32; 3] {
+    match land {
+        Some(g) if feet[2] < g - BELOW_LAND => [feet[0], feet[1], g],
+        _ => feet,
+    }
+}
+
 /// The full-detail landscape height at game (x, y), as the terrain mesh draws it (on the
 /// smoothed or stored surface, `WorldData::land_surface`).
 fn land_height(world: &WorldData, x: f32, y: f32) -> Option<f32> {

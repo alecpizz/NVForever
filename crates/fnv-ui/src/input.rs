@@ -326,6 +326,7 @@ fn hit_candidates_in(ui: &Ui, menu: TileId, measure: &Measure<'_>, by_locus: boo
     let root = Place { area: Area::default(), depth: 0.0, clip: None, clip_above: None, forced: false };
     let mut order = 0;
     let mut stack = vec![(menu, root)];
+    let mut child_depths: Vec<(TileId, f64)> = Vec::new();
     while let Some((id, parent)) = stack.pop() {
         let tile = ui.tile(id);
         // A hidden tile hides all below it [documented: Tutorial, `visible`].
@@ -348,9 +349,27 @@ fn hit_candidates_in(ui: &Ui, menu: TileId, measure: &Measure<'_>, by_locus: boo
             below.area.left = parent.area.left;
             below.area.top = parent.area.top;
         }
-        let mut children = tile.children.clone();
-        children.sort_by(|&a, &b| num(ui, a, "depth", 0.0).total_cmp(&num(ui, b, "depth", 0.0)));
-        stack.extend(children.into_iter().rev().map(|c| (c, below)));
+        match tile.children.as_slice() {
+            [] => {}
+            &[only] => stack.push((only, below)),
+            children => {
+                child_depths.clear();
+                let mut sorted = true;
+                let mut prev = f64::NEG_INFINITY;
+                for &c in children {
+                    let d = num(ui, c, "depth", 0.0);
+                    if d.total_cmp(&prev).is_lt() {
+                        sorted = false;
+                    }
+                    prev = d;
+                    child_depths.push((c, d));
+                }
+                if !sorted {
+                    child_depths.sort_by(|a, b| a.1.total_cmp(&b.1));
+                }
+                stack.extend(child_depths.iter().rev().map(|&(c, _)| (c, below)));
+            }
+        }
     }
     out
 }
@@ -890,7 +909,7 @@ mod tests {
         let r = p.step(&mut ui, &[menu], &at(120.0, 115.0), &no_measure);
         assert_eq!(r.over, Some((None, Some(ok))));
         assert_eq!(ui.get_float("TestMenu/Main/OkButton/mouseover"), Some(1.0));
-        // The parent rect and the child label get none [hypothesis].
+        // The parent rect and the child label get none (see production `Pointer::step` above).
         assert_eq!(ui.get_float("TestMenu/Main/mouseover"), None);
         assert_eq!(ui.get_float("TestMenu/Main/OkButton/label/mouseover"), None);
         // A still pointer: no change, nothing reported.
@@ -919,7 +938,7 @@ mod tests {
         assert_eq!(ui.get_float("TestMenu/Main/OkButton/clicked"), Some(1.0));
         ui.update();
         assert_eq!(ui.get_float("TestMenu/Main/OkButton/_times"), Some(1.0));
-        // The next frame, the button still held or not: back to 0 [hypothesis: the press].
+        // The next frame, the button still held or not: back to 0 (see production `Pointer::step` above).
         let r = p.step(&mut ui, &[menu], &at(120.0, 115.0), &no_measure);
         assert!(r.clicks.is_empty());
         assert_eq!(ui.get_float("TestMenu/Main/OkButton/clicked"), Some(0.0));

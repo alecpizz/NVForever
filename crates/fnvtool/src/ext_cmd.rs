@@ -341,7 +341,7 @@ pub fn run(cmd: ExtCmd) -> anyhow::Result<Value> {
                 _ => 0,
             });
             let reader: fnv_game::mod_files::Reader = std::sync::Arc::new(move |p: &str| v2.as_ref().as_ref().and_then(|v| v.read(p)).and_then(Result::ok));
-            fnv_game::mod_files::set_roots(fnv_game::mod_files::Roots { read: vec![lo.data_dir.clone()], config, write: None, lookup: Some(lookup), reader: Some(reader), archives });
+            fnv_game::mod_files::set_roots(fnv_game::mod_files::Roots { hosted_from: None, read: vec![lo.data_dir.clone()], config, write: None, lookup: Some(lookup), reader: Some(reader), archives, list: None });
             // The menus' tile tree, as the engine loads it at its start, so the UI
             // functions read the HUD's traits (ui_loading::load).
             if let Ok(v) = fnv_vfs::Vfs::open_for_plugins(&lo.data_dir, &lo.plugins) {
@@ -515,7 +515,7 @@ fn script_runner(lo: &LoadOrderArgs, schema: &Path, functions: Option<PathBuf>, 
     if !no_data_files {
         roots.push(lo.data_dir.clone());
     }
-    fnv_game::mod_files::set_roots(fnv_game::mod_files::Roots { read: roots, config: None, write: None, lookup: None, reader: Some(reader), archives: Vec::new() });
+    fnv_game::mod_files::set_roots(fnv_game::mod_files::Roots { hosted_from: None, read: roots, config: None, write: None, lookup: None, reader: Some(reader), archives: Vec::new(), list: None });
     let ftext = std::fs::read_to_string(&fp).with_context(|| fp.display().to_string())?;
     let fjson: Value = serde_json::from_str(&ftext).with_context(|| fp.display().to_string())?;
     let table = FunctionTable::load(&fp).with_context(|| fp.display().to_string())?;

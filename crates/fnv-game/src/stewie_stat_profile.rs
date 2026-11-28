@@ -13,15 +13,13 @@ impl Game<'_> {
         if !self.small.stewie_stat_settings_loaded {
             return None;
         }
-        if section.trim().eq_ignore_ascii_case("Tweaks")
-            && key
-                .trim()
-                .eq_ignore_ascii_case("bCritChanceIgnoresFireRate")
+        if section.eq_ignore_ascii_case("Tweaks")
+            && key.eq_ignore_ascii_case("bCritChanceIgnoresFireRate")
         {
             return Some(f64::from(u8::from(self.tweaks.crit_ignores_fire_rate)));
         }
-        if section.trim().eq_ignore_ascii_case("Critical Hits")
-            && key.trim().eq_ignore_ascii_case("fCriticalDamageMult")
+        if section.eq_ignore_ascii_case("Critical Hits")
+            && key.eq_ignore_ascii_case("fCriticalDamageMult")
         {
             return Some(self.tweaks.crit_damage_scale);
         }
@@ -83,10 +81,20 @@ mod loaded_tests {
             query(
                 &mut game,
                 "StewVal",
-                " bCritChanceIgnoresFireRate : tWEAKs "
+                "bCritChanceIgnoresFireRate:tWEAKs"
             ),
             XVal::Num(1.0)
         );
+        // Leading, trailing, and around-colon whitespace are NOT trimmed
+        // [observed: w4h_08_stewie_get_value_whitespace].
+        for padded in [
+            " bCritChanceIgnoresFireRate:Tweaks",
+            "bCritChanceIgnoresFireRate:Tweaks ",
+            "bCritChanceIgnoresFireRate : Tweaks",
+            " bCritChanceIgnoresFireRate : tWEAKs ",
+        ] {
+            assert_eq!(query(&mut game, "StewVal", padded), XVal::Num(0.0), "padded={padded:?}");
+        }
         assert_eq!(
             query(
                 &mut game,

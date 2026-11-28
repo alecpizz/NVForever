@@ -1,0 +1,117 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6c_jip_on_reload_and_seq_group",
+  "description": "Wave 6C strictly read-only console-only probe verifying ForceWeaponJamAnim triggers SetOnReloadWeaponEventHandler and GetSequenceAnimGroup 4 reports 24 (drawn) and 200 (JamA) before, during, and inside the reload callback.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)",
+    "JohnnyGuitarNVSE": "528",
+    "ShowOffNVSE Plugin": "184"
+  },
+  "batches": [
+    {
+      "id": "w6c_jip_on_reload_and_seq_group",
+      "title": "Wave 6C - SetOnReloadWeaponEventHandler Jam Trigger & GetSequenceAnimGroup 4",
+      "extender": "JIP LN 57.30 + JohnnyGuitar 528 + ShowOff 184",
+      "required_plugins": [
+        "jip_nvse.dll",
+        "ShowOffNVSE.dll",
+        "johnnyguitar.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6t2_14_jip_on_reload_and_seq_anim_group",
+          "bucket": "B",
+          "extender": "JIP LN 57.30 + ShowOff 184 + JohnnyGuitar 528",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll",
+            "johnnyguitar.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/jip-events.md",
+          "spec_line": 148,
+          "functions_tested": [
+            "SetOnReloadWeaponEventHandler",
+            "GetSequenceAnimGroup",
+            "ForceWeaponJamAnim"
+          ],
+          "claim": "Verify ForceWeaponJamAnim triggers SetOnReloadWeaponEventHandler and GetSequenceAnimGroup 4 reports 24 (drawn) and 200 (JamA) immediately, next tick, and inside the callback.",
+          "expected": "fj=1,relHit=1,s0=0,s4(pre=24,t0=200,t1=200,cb=200)",
+          "script_lines": [
+            "ref cb = CompileScript \"nvseprobe_s_w6t2_14_cb.gek\"",
+            "Player.AuxVarSetRef \"*w6t2_14_cb\" cb",
+            "Player.AuxVarSetFlt \"*w6t2_14_rel\" 0",
+            "Player.AuxVarSetFlt \"*w6t2_14_s4cb\" -99",
+            "SetOnReloadWeaponEventHandler cb 1",
+            "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+            "ref rA10 = GetFormFromMod \"FalloutNV.esm\" \"4241\"",
+            "Player.AddItem r10 1 1",
+            "Player.AddItem rA10 20 1",
+            "Player.EquipItem r10 0 1",
+            "Player.SetWeaponOut 1"
+          ],
+          "wait_ticks_after": 2,
+          "helper_scripts": {
+            "nvseprobe_s_w6t2_14_cb.gek": [
+              "begin Function { ref rW }",
+              "Player.AuxVarSetFlt \"*w6t2_14_rel\" ((Player.AuxVarGetFlt \"*w6t2_14_rel\") + 1)",
+              "Player.AuxVarSetFlt \"*w6t2_14_s4cb\" (Player.GetSequenceAnimGroup 4)"
+            ]
+          },
+          "extra_steps": [
+            {
+              "suffix": "jam",
+              "wait_ticks": 1,
+              "script_lines": [
+                "Player.AuxVarSetFlt \"*w6t2_14_s0\" (Player.GetSequenceAnimGroup 0)",
+                "Player.AuxVarSetFlt \"*w6t2_14_s4_pre\" (Player.GetSequenceAnimGroup 4)",
+                "int fj = Player.ForceWeaponJamAnim",
+                "Player.AuxVarSetFlt \"*w6t2_14_fj\" fj",
+                "Player.AuxVarSetFlt \"*w6t2_14_s4_0\" (Player.GetSequenceAnimGroup 4)"
+              ]
+            },
+            {
+              "suffix": "read",
+              "wait_ticks": 0,
+              "script_lines": [
+                "int s4_1 = Player.GetSequenceAnimGroup 4",
+                "int s0 = Player.AuxVarGetFlt \"*w6t2_14_s0\"",
+                "int s4p = Player.AuxVarGetFlt \"*w6t2_14_s4_pre\"",
+                "int s40 = Player.AuxVarGetFlt \"*w6t2_14_s4_0\"",
+                "int s4cb = Player.AuxVarGetFlt \"*w6t2_14_s4cb\"",
+                "int fj = Player.AuxVarGetFlt \"*w6t2_14_fj\"",
+                "int rel = Player.AuxVarGetFlt \"*w6t2_14_rel\"",
+                "ref cb = Player.AuxVarGetRef \"*w6t2_14_cb\"",
+                "SetOnReloadWeaponEventHandler cb 0",
+                "ref r10 = GetFormFromMod \"FalloutNV.esm\" \"434F\"",
+                "ref rA10 = GetFormFromMod \"FalloutNV.esm\" \"4241\"",
+                "Player.UnequipItem r10 0 1",
+                "Player.RemoveItem r10 1 1",
+                "Player.RemoveItem rA10 20 1",
+                "PrintToConsole \"PROBE|w6t2_14_jip_on_reload_and_seq_anim_group|fj=%g,relHit=%g,s0=%g,s4(pre=%g,t0=%g,t1=%g,cb=%g)\" fj rel s0 s4p s40 s4_1 s4cb"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

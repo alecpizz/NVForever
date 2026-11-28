@@ -568,12 +568,17 @@ pub(crate) fn call(g: &mut Game, _ctx: &RunCtx, name: &str, subject: Option<Form
             }
             zero
         }
-        // `weapon slot [mod]`: WMI1-3; left out, none [documented: the page's examples];
-        // only a weapon mod (IMOD) [hypothesis].
+        // `weapon slot [mod]`: WMI1-3; left out, null, or a non-IMOD form clears the slot
+        // to 0 [documented: the page's examples; observed: Fallout: New Vegas 1.4.0.525 +
+        // xNVSE 6.4.9 + JIP LN 57.30, 2026-11-23, GSDocMitchellHouse (0x00103DF9),
+        // 10 official base masters, `jip_20_weapon_item_mod_non_imod`
+        // (`tools/capture/nvse/catalogs/wave4a_extenders.json`):
+        // `PROBE|jip_20_weapon_item_mod_non_imod|m0=0010C858,m1=00000000,eq0=1,eqSt=0,eqM0=0`;
+        // no DLL or source consulted].
         "setweaponitemmod" => {
             let slot = num(args, 1, 0.0);
-            let m = form(args, 2);
-            if let Some(w) = of_sig(g, form(args, 0), b"WEAP").filter(|_| (1.0..=3.0).contains(&slot) && m.is_none_or(|m| g.data.sig(m) == Some(*b"IMOD"))) {
+            if let Some(w) = of_sig(g, form(args, 0), b"WEAP").filter(|_| (1.0..=3.0).contains(&slot)) {
+                let m = form(args, 2).filter(|&m| g.data.sig(g.unclone(m)) == Some(*b"IMOD"));
                 g.set_field8(w, &format!("WMI{}", slot as u8), "", XVal::Ref(m.map_or(0, |m| m.0)));
             }
             zero

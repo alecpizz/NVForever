@@ -98,9 +98,11 @@ As blackjack.md §2, and [observed: all five casinos]:
 ## 5. The menu (`menus\roulette_menu.xml`)
 
 - The information box: 400 × 150, 10 in from the main rectangle's left and bottom, the
-  bracket of lines, four rows in font 7 35 apart: "Current Bet:", "Total Bet:", "Chips:",
-  "<casino> Earnings:" [documented: `ROM_InfoRect`, its four displays; observed: the
-  titles on the screenshots, "The Tops Earnings:"].
+  bracket of lines, four rows in font 7 35 apart: the bet, the bets on the table, the
+  chips and the casino's winnings [documented: `ROM_InfoRect`, its four displays].
+  NVForever's titles are its own words, "Your bet:", "On the table:", "Your chips:" and
+  "Won at <casino>:" [design, #4495: in place of the titles read from the original's
+  screen].
 - Six buttons right-aligned 50 in from the right: Place Bet (W), Remove Bet (F), Finish
   Bet (S), Decrease Bet (Q), Increase Bet (E), Exit (R) [documented: the order and
   `_PCButton_*`; observed: the words]. The file puts them 144 above the box; the

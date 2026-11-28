@@ -88,6 +88,8 @@ use crate::sim::SimState;
 use crate::vats_classic::{self as classic, Candidate, VatsSlowdown, VatsStyle};
 use crate::{space, PlaySet, PlayState, PlayerCamera};
 
+pub mod touch;
+
 /// The clock's speed while marking [design: the owner's "very, very slow"].
 pub const MARK_SCALE: f32 = 0.05;
 /// The swipe across the screen on entering, and the easing of the clock with it, real
@@ -947,6 +949,21 @@ impl VatsMode {
         }
     }
 
+    /// The clock's speed the mode's sounds follow (`audio_out::slowed_sound` of it): the
+    /// clock's own, but while targets are chosen no slower than firing's [design, #3784: at
+    /// marking's near stop every voice and shot played at the 0.4 floor for as long as the
+    /// player took, 17 s in a player's report, and read as broken sound; at
+    /// [`FIRE_SCALE`] they stay drawn out and lower, the owner's "like the base game",
+    /// and can still be made out].
+    pub fn sound_scale(&self) -> f32 {
+        let clock = self.time_scale();
+        if self.phase == Phase::Marking {
+            clock.max(FIRE_SCALE)
+        } else {
+            clock
+        }
+    }
+
     /// The look for the image-space pass (§5): the swipe's edge (a share of the screen
     /// width; graded to its left), the band on the edge, the wash over the screen, the
     /// grade's strength.
@@ -1426,13 +1443,14 @@ fn update(
     locks: Res<ControlLocks>,
     mut hud: ResMut<HudMessage>,
     mut sounds: Sounds,
+    mut touch: touch::Consumer,
 ) {
     let ClassicIn { style, slowdown, kill_cam } = settings;
     let v = &mut *vats;
     v.now = real.elapsed_secs_f64();
     v.player_rate = kill_cam.as_deref().and_then(|k| k.player_scale()).unwrap_or(1.0);
     v.shot = None;
-    let keys = std::mem::take(&mut v.keys);
+    let mut keys = std::mem::take(&mut v.keys);
     let playing = *state.get() == PlayState::Playing;
     let dead = script.as_deref().and_then(|s| s.rt.as_ref()).is_some_and(|rt| rt.game.is_dead(FormId::PLAYER_REF));
     // A conversation (a forced greeting too) or a script's menu, caught before the state
@@ -1515,17 +1533,50 @@ fn update(
         (Phase::Marking, None) => {
             follow(v, &phys, &combat);
             rechance(v, &combat, player.eye());
+            // A finger request is consumed here, not by a separate effect writer.
+            // Preview and mark_actor retain the same actor/part/AP legality rules.
+            let direct = touch.take(v, &mut phys, &keys);
+            let direct_part = direct.selection.filter(|s| sim.present(s.actor) && barred(v, script.as_deref_mut(), &mut sim, s.actor).is_ok());
+            if direct.selection.is_some() && direct_part.is_none() { touch.refuse(); }
+            if let Some(s) = direct_part {
+                if v.style == VatsStyle::Classic && v.classic.selected != Some(s.actor) {
+                    v.classic.selected = Some(s.actor);
+                    v.classic.part_set = None;
+                }
+                (keys.hover_part, keys.near_part, keys.ray) = (None, None, None);
+            }
+            if direct.fire { keys.accept = true; }
             let chosen = if v.style == VatsStyle::Classic {
-                classic_frame(v, &keys, &combat, script.as_deref_mut(), &mut sim, &mut phys, &mut player, &control, real.delta_secs(), &mut sounds)
+                classic_frame(v, &keys, &combat, script.as_deref_mut(), &mut sim, &mut phys, &mut player, &control, real.delta_secs(), !direct.hold_camera || direct_part.is_none(), &mut sounds)
             } else {
-                None
+                // A finger selects a real ray-hit actor for this preview only.
+                // Mark and Fire has no Classic target list or camera follow.
+                direct_part.map(|s| (s.actor, 0))
             };
             // (The classic style has ended the mode when no target is left.)
             let on = v.phase == Phase::Marking;
             if on {
                 preview(v, &combat, &parts, script.as_deref_mut(), &mut sim, &mut phys, &player, &control, chosen);
             }
+            let direct_part = direct_part.filter(|s| (v.style == VatsStyle::DeadEye || v.selected() == Some(s.actor)) && v.preview.actor == Some(s.actor));
+            let direct_part = direct_part.and_then(|s| {
+                let i = v.preview.parts.iter().position(|p| p.part == s.part)?;
+                if v.style == VatsStyle::Classic {
+                    v.classic.part = i;
+                    v.classic.part_set = Some(s.actor);
+                }
+                for (n, p) in v.preview.parts.iter_mut().enumerate() { p.under = n == i; }
+                Some(s)
+            });
+            if direct.selection.is_some() && direct_part.is_none() { touch.refuse(); }
             if !on {
+            } else if let Some(s) = direct_part.filter(|s| s.queue) {
+                // Selection never accepts. In enhanced mode only touch Fire requests
+                // accept, through the existing branch below on a later contact.
+                let point = point_of(&phys, s.actor, s.part).unwrap_or(player.eye());
+                let before = v.queue.len();
+                mark_actor(v, &combat, &parts, script.as_deref_mut(), &mut sim, &mut phys, &player, &mut hud, &mut sounds, s.actor, s.part, point, false);
+                touch.queued(v.queue.len() > before);
             } else if keys.toggle {
                 end(v, "V pressed again", &mut sounds);
             } else if keys.unmark {
@@ -2045,6 +2096,7 @@ fn classic_frame(
     player: &mut Player,
     control: &PlayerControl,
     real_dt: f32,
+    follow_target: bool,
     sounds: &mut Sounds,
 ) -> Option<(u32, usize)> {
     let eye = player.eye();
@@ -2128,8 +2180,9 @@ fn classic_frame(
         }
         v.classic.part = v.classic.part.min(parts - 1);
     }
-    // The view turns onto the target (vats-classic.md §5).
-    if let Some(p) = phys.world.actor_aim_point(actor) {
+    // Keep a validated body contact under its finger until the terminal edge.
+    // Ordinary selection resumes target follow (vats-classic.md §5).
+    if let Some(p) = phys.world.actor_aim_point(actor).filter(|_| follow_target) {
         let (heading, pitch) = Crosshair::aim_at(control.crosshair.as_ref(), eye, p);
         player.heading = classic::ease_angle(player.heading, heading, classic::TURN_RATE, real_dt);
         player.pitch = classic::ease_angle(player.pitch, pitch, classic::TURN_RATE, real_dt);
@@ -2412,8 +2465,9 @@ fn preview(v: &mut VatsMode, combat: &Combat, parts: &ActorParts, mut script: Op
     let (from, dir) = Crosshair::ray(control.crosshair.as_ref(), player.eye(), player.look_dir());
     let reach = v.weapon.as_ref().map_or(REACH, |w| w.reach);
     let filter = shot_filter(phys);
-    // The classic style previews its selected target, whatever the crosshair is on
-    // (vats-classic.md §4); `chosen` is that target and the place of its selected part.
+    // An explicit target comes from Classic selection or a validated body touch.
+    // The touch consumer resolves the actual part after this preview is built;
+    // without either owner, Mark and Fire follows the ordinary crosshair.
     let target = match chosen {
         Some((actor, _)) => Some((actor, None)),
         None => preview_target(phys, script.as_deref(), from, dir, reach, &filter),
@@ -3484,6 +3538,7 @@ pub struct VatsModePlugin;
 impl Plugin for VatsModePlugin {
     fn build(&self, app: &mut App) {
         classic::register(app);
+        touch::install(app);
         app.init_resource::<VatsMode>()
             .add_systems(Startup, spawn_marks)
             .add_systems(Update, read_keys.after(PlaySet::Input).after(crate::control::enforce_locks).after(crate::player::encumbered_walks).before(PlaySet::Physics))
@@ -3831,6 +3886,24 @@ mod tests {
         assert_eq!(v.time_scale(), 1.0);
     }
 
+    /// #3784: sounds slow while targets are chosen only as far as while firing.
+    #[test]
+    fn marking_slows_sound_no_more_than_firing() {
+        let mut v = VatsMode { phase: Phase::Marking, entered_at: Some(0.0), now: 5.0, style: VatsStyle::DeadEye, ..Default::default() };
+        assert_eq!(v.sound_scale(), FIRE_SCALE);
+        // Early in the swipe the clock is still faster: the sound follows it.
+        v.now = 0.0;
+        assert_eq!(v.sound_scale(), 1.0);
+        // The classic style's full stop too.
+        v.style = VatsStyle::Classic;
+        v.classic.scale = 0.0;
+        assert_eq!(v.sound_scale(), FIRE_SCALE);
+        v.phase = Phase::Firing;
+        assert_eq!(v.sound_scale(), FIRE_SCALE);
+        v.phase = Phase::Off;
+        assert_eq!(v.sound_scale(), 1.0);
+    }
+
     #[test]
     fn the_classic_style_stops_the_clock_at_once_and_holds_the_view() {
         // The default slowdown, a full stop, from the first frame: no ease.
@@ -4012,4 +4085,23 @@ mod tests {
         v.weapon.as_mut().unwrap().style = AttackStyle::Thrown;
         assert_eq!(v.melee_mark(), None, "a throw is no blow");
     }
+    #[test]
+    fn touch_gesture_binding_pulse_uses_native_vats_draw_admission_and_all_locks() {
+        use bevy::input::{keyboard::{Key, KeyboardInput}, ButtonState};
+        use crate::bindings::Bindings;
+        for barrier in 0..4 {
+            let (mut app, _) = menu_key_app(crate::bindings::InputDevice::KeyboardMouse, VatsMode::default());
+            app.world_mut().resource_mut::<Bindings>().rebind(Control::Vats, crate::bindings::Input::Key(KeyCode::F9));
+            if barrier == 1 { app.insert_resource(crate::script_input::ScriptBlocked { keys: vec![KeyCode::F9], ..default() }); }
+            if barrier == 2 { app.world_mut().resource_mut::<ControlLocks>().fighting = true; }
+            if barrier == 3 { app.init_resource::<crate::pad::PlatformInputGate>(); app.world_mut().resource_mut::<crate::pad::PlatformInputGate>().set_blocked(true); }
+            app.world_mut().write_message(KeyboardInput { key_code: KeyCode::F9, logical_key: Key::Character("VATS gesture fixture".into()),
+                state: ButtonState::Pressed, repeat: false, text: None, window: Entity::PLACEHOLDER });
+            app.update();
+            assert_eq!(app.world().resource::<VatsMode>().phase, if barrier == 0 { Phase::Drawing } else { Phase::Off });
+            assert_eq!(app.world().resource::<PlayerControl>().weapon_out, barrier == 0);
+            assert_eq!(app.world().resource::<VatsMode>().stats.shots, 0, "gesture does not invent a shot/AP action");
+        }
+    }
+
 }

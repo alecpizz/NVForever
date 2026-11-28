@@ -347,7 +347,7 @@ mod tests {
     #[test]
     fn a_markers_reputation_line() {
         assert_eq!(reputation_line("Goodsprings", Some("Neutral")), "Goodsprings: Neutral");
-        assert_eq!(reputation_line("NCR", Some("Liked")), "NCR: Liked");
+        assert_eq!(reputation_line("NCR", Some("Trusted")), "NCR: Trusted");
         assert_eq!(reputation_line("NCR", None), "NCR");
     }
 

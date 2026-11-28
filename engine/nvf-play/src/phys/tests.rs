@@ -598,6 +598,20 @@ fn the_fixed_ground_leaves_out_dynamic_bodies() {
 }
 
 #[test]
+fn a_co_op_guests_copy_of_a_host_moved_object_is_not_written_back() {
+    let d = play_data();
+    let (mut sim, id, _) = sim_with_crate();
+    let mut p = state(true);
+    p.load(&LoadCtx { d: &d, sim: &sim, data: None }, PhysCell::Exterior(0, 0));
+    p.follow_only.insert(id);
+    for _ in 0..240 {
+        p.world.step();
+        assert!(p.settle_placed(&mut sim.world).is_empty(), "the host owns its pose");
+    }
+    assert!(sim.moved_pose(id).is_none());
+}
+
+#[test]
 fn placed_clutter_moved_by_physics_is_written_back_and_reloads_there() {
     let d = play_data();
     let (mut sim, id, placed) = sim_with_crate();

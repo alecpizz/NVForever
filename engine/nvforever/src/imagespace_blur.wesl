@@ -31,6 +31,11 @@ struct Grade {
     // the last one's (imagespace.rs).
     motion: vec4<f32>,
     reproject: mat4x4<f32>,
+    // Photo mode: warmth, vignette, film grain, letterbox aspect (imagespace.rs).
+    photo: vec4<f32>,
+    // Photo mode's lens blur (bokeh.rs): the aperture (0: off), the focus (game units),
+    // the largest disc (a part of the screen height).
+    bokeh: vec4<f32>,
 }
 
 @group(0) @binding(0) var screen: texture_2d<f32>;
@@ -217,4 +222,232 @@ fn blur_across(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
 @fragment
 fn blur_down(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     return blur(in.uv, vec2(0.0, 1.0));
+}
+
+// ---- Photo mode's lens blur (bokeh.rs has the rules and their tests) -------------------
+//
+// Three passes while photo mode's Blur is up (grade.bokeh.x > 0): `bokeh_prefilter`
+// spreads what is blurred over the spiral's spacing (so a small bright point is met by
+// the taps), `bokeh` gathers each point's disc, `bokeh_fill` smooths the spiral's grain.
+
+const BOKEH_TAPS: i32 = 96;
+const NEAR_TAPS: i32 = 64;
+const NEAR_SCALE: f32 = 3.0;
+const WIDE_FROM: f32 = 0.7;
+const PREFILTER_TAPS: i32 = 12;
+const GOLDEN_ANGLE: f32 = 2.399963;
+const SHARP_PX: f32 = 0.5;
+const HIGHLIGHT_GAIN: f32 = 6.0;
+const HIGHLIGHT_FROM: f32 = 0.7;
+
+// The largest disc this frame (pixels, radius): the aperture's share of the largest.
+fn bokeh_reach() -> f32 {
+    return grade.bokeh.z * f32(textureDimensions(screen).y) * clamp(grade.bokeh.x, 0.0, 1.0);
+}
+
+// bokeh.rs coc_px: the disc (pixels, radius) a point `z` game units away is drawn as.
+fn coc_px(z: f32) -> f32 {
+    let focus = max(grade.bokeh.y, 1.0);
+    var spread = 1.0;
+    if z < 1.0e29 {
+        spread = abs(z - focus) / max(z, 1.0e-3);
+    }
+    let reach = bokeh_reach();
+    // In front of the focus a disc may grow to NEAR_SCALE times the reach.
+    let r = min(reach * spread, select(reach, reach * NEAR_SCALE, z < focus));
+    return select(r, 0.0, r < SHARP_PX);
+}
+
+// bokeh.rs tap_weight: a point behind is seen as far as the gathering point's own disc.
+fn tap_weight(centre_coc: f32, tap_coc: f32, behind: bool, dist: f32) -> f32 {
+    var reach = tap_coc;
+    if behind {
+        reach = centre_coc;
+    }
+    return clamp(reach - dist + 0.5, 0.0, 1.0);
+}
+
+// bokeh.rs near_share: how much of a tap goes to the near layer (in front, more blurred).
+fn near_share(centre_coc: f32, tap_coc: f32, in_front: bool) -> f32 {
+    return select(0.0, clamp((tap_coc - centre_coc) * 0.5, 0.0, 1.0), in_front);
+}
+
+// bokeh.rs coverage: the share of a near point's disc one of `n` taps over a search disc
+// of `radius` stands for.
+fn coverage(tap_coc: f32, radius: f32, n: i32) -> f32 {
+    let c = max(tap_coc, radius * 1.8 / sqrt(f32(n)));
+    return (radius * radius) / (c * c * f32(n));
+}
+
+// bokeh.rs wide_share: how much of a near disc the wide spiral takes; the main spiral
+// takes the rest. Handed over between 0.7 and 1 times the reach, so a disc growing past
+// the reach leaves no seam.
+fn wide_share(tap_coc: f32, reach: f32) -> f32 {
+    return clamp((tap_coc - reach * WIDE_FROM) / (reach * (1.0 - WIDE_FROM)), 0.0, 1.0);
+}
+
+// bokeh.rs highlight: near-white points weigh more.
+fn highlight(c: vec3<f32>) -> f32 {
+    let luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    let t = clamp((luma - HIGHLIGHT_FROM) / (1.0 - HIGHLIGHT_FROM), 0.0, 1.0);
+    let s = t * t * (3.0 - 2.0 * t);
+    return 1.0 + HIGHLIGHT_GAIN * s * s;
+}
+
+// Tap `i` of `n` on the golden-angle spiral, on the unit disc (bokeh.rs spiral).
+fn spiral(i: i32, n: i32) -> vec2<f32> {
+    let r = sqrt((f32(i) + 0.5) / f32(n));
+    let a = f32(i) * GOLDEN_ANGLE;
+    return vec2(cos(a), sin(a)) * r;
+}
+
+fn inside(uv: vec2<f32>) -> bool {
+    return all(uv >= vec2(0.0)) && all(uv <= vec2(1.0));
+}
+
+// The spacing of the main pass's taps at its widest (pixels).
+fn tap_spacing(reach: f32) -> f32 {
+    return reach * 1.8 / sqrt(f32(BOKEH_TAPS));
+}
+
+// bokeh.rs spread_px: the spacing of the taps that find a disc of radius `c` (the main
+// spiral's, handed over to the wide spiral's as wide_share does), so the prefilter and
+// the fill spread a small bright point as wide as those taps lie apart.
+fn spread_px(c: f32, reach: f32) -> f32 {
+    let wide = reach * NEAR_SCALE * 1.8 / sqrt(f32(NEAR_TAPS));
+    return mix(tap_spacing(reach), wide, wide_share(c, reach));
+}
+
+@fragment
+fn bokeh_prefilter(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
+    let uv = in.uv;
+    let centre = textureSampleLevel(screen, screen_sampler, uv, 0.0);
+    let reach = bokeh_reach();
+    let c0 = coc_px(view_distance(uv));
+    if grade.bokeh.x <= 0.0 || tap_spacing(reach) < 1.0 || c0 < tap_spacing(reach) {
+        return centre;
+    }
+    let r = spread_px(c0, reach);
+    let dims = vec2<f32>(textureDimensions(screen));
+    let h0 = highlight(centre.rgb);
+    var acc = centre.rgb * h0;
+    var total = h0;
+    for (var i = 0; i < PREFILTER_TAPS; i++) {
+        let at = uv + spiral(i, PREFILTER_TAPS) * r / dims;
+        // Only what is blurred as much: a sharp edge stays out.
+        if !inside(at) || coc_px(view_distance(at)) < r {
+            continue;
+        }
+        let s = textureSampleLevel(screen, screen_sampler, at, 0.0).rgb;
+        let w = highlight(s);
+        acc += s * w;
+        total += w;
+    }
+    return vec4(acc / total, centre.a);
+}
+
+@fragment
+fn bokeh(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
+    let uv = in.uv;
+    let centre = textureSampleLevel(screen, screen_sampler, uv, 0.0);
+    let reach = bokeh_reach();
+    if grade.bokeh.x <= 0.0 || reach < SHARP_PX {
+        return centre;
+    }
+    let dims = vec2<f32>(textureDimensions(screen));
+    let z0 = view_distance(uv);
+    let c0 = coc_px(z0);
+    let h0 = highlight(centre.rgb);
+    var acc = centre.rgb * h0;
+    var total = h0;
+    // The near layer: points in front, more blurred than this one, each spread over its
+    // own disc's area, laid over the rest by how much of this point they cover.
+    var near_acc = vec3(0.0);
+    var near_total = 0.0;
+    var cover = 0.0;
+    for (var i = 0; i < BOKEH_TAPS; i++) {
+        let off = spiral(i, BOKEH_TAPS) * reach;
+        let at = uv + off / dims;
+        if !inside(at) {
+            continue;
+        }
+        let z = view_distance(at);
+        let tc = coc_px(z);
+        let w = tap_weight(c0, tc, z > z0, length(off));
+        if w <= 0.0 {
+            continue;
+        }
+        let s = textureSampleLevel(screen, screen_sampler, at, 0.0).rgb;
+        let f = near_share(c0, tc, z < z0);
+        let hw = w * highlight(s);
+        acc += s * hw * (1.0 - f);
+        total += hw * (1.0 - f);
+        // Discs nearing the reach are handed to the wide spiral.
+        let m = f * (1.0 - wide_share(tc, reach));
+        near_acc += s * hw * m;
+        near_total += hw * m;
+        cover += w * m * coverage(tc, reach, BOKEH_TAPS);
+    }
+    // The wide spiral (NEAR_SCALE times the reach): the near discs past the reach, and,
+    // past the reach, the rest of a large disc, each tap weighing the area it stands for.
+    let wide = reach * NEAR_SCALE;
+    let k = (wide * wide * f32(BOKEH_TAPS)) / (reach * reach * f32(NEAR_TAPS));
+    for (var i = 0; i < NEAR_TAPS; i++) {
+        let off = spiral(i, NEAR_TAPS) * wide;
+        let at = uv + off / dims;
+        if !inside(at) {
+            continue;
+        }
+        let z = view_distance(at);
+        let tc = coc_px(z);
+        let d = length(off);
+        let w = tap_weight(c0, tc, z > z0, d);
+        let t = wide_share(tc, reach);
+        if w <= 0.0 || (d <= reach && t <= 0.0) {
+            continue;
+        }
+        let s = textureSampleLevel(screen, screen_sampler, at, 0.0).rgb;
+        let f = near_share(c0, tc, z < z0);
+        let hw = w * highlight(s);
+        if d > reach {
+            acc += s * hw * (1.0 - f) * k;
+            total += hw * (1.0 - f) * k;
+        }
+        near_acc += s * hw * f * t;
+        near_total += hw * f * t;
+        cover += w * f * t * coverage(tc, wide, NEAR_TAPS);
+    }
+    let far = acc / total;
+    if near_total <= 0.0 {
+        return vec4(far, centre.a);
+    }
+    return vec4(mix(far, near_acc / near_total, min(cover, 1.0)), centre.a);
+}
+
+@fragment
+fn bokeh_fill(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
+    let uv = in.uv;
+    let centre = textureSampleLevel(screen, screen_sampler, uv, 0.0);
+    if grade.bokeh.x <= 0.0 {
+        return centre;
+    }
+    let c0 = coc_px(view_distance(uv));
+    let r = min(c0 * 0.15, spread_px(c0, bokeh_reach()));
+    if r < 1.0 {
+        return centre;
+    }
+    let dims = vec2<f32>(textureDimensions(screen));
+    var acc = centre.rgb;
+    var total = 1.0;
+    for (var i = 0; i < 8; i++) {
+        let a = f32(i) * 0.7853982;
+        let at = uv + vec2(cos(a), sin(a)) * r / dims;
+        // Neighbours at least half as blurred: a sharp edge is not pulled in.
+        if !inside(at) || coc_px(view_distance(at)) < 0.5 * c0 {
+            continue;
+        }
+        acc += textureSampleLevel(screen, screen_sampler, at, 0.0).rgb;
+        total += 1.0;
+    }
+    return vec4(acc / total, centre.a);
 }

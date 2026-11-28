@@ -209,14 +209,34 @@ mod tests {
         assert_eq!(crate::needs("tweak-no-self-explosion-non-hostiles")[0].parent, "tweak-no-self-explosion-damage");
         assert_eq!(crate::needs("tweak-grabbing-is-theft-min-value")[0].parent, "tweak-grabbing-is-theft");
         // Every rule names placed rows (a Controls row by its table name).
-        let placed = |k: &str| crate::SECTIONS.iter().any(|s| s.keys.contains(&k));
+        let placed = |k: &str| crate::SECTIONS.iter().chain(crate::ANDROID_SECTIONS).any(|s| s.keys.contains(&k));
         for (row, parent, _) in crate::SHOWN_WITH {
+            assert!(placed(row) && placed(parent), "{row} / {parent}");
+        }
+        for (row, parent, _) in crate::NEEDS {
             assert!(placed(row) && placed(parent), "{row} / {parent}");
         }
         for (row, parent, _, _) in crate::NEEDS_CHOICE {
             assert!(placed(row) && placed(parent), "{row} / {parent}");
         }
         assert!(placed(crate::DEVICE_ROW));
+    }
+
+    #[test]
+    fn the_android_reference_matches_the_shared_layout() {
+        let reference = include_str!("../../../docs/settings-reference-android.md")
+            .split_once("## Android placement by stored key").unwrap().1;
+        let expected = crate::MOBILE_SECTIONS.iter().chain(crate::ANDROID_SECTIONS.iter().filter(|section| {
+            matches!(section.placement.heading, Some("Controller"))
+        }));
+        let rows: Vec<_> = reference.lines().filter(|line| line.starts_with('|')).skip(2).collect();
+        assert_eq!(rows.len(), expected.clone().count());
+        for (row, section) in rows.into_iter().zip(expected) {
+            let mut cells = row.split('|').skip(1);
+            assert_eq!(cells.next().unwrap().trim(), section.placement.path());
+            let keys: Vec<_> = cells.next().unwrap().split('`').skip(1).step_by(2).collect();
+            assert_eq!(keys, section.keys, "{}", section.placement.path());
+        }
     }
 
     #[test]

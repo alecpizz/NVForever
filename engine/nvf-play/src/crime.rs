@@ -6,7 +6,8 @@
 //!   with the reference deleted, as `crate::world_sounds` hears pick-ups) and items taken
 //!   out of a container in the container menu ([`ItemsTaken`]); a dead actor's inventory
 //!   is not owned through its cell [hypothesis]. A pick-up a load puts back was judged
-//!   when it happened: it is not judged again.
+//!   when it happened: it is not judged again. Nor is one a script had another actor make
+//!   (`RefChanged::taker`, #3918: Ringo taking his own ammo).
 //! - **Locks**: the lockpicking menu's crime hook (`crate::lockpick::LockOpened`), and a
 //!   terminal hacked, the same crime as a lock picked (the owner, 2026-10-22).
 //! - **Trespass**: [`fnv_game::Game::crime_tick`] four times a second of game time.
@@ -91,7 +92,7 @@ fn report_deeds(
     }
     let Some(rt) = script.as_deref_mut().and_then(|s| s.rt.as_mut()) else { return };
     let mut items = Vec::new();
-    for RefChanged { form_id: id, restored } in picked {
+    for RefChanged { form_id: id, restored, taker } in picked {
         let Some(s) = sim.world.peek(FormId(id)) else { continue };
         // In the save as picked up: judged before it, as `picked` would say had this
         // process seen it.
@@ -99,6 +100,15 @@ fn report_deeds(
             if s.deleted() {
                 stats.picked.insert(id);
             }
+            continue;
+        }
+        // Picked up by another actor (a script's `ref.Activate actor`): not the player's
+        // theft, though the player carries some of the same item (#3918).
+        if let Some(t) = taker {
+            if s.deleted() {
+                stats.picked.insert(id);
+            }
+            debug!("crime: {} picked up by {}, not the player", FormId(id), FormId(t));
             continue;
         }
         let item = matches!(sim.forms.get(s.base).map(|b| &b.data), Some(BaseData::Item(_)));
@@ -314,7 +324,7 @@ mod tests {
     #[test]
     fn a_pickup_the_load_restores_is_not_judged_and_a_real_one_beside_it_is() {
         let mut app = after_two_pickups();
-        tell(&mut app, &[RefChanged { form_id: IN_THE_SAVE, restored: true }, RefChanged::new(JUST_TAKEN)]);
+        tell(&mut app, &[RefChanged::restored(IN_THE_SAVE), RefChanged::new(JUST_TAKEN)]);
         app.update();
         assert_eq!(judged(&mut app), (1, 1), "the real pick-up alone");
         // The restored one counts as judged, as in the run that picked it up: a later
@@ -322,6 +332,24 @@ mod tests {
         tell(&mut app, &[RefChanged::new(IN_THE_SAVE)]);
         app.update();
         assert_eq!(judged(&mut app), (0, 0));
+    }
+
+    /// #3918: Ringo's script has him pick up his own ammo; the player carries rounds of the
+    /// same kind. Another actor's pick-up is not the player's theft, then or later.
+    #[test]
+    fn an_actor_s_scripted_pickup_is_not_the_player_s_theft() {
+        let mut app = after_two_pickups();
+        const RINGO: u32 = 0x0010_4C7C;
+        tell(&mut app, &[RefChanged { taker: Some(RINGO), ..RefChanged::new(IN_THE_SAVE) }]);
+        app.update();
+        assert_eq!(judged(&mut app), (0, 0), "Ringo took it");
+        tell(&mut app, &[RefChanged::new(IN_THE_SAVE)]);
+        app.update();
+        assert_eq!(judged(&mut app), (0, 0), "judged once, as Ringo's");
+        // The player's own pick-up beside it still counts.
+        tell(&mut app, &[RefChanged::new(JUST_TAKEN)]);
+        app.update();
+        assert_eq!(judged(&mut app), (1, 1));
     }
 
     #[test]

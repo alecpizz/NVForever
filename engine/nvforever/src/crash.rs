@@ -237,6 +237,7 @@ pub(crate) fn old_files(names: &[String], prefix: &str, ext: &str, keep: usize) 
 
 /// Why the run with process id `pid` stopped at the start, from its run log beside this
 /// run's (handoff.rs: a new run that ended before it was ready).
+#[cfg(not(target_os = "android"))]
 pub fn stopped_at_start(pid: u32) -> Option<String> {
     let dir = LOG_DIR.get()?;
     let tail = format!("-{pid}.log");
@@ -246,6 +247,7 @@ pub fn stopped_at_start(pid: u32) -> Option<String> {
     stop_reason(&std::fs::read_to_string(log).ok()?)
 }
 
+#[cfg(any(not(target_os = "android"), test))]
 fn stop_reason(text: &str) -> Option<String> {
     text.lines().find_map(|l| l.strip_prefix(ERROR_EXIT)).map(|r| r.trim().to_string())
 }
@@ -291,8 +293,10 @@ pub fn install(data: &Path, previous_running: bool) {
     match File::create(&path) {
         Ok(f) => {
             let _ = RUN_LOG.set(RunLog { path: path.clone(), writer: Mutex::new(Some(LineWriter::new(f))) });
-            // How this process ends, when nothing in it sees that (exit_watch.rs).
+            // How this process ends, when nothing in it sees that (exit_watch.rs), and
+            // when something outside ends it (run_end.rs).
             crate::exit_watch::start(&path);
+            crate::run_end::install();
         }
         Err(e) => eprintln!("run log: {}: {e}", redact(&path.display().to_string())),
     }
@@ -310,6 +314,7 @@ pub fn install(data: &Path, previous_running: bool) {
     let unclean = previous.filter(|_| !previous_running).and_then(|p| {
         let text = std::fs::read_to_string(&p).ok().filter(|t| ended_abnormally(t))?;
         let exit = crate::exit_watch::said(&text).map(str::to_string);
+        let _ = OUTSIDE.set(crate::run_end::said(&text).map(str::to_string));
         Some((p, exit))
     });
     let _ = UNCLEAN.set(unclean);
@@ -318,6 +323,9 @@ pub fn install(data: &Path, previous_running: bool) {
 /// The run before this one, when it did not end normally: its log, and what the log says
 /// of its process's exit code (exit_watch.rs).
 static UNCLEAN: OnceLock<Option<(PathBuf, Option<String>)>> = OnceLock::new();
+/// What the run before this one says ended it from outside (run_end.rs), when it did not
+/// end normally.
+static OUTSIDE: OnceLock<Option<String>> = OnceLock::new();
 
 /// Lines an allocation failure may write (a loop of failing allocations must not fill the log).
 const ALLOC_FAIL_LINES: u32 = 4;
@@ -387,6 +395,28 @@ fn alloc_failed(size: usize) {
         );
         let _ = f.flush();
     }
+}
+
+/// A line in the run log at once, written straight to the file and flushed, from any
+/// thread, and to the console: for a run that is about to be ended (run_end.rs). The log's lock is waited on
+/// for at most 200 ms (Windows gives a closing console about 5 s).
+#[cfg_attr(not(windows), allow(dead_code))] // run_end.rs's listeners are Windows only
+pub(crate) fn write_now(level: &str, target: &str, text: &str) {
+    let line = format!("{}  {level} {target}: {text}", stamp(now_secs()));
+    if let Some(log) = RUN_LOG.get() {
+        for _ in 0..40 {
+            if let Ok(mut w) = log.writer.try_lock() {
+                if let Some(f) = w.as_mut() {
+                    let _ = writeln!(f, "{line}");
+                    let _ = f.flush();
+                }
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+    // And the console, as the log's other lines (a closed console only fails the write).
+    let _ = writeln!(std::io::stderr(), "{line}");
 }
 
 /// The words Bevy logs when wgpu reports the device lost, before the reason and wgpu's
@@ -748,6 +778,8 @@ fn write_lost_report(what: &str) {
 
 /// Say where the run log is, and whether the run before this one ended abnormally.
 pub fn report_start(mut commands: Commands) {
+    // After Bevy's own console handler, so that it is called first (run_end.rs).
+    crate::run_end::console_handler();
     match run_log_path() {
         Some(p) => info!("run log: {}", p.display()),
         None => info!("run log: none"),
@@ -760,6 +792,9 @@ pub fn report_start(mut commands: Commands) {
         match exit {
             Some(e) => warn!("run log: the previous run's process ended with exit code {e}"),
             None => warn!("run log: the previous run's exit code was not recorded"),
+        }
+        if let Some(Some(why)) = OUTSIDE.get() {
+            warn!("run log: the previous run was ended from outside: {why}");
         }
     }
     commands.insert_resource(bevy::render::error_handler::RenderErrorHandler(render_error));

@@ -37,6 +37,7 @@ use bevy_render::{
 };
 use core::fmt::Write;
 use core::num::NonZero;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::{
     contact_shadows::{
@@ -104,6 +105,11 @@ bitflags::bitflags! {
         const NVF_SUN_VISIBILITY               = 1 << 17;
         // NVForever ambient occlusion: bindings 43-44 ([`NvfAmbientOcclusionBindings`]).
         const NVF_AMBIENT_OCCLUSION            = 1 << 18;
+        // NVForever sun visibility's light volume: bindings 45-46, with
+        // `NVF_SUN_VISIBILITY` only ([`NvfSunVisibilityBindings::cloud_volume`]).
+        const NVF_CLOUD_VOLUME                 = 1 << 19;
+        // NVForever RTGI volume: bindings 47-49 ([`NvfRtgiVolumeBindings`]).
+        const NVF_RTGI_VOLUME                  = 1 << 20;
     }
 }
 
@@ -119,15 +125,28 @@ bitflags::bitflags! {
 /// it may be inserted or removed, and `cloud`/`terrain` changed, only during extraction;
 /// the texture views and the buffer's contents may change in any render set before
 /// `RenderSystems::PrepareBindGroups`. Bevy inserts none; without it views are as
-/// upstream's.
+/// upstream's. Bindings 45 and 46 (2026-11-20, nvforever #3032 stage 2i M2): the
+/// volumetric clouds' light volume, near and far front sets (filterable float 2D arrays,
+/// `R16Float`, sampled with 42), for the cloud shadows from the volume; a stand-in when
+/// there is none. They are in the layout only with `cloud_volume` (layout key
+/// [`MeshPipelineViewLayoutKey::NVF_CLOUD_VOLUME`], pipeline key
+/// `MeshPipelineKey::NVF_CLOUD_VOLUME_VISIBILITY`, shader def `NVF_CLOUD_VOLUME`), which the
+/// game leaves off while its Volumetric clouds row is off and on adapters whose fragment stage has
+/// too few sampled textures for them (nvforever `sun_visibility.rs` `volume_layout`,
+/// `CloudVolumeRoom`): the weather-only layout.
 #[derive(Component, Clone)]
 pub struct NvfSunVisibilityBindings {
     pub uniform: Buffer,
     pub cloud_texture: TextureView,
     pub terrain_texture: TextureView,
     pub sampler: Sampler,
+    pub light_near: TextureView,
+    pub light_far: TextureView,
     pub cloud: bool,
     pub terrain: bool,
+    /// Bindings 45 and 46 are in the layout and the bind group (and the pipelines get
+    /// `NVF_CLOUD_VOLUME`); off, `light_near` and `light_far` are not bound.
+    pub cloud_volume: bool,
 }
 
 /// NVForever ambient occlusion (2026-11-18, engine/vendor/README.md): what a view's mesh
@@ -147,6 +166,30 @@ pub struct NvfAmbientOcclusionBindings {
     pub uniform: Buffer,
     pub texture: TextureView,
 }
+
+/// NVForever RTGI volume (2026-11-25, engine/vendor/README.md): what a view's mesh view bind
+/// group holds for the bounce light of a probe volume (nvforever `rtgi_volume.rs`,
+/// #3009), at bindings 47 (uniform), 48 (the volume, a filterable float 3D texture) and 49
+/// (a filtering sampler, used with 48 only). A view with it gets
+/// [`MeshPipelineViewLayoutKey::NVF_RTGI_VOLUME`] and those bindings, and its pipelines
+/// `MeshPipelineKey::NVF_RTGI_VOLUME`; the mesh pipeline pushes no shader def for them: the
+/// materials that read the bindings push their own. Both sides read this one component in
+/// the same frame, so it may be inserted or removed only during extraction; the texture
+/// view, the sampler and the buffer's contents may change in any render set before
+/// `RenderSystems::PrepareBindGroups`. Bevy inserts none; without it views are as
+/// upstream's.
+#[derive(Component, Clone)]
+pub struct NvfRtgiVolumeBindings {
+    pub uniform: Buffer,
+    pub texture: TextureView,
+    pub sampler: Sampler,
+}
+
+/// NVForever RTGI volume: how many mesh view bind groups [`prepare_mesh_view_bind_groups`] has
+/// made in this process, and how many of them with [`NvfRtgiVolumeBindings`]: what a run says at
+/// its end (nvforever `rtgi_volume.rs`), counted where it is bound.
+pub static NVF_VIEW_BIND_GROUPS: AtomicU64 = AtomicU64::new(0);
+pub static NVF_RTGI_VIEW_BIND_GROUPS: AtomicU64 = AtomicU64::new(0);
 
 impl MeshPipelineViewLayoutKey {
     /// Builds a unique label for each layout based on the flags
@@ -231,10 +274,17 @@ impl From<MeshPipelineKey> for MeshPipelineViewLayoutKey {
         // NVForever sun visibility.
         if value.contains(MeshPipelineKey::NVF_SUN_VISIBILITY) {
             result |= MeshPipelineViewLayoutKey::NVF_SUN_VISIBILITY;
+            if value.contains(MeshPipelineKey::NVF_CLOUD_VOLUME_VISIBILITY) {
+                result |= MeshPipelineViewLayoutKey::NVF_CLOUD_VOLUME;
+            }
         }
         // NVForever ambient occlusion.
         if value.contains(MeshPipelineKey::NVF_AMBIENT_OCCLUSION) {
             result |= MeshPipelineViewLayoutKey::NVF_AMBIENT_OCCLUSION;
+        }
+        // NVForever RTGI volume.
+        if value.contains(MeshPipelineKey::NVF_RTGI_VOLUME) {
+            result |= MeshPipelineViewLayoutKey::NVF_RTGI_VOLUME;
         }
 
         result
@@ -293,6 +343,62 @@ pub(crate) fn buffer_layout(
     }
 }
 
+/// NVForever sun visibility: the mesh view layout's entries for
+/// [`NvfSunVisibilityBindings`] under `layout_key` (binding, entry): none without
+/// [`MeshPipelineViewLayoutKey::NVF_SUN_VISIBILITY`]; 39-42 with it; 45-46 as well with
+/// [`MeshPipelineViewLayoutKey::NVF_CLOUD_VOLUME`].
+pub fn nvf_sun_visibility_layout_entries(
+    layout_key: MeshPipelineViewLayoutKey,
+) -> Vec<(u32, BindGroupLayoutEntryBuilder)> {
+    let mut out = Vec::new();
+    if !layout_key.contains(MeshPipelineViewLayoutKey::NVF_SUN_VISIBILITY) {
+        return out;
+    }
+    out.push((39, uniform_buffer_sized(false, None)));
+    out.push((
+        40,
+        texture_2d(TextureSampleType::Float { filterable: true }),
+    ));
+    // The terrain shadow-height map is Rgba32Float, which is not filterable without an
+    // optional feature: unfilterable, read with loads only.
+    out.push((
+        41,
+        texture_2d(TextureSampleType::Float { filterable: false }),
+    ));
+    out.push((42, sampler(SamplerBindingType::Filtering)));
+    if layout_key.contains(MeshPipelineViewLayoutKey::NVF_CLOUD_VOLUME) {
+        // The light volume's near and far front sets (R16Float arrays, filterable).
+        out.push((
+            45,
+            texture_2d_array(TextureSampleType::Float { filterable: true }),
+        ));
+        out.push((
+            46,
+            texture_2d_array(TextureSampleType::Float { filterable: true }),
+        ));
+    }
+    out
+}
+
+/// NVForever RTGI volume: the mesh view layout's entries for [`NvfRtgiVolumeBindings`]
+/// under `layout_key` (binding, entry): 47-49 with
+/// [`MeshPipelineViewLayoutKey::NVF_RTGI_VOLUME`], none without.
+pub fn nvf_rtgi_layout_entries(
+    layout_key: MeshPipelineViewLayoutKey,
+) -> Vec<(u32, BindGroupLayoutEntryBuilder)> {
+    if !layout_key.contains(MeshPipelineViewLayoutKey::NVF_RTGI_VOLUME) {
+        return Vec::new();
+    }
+    vec![
+        (47, uniform_buffer_sized(false, None)),
+        (
+            48,
+            texture_3d(TextureSampleType::Float { filterable: true }),
+        ),
+        (49, sampler(SamplerBindingType::Filtering)),
+    ]
+}
+
 /// Returns the appropriate bind group layout vec based on the parameters
 fn layout_entries(
     layout_key: MeshPipelineViewLayoutKey,
@@ -338,6 +444,17 @@ fn layout_entries(
             // Point Shadow Texture Array Linear Sampler
             #[cfg(feature = "experimental_pbr_pcss")]
             (4, sampler(SamplerBindingType::Filtering)),
+            // NVForever ALCS far maps: the far point shadow texture array (light.rs
+            // `HoldLightShadowMaps::far_slots`), with binding 2's samplers.
+            #[cfg(all(
+                not(target_abi = "sim"),
+                any(
+                    not(feature = "webgl"),
+                    not(target_arch = "wasm32"),
+                    feature = "webgpu"
+                )
+            ))]
+            (50, texture_cube_array(TextureSampleType::Depth)),
             // Directional Shadow Texture Array
             (
                 5,
@@ -546,21 +663,8 @@ fn layout_entries(
         ));
     }
     // NVForever sun visibility ([`NvfSunVisibilityBindings`]).
-    if layout_key.contains(MeshPipelineViewLayoutKey::NVF_SUN_VISIBILITY) {
-        entries = entries.extend_with_indices((
-            (39, uniform_buffer_sized(false, None)),
-            (
-                40,
-                texture_2d(TextureSampleType::Float { filterable: true }),
-            ),
-            // The terrain shadow-height map is Rgba32Float, which is not filterable
-            // without an optional feature: unfilterable, read with loads only.
-            (
-                41,
-                texture_2d(TextureSampleType::Float { filterable: false }),
-            ),
-            (42, sampler(SamplerBindingType::Filtering)),
-        ));
+    for (binding, entry) in nvf_sun_visibility_layout_entries(layout_key) {
+        entries = entries.extend_with_indices(((binding, entry),));
     }
     // NVForever ambient occlusion ([`NvfAmbientOcclusionBindings`]).
     if layout_key.contains(MeshPipelineViewLayoutKey::NVF_AMBIENT_OCCLUSION) {
@@ -571,6 +675,10 @@ fn layout_entries(
                 texture_2d(TextureSampleType::Float { filterable: false }),
             ),
         ));
+    }
+    // NVForever RTGI volume ([`NvfRtgiVolumeBindings`]).
+    for (binding, entry) in nvf_rtgi_layout_entries(layout_key) {
+        entries = entries.extend_with_indices(((binding, entry),));
     }
 
     let mut binding_array_entries = DynamicBindGroupLayoutEntries::new(ShaderStages::FRAGMENT);
@@ -743,6 +851,8 @@ pub fn prepare_mesh_view_bind_groups(
             Option<&NvfSunVisibilityBindings>,
             // NVForever ambient occlusion.
             Option<&NvfAmbientOcclusionBindings>,
+            // NVForever RTGI volume.
+            Option<&NvfRtgiVolumeBindings>,
         ),
         Has<ExtractedAtmosphere>,
         (
@@ -818,6 +928,7 @@ pub fn prepare_mesh_view_bind_groups(
                 render_view_irradiance_volumes,
                 nvf_sun_visibility,
                 nvf_ambient_occlusion,
+                nvf_rtgi_volume,
             ),
             has_atmosphere,
             (
@@ -865,6 +976,16 @@ pub fn prepare_mesh_view_bind_groups(
                 (3, &shadow_samplers.point_light_comparison_sampler),
                 #[cfg(feature = "experimental_pbr_pcss")]
                 (4, &shadow_samplers.point_light_linear_sampler),
+                // NVForever ALCS far maps.
+                #[cfg(all(
+                    not(target_abi = "sim"),
+                    any(
+                        not(feature = "webgl"),
+                        not(target_arch = "wasm32"),
+                        feature = "webgpu"
+                    )
+                ))]
+                (50, &shadow_bindings.nvf_point_light_far_depth_texture_view),
                 (5, &shadow_bindings.directional_light_depth_texture_view),
                 (6, &shadow_samplers.directional_light_comparison_sampler),
                 #[cfg(feature = "experimental_pbr_pcss")]
@@ -1013,6 +1134,13 @@ pub fn prepare_mesh_view_bind_groups(
                     (41, &sun.terrain_texture),
                     (42, &sun.sampler),
                 ));
+                // Bindings 45-46 only in the layout that has them (the weather-only one
+                // leaves them out).
+                if sun.cloud_volume {
+                    layout_key |= MeshPipelineViewLayoutKey::NVF_CLOUD_VOLUME;
+                    entries = entries
+                        .extend_with_indices(((45, &sun.light_near), (46, &sun.light_far)));
+                }
             }
 
             // NVForever ambient occlusion: present exactly when
@@ -1022,6 +1150,19 @@ pub fn prepare_mesh_view_bind_groups(
                 layout_key |= MeshPipelineViewLayoutKey::NVF_AMBIENT_OCCLUSION;
                 entries = entries
                     .extend_with_indices(((43, ao.uniform.as_entire_binding()), (44, &ao.texture)));
+            }
+
+            // NVForever RTGI volume: present exactly when `check_views_need_specialization`
+            // gave the view's pipelines `MeshPipelineKey::NVF_RTGI_VOLUME`.
+            NVF_VIEW_BIND_GROUPS.fetch_add(1, Ordering::Relaxed);
+            if let Some(volume) = nvf_rtgi_volume {
+                NVF_RTGI_VIEW_BIND_GROUPS.fetch_add(1, Ordering::Relaxed);
+                layout_key |= MeshPipelineViewLayoutKey::NVF_RTGI_VOLUME;
+                entries = entries.extend_with_indices((
+                    (47, volume.uniform.as_entire_binding()),
+                    (48, &volume.texture),
+                    (49, &volume.sampler),
+                ));
             }
 
             let environment_map_bind_group_entries =

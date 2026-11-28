@@ -135,6 +135,8 @@ pub struct RowShown {
     pub equipped: bool,
     pub condition: f32,
     pub ready: bool,
+    /// Resolved ySI tag/icon/template for this row when ySI is active (`None` otherwise).
+    pub ysi: Option<fnv_game::ui_ysi::YsiItemDisplay>,
 }
 
 /// One whole state of the view, as the menu shows it: a frame with the same writes nothing but
@@ -202,7 +204,7 @@ impl Snapshot {
     pub(crate) fn of(v: &View, pointer_pick: bool, navigated: u32, w: &Words) -> Self {
         let chosen = v.rows.get(v.selected);
         Snapshot {
-            rows: v.rows.iter().map(|r| RowShown { key: (r.item, r.extra), name: r.name.clone(), text: r.label.clone(), equipped: r.extra.equipped, condition: r.condition, ready: r.ready }).collect(),
+            rows: v.rows.iter().map(|r| RowShown { key: (r.item, r.extra), name: r.name.clone(), text: r.label.clone(), equipped: r.extra.equipped, condition: r.condition, ready: r.ready, ysi: r.ysi.clone() }).collect(),
             selected: chosen.map(|_| v.selected),
             pointer_pick,
             navigated,
@@ -257,6 +259,8 @@ pub struct RepairServicesTiles {
     view: ListView<RowKey>,
     shown: Option<Snapshot>,
     written_in: Option<TileId>,
+    text_scale:Option<f32>,
+    normal_guard:Option<crate::menu::normal_services::Guard>,
     /// What the snapshot was made from, so a frame with the same makes none.
     from: Option<(View, bool, u32)>,
     pub sizes: SizesWritten,
@@ -272,6 +276,35 @@ pub struct RepairServicesTiles {
 }
 
 impl RepairServicesTiles {
+    pub(crate) fn normal_hit(&self,ui:&Ui,frame:crate::menu::barter_touch::Frame,
+        guard:&crate::menu::normal_services::Guard,point:Vec2,size:f32)->Option<crate::menu::normal_services::Hit> {
+        use crate::menu::{normal_services::{Action,Hit},normal_touch::Source};
+        if self.text_scale.unwrap_or(1.0)!=size || !self.normal_guard.as_ref().is_some_and(|g|g.same(guard)){return None}
+        let menu=self.menu?;
+        let at=super::input::to_menu_units(point,frame.size,Vec2::splat(0.5));
+        let candidates=fnv_ui::input::hit_candidates(ui,menu,&fnv_ui::input::no_measure);
+        if let Some(picked)=fnv_ui::input::top_hit(ui,&candidates,at) {
+            let (action,pane,key)=match self.clicked(ui,picked.tile)? {
+                RepairServicesTile::Row(index)=>{let i=self.row_at(index)?;(Action::Row(i),Some(0),self.rows.get(index)?.tile)}
+                RepairServicesTile::Repair=>(Action::Vendor(RepairServicesInput::Repair),None,picked.tile),
+                RepairServicesTile::RepairAll=>(Action::Vendor(RepairServicesInput::All),None,picked.tile),
+                RepairServicesTile::Done=>(Action::Vendor(RepairServicesInput::Done),None,picked.tile),
+                _=>return crate::menu::normal_services::native_pane(ui,frame,self.list_tile(ui)?,0,point),
+            };
+            return Some(Hit {source:Source::Tile(menu,key),action,pane,row_step:0.0})
+        }
+        crate::menu::normal_services::native_pane(ui,frame,self.list_tile(ui)?,0,point)
+    }
+    pub(crate) fn normal_scroll(&mut self,ui:&mut Ui,pixels:f64,frame:crate::menu::barter_touch::Frame,size:f32) {
+        if self.text_scale.unwrap_or(1.0)!=size || self.menu.is_none(){return}
+        let Some(list)=self.list_tile(ui) else{return};
+        let Some(delta)=ui.tile(list).get("_scroll_delta").map(Value::num).filter(|v|v.is_finite() && *v>0.0) else{return};
+        let a=super::input::to_menu_units(Vec2::ZERO,frame.size,Vec2::splat(0.5));
+        let b=super::input::to_menu_units(Vec2::Y,frame.size,Vec2::splat(0.5));
+        let next=self.value()+pixels*(b.1-a.1)/delta;
+        if next.is_finite() && self.scroll_to(next){self.rewrite(ui);ui.update();}
+    }
+
     /// The menu closed: nothing of it stays for the next (the warning does).
     fn close(&mut self) {
         *self = Self { warned: self.warned, ..Self::default() };
@@ -362,6 +395,7 @@ fn write(ui: &mut Ui, s: &Snapshot, st: &mut RepairServicesTiles) {
                 ui.set_trait(t, "filename", Value::Str(MARK_PICTURE.into()));
             }
         }
+        fnv_game::ui_ysi::apply_row_icon(ui, &fnv_ui::MemSource::default(), row.tile, shown.ysi.as_ref());
     }
     set(ui, LIST, "_num_filtered", Value::Num(0.0));
     // [hypothesis] The one list of this menu takes the pointer, as the container's two
@@ -444,7 +478,8 @@ fn settle(ui: &mut Ui, st: &mut RepairServicesTiles, write_sizes: &mut dyn FnMut
     }
     repair_cards::fit_meters(ui, STATS, PREFIX);
     if let Some(list_tile) = ui.find_tile(LIST) {
-        list::settle_list(ui, list_tile, &st.rows, ROW_TEXT, &mut st.view, s.selected, 0, s.pointer_pick, s.navigated);
+        list::settle_list_sized(ui,list_tile,&st.rows,ROW_TEXT,&mut st.view,
+            list::RowLayout {selected:s.selected,group:0,pointer_pick:s.pointer_pick,navigated:s.navigated,text_scale:st.text_scale.unwrap_or(1.0),minimum_height:51.0});
     }
     st.rewrite(ui);
     ui.update();
@@ -486,11 +521,14 @@ pub(super) fn write_system(
     services: Option<Res<RepairServices>>,
     mut fonts: super::draw::FontKit,
     mut st: ResMut<RepairServicesTiles>,
+    readability:Option<Res<crate::menu_readability::MenuReadability>>,
 ) {
     if !switch.repair_services {
         return;
     }
     let st = &mut *st;
+    let scale=crate::menu::readability::size(readability.as_deref(),crate::menu_readability::MenuKind::Repair);
+    if st.text_scale!=Some(scale) {st.text_scale=Some(scale);st.sizes.clear();st.written_in=None;st.drag=None;}
     let Some(rt) = script.rt.as_ref() else { return };
     let game = &rt.game;
     let open = services.as_ref().and_then(|s| s.0.as_ref());
@@ -519,11 +557,15 @@ pub(super) fn write_system(
     });
     let Some(rt) = script.rt.as_mut() else { return };
     let ui = &mut rt.game.ui_tree;
+    if new.is_some() || !open.normal_owner_matches(st.normal_guard.as_ref()) {
+        st.normal_guard=open.normal_guard();
+    }
     let told = new.is_some_and(|s| apply(ui, menu, s, st));
     let texts = super::menus::texts(ui, menu);
     settle(ui, st, &mut |ui, sizes| {
         let size = fonts.menu_measure(&super::menus::fonts_of(ui, &texts));
-        super::menus::write_text_sizes_of(ui, &texts, sizes, &size)
+        super::menus::write_text_sizes_of(ui,&texts,sizes,&|font,text,wrap|
+            crate::menu::readability::measured(&size,scale,font,text,wrap))
     });
     mark_tiles(ui);
     if let (true, Some(s)) = (told, st.shown.as_ref()) {
@@ -545,8 +587,16 @@ pub(super) fn after_update(mut script: ResMut<crate::script::ScriptState>, mut s
     st.check_drawn(&rt.game.ui_tree, &mut |line| info!("{line}"));
 }
 
+// Module-owned provider: the same writer/order used by TilesPlugin, without
+// installing unrelated menu consumers in this actual transaction fixture.
 #[cfg(test)]
-mod tests {
+pub(crate) fn install_normal_fixture_writer(app:&mut App) {
+    app.init_resource::<super::draw::TileFonts>()
+        .add_systems(Update,write_system.before(super::input::feed));
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
     use super::*;
     use crate::repair::RepairServicesInput as Ask;
     use fnv_ui::MemSource;
@@ -554,7 +604,7 @@ mod tests {
     /// [design] A fixture written for these tests, with its own dimensions and simple dependencies
     /// (#1512). It keeps the tile and trait names this module looks up, which are the engine's
     /// interface; no value or expression comes from the game's file, and it says nothing about it.
-    fn fixture(change: impl FnOnce(String) -> String) -> Ui {
+    pub(crate) fn fixture(change: impl FnOnce(String) -> String) -> Ui {
         let card = |name: &str, inner: &str| format!(r#"<rect name="{name}"><text name="CI_TitleText"/><text name="CI_ValueText"/>{inner}</rect>"#);
         let meter = |name: &str| format!(r#"<rect name="{name}"><image name="MeterImage"/></rect>"#);
         let button = |name: &str, words: &str, x: u32| format!(r#"<image name="{name}"><x>{x}</x><width>70</width><height>30</height><target>1</target><text name="button_text"><string>{words}</string></text><text name="PCShortcutLabel"/></image>"#);
@@ -599,7 +649,7 @@ mod tests {
     }
 
     fn row(id: u32, condition: f32, quote: Quote, ready: bool) -> RowView {
-        RowView { item: FormId(id), extra: Extra { condition: Some(condition), ..Extra::default() }, count: 1, name: format!("Item {id}"), label: format!("Item {id}"), condition, quote, ready, icon: None, stat: None }
+        RowView { item: FormId(id), extra: Extra { condition: Some(condition), ..Extra::default() }, count: 1, name: format!("Item {id}"), label: format!("Item {id}"), condition, quote, ready, icon: None, stat: None, ysi: None }
     }
 
     /// Two rows ready, one beyond the vendor; the first a weapon, worn at a quarter.
@@ -973,4 +1023,59 @@ mod tests {
         assert!(line.contains("meter 12 of 50") || line.contains("meter 13 of 50"), "{line}");
         assert!(line.contains("Force 4"), "{line}");
     }
+
+    #[test]
+    fn ysi_row_icons_attach_when_ysi_xml_is_present_and_noop_when_absent() {
+        let mut v = view();
+        v.rows[0].ysi = Some(fnv_game::ui_ysi::YsiItemDisplay {
+            tag: Some("(f01)".into()),
+            icon: Some("icons\\pistol.dds".into()),
+            template: fnv_game::ui_ysi::YSI_DEFAULT_TEMPLATE.into(),
+        });
+
+        // Without ySI.xml: complete no-op, zero ySIImage tiles created.
+        let (mut plain_ui, mut plain_st) = (fixture(|s| s), RepairServicesTiles::default());
+        frame(&mut plain_ui, snapshot(&v), &mut plain_st);
+        assert!(list::child(&plain_ui, plain_st.rows[0].tile, fnv_game::ui_ysi::YSI_IMAGE_TILE).is_none());
+
+        // With ySI.xml injected into RepairServicesMenu: tagged row gets ySIDefault + filename,
+        // untagged row gets ySINoTag, and clicking ySIImage maps to Row(0).
+        let ysi_xml = r#"
+<rect name="ySI">
+  <_ySI> 1 </_ySI>
+  <_ySIBlanks> 1 </_ySIBlanks>
+  <_ySIWidth> 24 </_ySIWidth>
+  <_ySIHeight> 24 </_ySIHeight>
+</rect>
+<template name="ySIDefault">
+  <image name="ySIImage">
+    <filename> icons\default.dds </filename>
+    <width> <copy src="ySI" trait="_ySIWidth"/> </width>
+    <height> <copy src="ySI" trait="_ySIHeight"/> </height>
+    <visible> 1 </visible>
+  </image>
+</template>
+<template name="ySINoTag">
+  <image name="ySIImage">
+    <filename> icons\blank.dds </filename>
+    <width> <copy src="ySI" trait="_ySIWidth"/> <onlyif src="ySI" trait="_ySIBlanks"/> </width>
+    <height> <copy src="ySI" trait="_ySIHeight"/> </height>
+    <visible> 1 </visible>
+  </image>
+</template>
+"#;
+        let (mut ui, mut st) = (fixture(|s| s), RepairServicesTiles::default());
+        let src = MemSource::default().with(fnv_game::ui_ysi::YSI_XML_PATH, ysi_xml);
+        let root = ui.menu(REPAIR_SERVICES_MENU).unwrap();
+        assert!(fnv_game::ui_ysi::publish_for_menu(&mut ui, &src, root, Some(MENU_CODE)));
+        ui.update();
+        frame(&mut ui, snapshot(&v), &mut st);
+
+        let img0 = list::child(&ui, st.rows[0].tile, fnv_game::ui_ysi::YSI_IMAGE_TILE).expect("tagged row icon");
+        let img1 = list::child(&ui, st.rows[1].tile, fnv_game::ui_ysi::YSI_IMAGE_TILE).expect("untagged row icon");
+        assert_eq!(ui.tile(img0).get("filename").map(Value::text).as_deref(), Some("icons\\pistol.dds"));
+        assert_eq!(ui.tile(img1).get("filename").map(Value::text).as_deref(), Some("icons\\blank.dds"));
+        assert_eq!(st.clicked(&ui, img0), Some(RepairServicesTile::Row(0)));
+    }
 }
+

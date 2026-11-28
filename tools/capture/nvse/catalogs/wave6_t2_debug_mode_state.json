@@ -1,0 +1,70 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6_t2_debug_mode_state",
+  "description": "Wave 6 Tier 2 strictly read-only console-only probe verifying GetDebugModeState modes 0..5 defaults (including mode 2 Combat AI = 1) and ToggleGodMode toggle.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)"
+  },
+  "batches": [
+    {
+      "id": "w6_t2_debug_mode_state",
+      "title": "Wave 6 Tier 2 - GetDebugModeState Defaults",
+      "extender": "JIP LN 57.30",
+      "required_plugins": [
+        "jip_nvse.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6t2_24_jip_fall_time_and_is_in_air_edges",
+          "bucket": "B",
+          "extender": "JIP LN 57.30",
+          "required_plugins": [
+            "jip_nvse.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": false,
+          "mutates_state": false,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/jip-math-utility.md",
+          "spec_line": 53,
+          "functions_tested": [
+            "GetDebugModeState",
+            "GetFallTimeRemaining",
+            "IsInAir"
+          ],
+          "claim": "Verify GetDebugModeState modes 0..5 default states including mode 2 (Combat AI) = 1 and ToggleGodMode toggling mode 0.",
+          "expected": "dbg(0,1,1,0,0,0,tgm=1)|fall=0.952,air=0",
+          "script_lines": [
+            "int d0 = GetDebugModeState 0",
+            "int d1 = GetDebugModeState 1",
+            "int d2 = GetDebugModeState 2",
+            "int d3 = GetDebugModeState 3",
+            "int d4 = GetDebugModeState 4",
+            "int d5 = GetDebugModeState 5",
+            "ToggleGodMode",
+            "int d0t = GetDebugModeState 0",
+            "ToggleGodMode",
+            "float ft = Player.GetFallTimeRemaining",
+            "int air = Player.IsInAir",
+            "PrintToConsole \"PROBE|w6t2_24_jip_fall_time_and_is_in_air_edges|dbg(%g,%g,%g,%g,%g,%g,tgm=%g)|fall=%.3f,air=%g\" d0 d1 d2 d3 d4 d5 d0t ft air"
+          ]
+        }
+      ]
+    }
+  ]
+}

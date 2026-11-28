@@ -71,6 +71,34 @@ impl Game<'_> {
     }
 }
 
+/// The game's display size settings, `iSize W` and `iSize H` under `[Display]`: the
+/// original sizes its window from them, so in the original they are the window's size
+/// [observed: jip9 cursor.*, the original's pointer sat at the centre of a 1280 by 720
+/// window on an install whose FalloutPrefs.ini says iSize W=1280, iSize H=720].
+/// NVForever sizes its window from its own settings, not the game's INI, so these two
+/// read the window's size in pixels as the engine last told it, above any INI text
+/// [design: scripts compare them with GetCursorPos's pixels; an INI that is absent (no
+/// `--mo2`) or names another size would put the window's edge in the wrong place].
+/// `None` for any other setting, or before the engine tells a size (headless runs keep
+/// the INI's value, else none).
+fn live_display_size(g: &Game, key: &str) -> Option<f64> {
+    let (w, h) = g.other.jip9.window.filter(|(w, h)| *w > 0.0 && *h > 0.0)?;
+    match key {
+        "isize w:display" => Some(w),
+        "isize h:display" => Some(h),
+        _ => None,
+    }
+}
+
+/// A setting's text: the live display size for `iSize W`/`iSize H`
+/// ([`live_display_size`]), else the INI text's value.
+fn setting_text(g: &mut Game, texts: &[String], key: &str) -> Option<String> {
+    if let Some(v) = live_display_size(g, key) {
+        return Some(number_text(v));
+    }
+    g.ini.values(texts).get(key).cloned()
+}
+
 /// The functions of this file; `None` for any other name.
 pub(crate) fn call(g: &mut Game, name: &str, args: &[XVal]) -> Option<Result<XVal, String>> {
     let texts = g.data.ini_texts.clone();
@@ -79,12 +107,12 @@ pub(crate) fn call(g: &mut Game, name: &str, args: &[XVal]) -> Option<Result<XVa
         // ini.case].
         // (GetNumericINISetting and GetNumericIniSetting are one name in lower case.)
         "getnumericinisetting" => {
-            let v = key(args).and_then(|k| g.ini.values(&texts).get(&k).cloned());
+            let v = key(args).and_then(|k| setting_text(g, &texts, &k));
             XVal::Num(v.and_then(|s| s.parse::<f64>().ok()).unwrap_or(-1.0))
         }
         // A missing string setting gives no value: the call fails [observed: nvse-sixth,
         // ini.string.missing "script call failed"].
-        "getstringinisetting" => match key(args).and_then(|k| g.ini.values(&texts).get(&k).cloned()) {
+        "getstringinisetting" => match key(args).and_then(|k| setting_text(g, &texts, &k)) {
             Some(s) => XVal::Str(s),
             None => return Some(Err("GetStringIniSetting: no such INI setting".into())),
         },

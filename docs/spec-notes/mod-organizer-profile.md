@@ -129,8 +129,12 @@ observed: MO2 2.5 profiles]
   (a later mod's key replaces an earlier one), then the profile's own, then MO2's
   `[Archive] bInvalidateOlderFiles=1`. MO1's launcher applied the result to the game's INI
   files; MO2 keeps it in the profile [documented: issue #663 describes the same intent].
+- A profile may also keep `FalloutCustom.ini`, the user's overrides [observed in
+  FadedLight's Nuclear Sunset fork: that modlist's profile keeps one with `[BackgroundLoad]
+  bBackgroundLoadLipFiles=1` over Fallout.ini's 0, and TTW's start-up check reads that key;
+  hypothesis: the game reads it after the other two] (#4491).
 - Reading order for the effective value of a key: `Fallout.ini` < `FalloutPrefs.ini` <
-  `initweaks.ini`, later winning. NVForever reads the three files, matched without case, as
+  `FalloutCustom.ini` < `initweaks.ini`, later winning. NVForever reads the three files, matched without case, as
   text (lossy UTF-8: the originals are in the system code page) and lets the extender's INI
   functions layer them, which is how `GameData::ini_texts` already treats several files.
 - NVForever does not write any of these files, and MO2 does not know it started the game, so

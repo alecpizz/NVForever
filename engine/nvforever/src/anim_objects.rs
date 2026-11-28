@@ -271,7 +271,7 @@ mod tests {
                 RigNode { name: Some("OwnedGlow".into()), parent: Some(0), local: Transform::IDENTITY, hidden: false, billboard: None },
             ],
             shapes: vec![RigShape { node: 1, mesh: default(), material: default(), skin: None, morph: None,
-                look: ("OwnedGlow".into(), [0.0; 3], 1.0, 1.0), refraction: 0.0, animated: true }],
+                look: ("OwnedGlow".into(), [0.0; 3], 1.0, 1.0), refraction: 0.0, animated: true, block: 0 }],
             idle: None, door: None, groups: Vec::new(), effect: None,
         }), ..default() };
         let mut queue = CommandQueue::default();

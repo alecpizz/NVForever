@@ -2350,7 +2350,7 @@ fn the_player_cannot_drop_a_quest_item_by_hand() {
     // A script's drop ignores the flag [observed: scripted player.Drop in the game].
     assert_eq!(w.drop_item(p, id(QUEST_KEY), 1).unwrap().len(), 1);
     assert_eq!(w.item_count(p, id(QUEST_KEY)).unwrap(), 2);
-    // Storing it in a container is allowed [hypothesis], and the container may drop it.
+    // Storing it in a container is allowed (see crates/fnv-sim/src/world.rs), and the container may drop it.
     assert_eq!(w.transfer(p, id(SAFE_REF), id(QUEST_KEY), 1).unwrap(), 1);
     assert_eq!(w.drop_item(id(SAFE_REF), id(QUEST_KEY), 1).unwrap().len(), 1);
     // The flag is the error's message.

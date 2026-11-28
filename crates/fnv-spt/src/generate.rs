@@ -277,6 +277,40 @@ fn point_at(pts: &[V], dirs: &[V], t: f32) -> (V, V) {
     (add(pts[i], scale(sub(pts[i + 1], pts[i]), f)), dirs[i + 1])
 }
 
+/// The lighting normals of NVForever's Physical lighting (#3827, part 3b) in place of
+/// [`light_leaves`]'s: a dome around the crown's core (the leaves' box centre, lowered to 35 %
+/// of its height): out from that core, with an upward part of three quarters of the leaf's
+/// height above it plus a quarter of the crown's reach, so a crown
+/// shades as a dense volume and its underside still sees the sky [design, chosen by eye on
+/// #3828's branch; speedtree.md §6]. The CNAM dimming still darkens the crown towards its
+/// bottom; this rule's upward normals keep the two from compounding into a black underside.
+pub fn canopy_normals(leaves: &mut [Leaf]) {
+    if leaves.is_empty() {
+        return;
+    }
+    let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+    for l in leaves.iter() {
+        for axis in 0..3 {
+            lo[axis] = lo[axis].min(l.position[axis]);
+            hi[axis] = hi[axis].max(l.position[axis]);
+        }
+    }
+    let core = [(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5, lo[2] + 0.35 * (hi[2] - lo[2])];
+    let max_r = leaves
+        .iter()
+        .map(|l| {
+            let d = sub(l.position, core);
+            dot(d, d).sqrt()
+        })
+        .fold(0.0f32, f32::max)
+        .max(1e-4);
+    for l in leaves.iter_mut() {
+        let d = sub(l.position, core);
+        let nz = d[2].max(0.0) * 0.75 + 0.25 * max_r;
+        l.normal = norm([d[0], d[1], nz]);
+    }
+}
+
 fn light_leaves(leaves: &mut [Leaf]) {
     if leaves.is_empty() {
         return;
@@ -348,5 +382,24 @@ impl Rng {
         z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
         z ^= z >> 31;
         (z >> 40) as f32 / (1u64 << 24) as f32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canopy_normals_point_up_and_out_from_the_lowered_core() {
+        let leaf = |p: [f32; 3]| Leaf { position: p, map: 0, size: [1.0, 1.0], pivot: [0.5, 0.5], normal: [0.0; 3] };
+        let mut leaves = vec![leaf([-10.0, 0.0, 0.0]), leaf([10.0, 0.0, 0.0]), leaf([0.0, 0.0, 20.0]), leaf([0.0, 0.0, 0.0])];
+        canopy_normals(&mut leaves);
+        for l in &leaves {
+            let n = l.normal;
+            assert!(((n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt() - 1.0).abs() < 1e-4, "unit: {n:?}");
+            assert!(n[2] > 0.0, "always up: {n:?}");
+        }
+        assert!(leaves[0].normal[0] < 0.0 && leaves[1].normal[0] > 0.0, "out from the core");
+        assert!(leaves[2].normal[2] > leaves[0].normal[2], "the top faces up more than the sides");
     }
 }

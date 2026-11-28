@@ -68,7 +68,8 @@ The strings are game settings that are not in the masters (the executable's defa
   maintainer's decision 2026-10-30) [design]; the key hints after the buttons in the
   menus' usual button style, following the input device: "Close E)" with the keyboard,
   "Close B)" with a controller [observed: the owner's play of the original, issue #1904],
-  and Next "A)" / "RT)", Previous "S)" / "LT)" in the same style [design]
+  and Next "A)" / "RT)", Previous "S)" / "LT)" in the same style [design]; NVForever
+  writes them "[E]", "[B]", "[A]", "[RT]" … (#4495, docs/design/controller.md "Hint shape")
   (`tutorial_menu::hints`; `sPCMenuHintA/S/E` are in no plugin, and NVForever's own labels
   for them were "[A]"-shaped); the background as dark as the other menus
   (0.75) instead of the file's alpha 32 [design: readable over the Pip-Boy]; the page

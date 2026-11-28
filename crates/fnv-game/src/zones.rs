@@ -40,10 +40,27 @@ impl<'a> Game<'a> {
         self.world.set_player_level(self.list_player_level());
     }
 
-    /// The level `r` reads leveled lists at (`fnv_sim::World::level_at`): fixed when its
-    /// cell was loaded, else what it would be fixed at now.
+    /// The encounter zone's current level, once visited (`None` before first entry).
+    /// With `bNoLockEncounterZoneLevels` enabled, a visited zone recomputes its level
+    /// against the current player level (respecting `min_level` and `Match PC Below
+    /// Minimum Level`, including session `SetZoneMinLevel` / `SetZoneFlag` overrides)
+    /// instead of staying frozen at its first-visit level [design: docs/design/tweaks.md].
+    pub fn zone_level(&self, zone: FormId) -> Option<u16> {
+        let locked = self.world.zone_level(zone)?;
+        if self.tweaks.no_lock_encounter_zone_levels {
+            let def = self.world.effective_zone_def(zone).unwrap_or_default();
+            Some(fnv_sim::zones::level_on_entry(&def, self.list_player_level()))
+        } else {
+            Some(locked)
+        }
+    }
+
+    /// The level `r` reads leveled lists at (`fnv_sim::World::level_at_with_zone_lock`):
+    /// fixed when its cell was loaded, else what it would be fixed at now (recomputing a
+    /// zone's level against the current player level when `bNoLockEncounterZoneLevels` is
+    /// enabled).
     pub fn leveled_at(&self, r: FormId) -> LevelAt {
-        self.world.level_at(r, self.list_player_level())
+        self.world.level_at_with_zone_lock(r, self.list_player_level(), !self.tweaks.no_lock_encounter_zone_levels)
     }
 
     /// The reference whose FormID seeds the leveled picks of `r`: itself until
@@ -101,7 +118,7 @@ impl<'a> Game<'a> {
     /// [`Game::voice_base`] with `r`'s level read from `world`: for callers that hold the
     /// world themselves between frames (the engine, `script::with_world`).
     pub fn voice_base_in(&self, world: &fnv_sim::World, base: FormId, r: FormId) -> FormId {
-        let at = world.level_at(r, self.list_player_level());
+        let at = world.level_at_with_zone_lock(r, self.list_player_level(), !self.tweaks.no_lock_encounter_zone_levels);
         // Seeded as the drawn actor and its carried items are: by the reference until
         // ResurrectActor rolled its picks again, so a resurrected actor speaks with the
         // voice of the entry it now shows.
@@ -114,6 +131,7 @@ impl<'a> Game<'a> {
     /// (`fnv_sim::zones`). A placed actor whose carried items come from a leveled pick takes
     /// them from the pick at that level, unless they were rolled already.
     pub(crate) fn fix_cell_levels(&mut self, cell: FormId) {
+        self.world.set_no_lock_encounter_zone_levels(self.tweaks.no_lock_encounter_zone_levels);
         let player_level = self.list_player_level();
         let placed = self.world.placed;
         // A script's zone for the cell or its worldspace first (`nvse_jg5::cell_zone`).
@@ -177,8 +195,9 @@ impl<'a> Game<'a> {
     }
 
     /// `r` is made anew by a cell reset: its level is fixed again at the player's level
-    /// now (its zone's level stays as it was).
+    /// now (its zone's level stays as it was unless `bNoLockEncounterZoneLevels` is on).
     pub(crate) fn refix_level(&mut self, r: FormId) {
+        self.world.set_no_lock_encounter_zone_levels(self.tweaks.no_lock_encounter_zone_levels);
         self.world.unfix_level(r);
         let player_level = self.list_player_level();
         self.fix_ref_level(r, player_level, true);

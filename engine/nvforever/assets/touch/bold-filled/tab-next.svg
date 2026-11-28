@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Original NVForever geometry; Bold filled family. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="currentColor" stroke="none" color="#ffffff" fill-rule="evenodd" stroke-width="0" stroke-linecap="round" stroke-linejoin="round">
+  <title>Next tab</title>
+  <path d="M 3 4 L 7 4 L 7 28 L 3 28 Z M 10 13 L 21 13 L 21 7 L 30 16 L 21 25 L 21 19 L 10 19 Z"/>
+</svg>

@@ -5,6 +5,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[dependencies]
+# The hosted relay's session id (hosted::session_id).
+sha2 = "0.10"
+
 [features]
 # The in-process NAT simulator (`natsim`), for other crates' tests. Its own tests always have it.
 natsim = []

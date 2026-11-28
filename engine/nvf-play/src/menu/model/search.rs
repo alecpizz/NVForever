@@ -72,9 +72,15 @@ impl Search {
 
 impl Selection {
     pub(super) fn find(self, rows: &[Row]) -> Option<usize> {
+        if matches!(self.folder, Some(FolderRow::Open(super::Folder::Ysi(_)))) {
+            return rows.iter().position(|row| row.folder == self.folder);
+        }
         let mut nth = 0;
         rows.iter().position(|row| {
-            if row.units() != self.key.units || row.reference != self.key.reference {
+            if row.units() != self.key.units
+                || row.reference != self.key.reference
+                || matches!(row.folder, Some(FolderRow::Open(super::Folder::Ysi(_))))
+            {
                 return false;
             }
             let at = nth;

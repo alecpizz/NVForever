@@ -1,0 +1,117 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6d1_get_explosion_hit_damage_outside",
+  "description": "Wave 6D-1 strictly read-only console-only clean-room probe catalog verifying ShowOff GetExplosionHitDamage returns -1.0 outside ShowOff:OnExplosionHit and reports/overrides pre-armor DT damage inside.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)",
+    "ShowOffNVSE Plugin": "184",
+    "lStewieAl's Tweaks": "1005"
+  },
+  "batches": [
+    {
+      "id": "w6d1_get_explosion_hit_damage_outside",
+      "title": "Wave 6D-1 - GetExplosionHitDamage Outside Handler (-1.0) and Pre-Armor DT",
+      "extender": "xNVSE 6.4.9 + JIP LN 57.30 + ShowOffNVSE 184",
+      "required_plugins": [
+        "jip_nvse.dll",
+        "ShowOffNVSE.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6d1_18_on_explosion_hit_armor_dt",
+          "bucket": "A",
+          "extender": "ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-showoff.md",
+          "spec_line": 38,
+          "functions_tested": [
+            "ShowOff:OnExplosionHit",
+            "GetExplosionHitDamage",
+            "SetExplosionHitDamage",
+            "GetExplosionRefRadius",
+            "GetExplosionRefSource"
+          ],
+          "claim": "Verify whether GetExplosionHitDamage in ShowOff:OnExplosionHit is BEFORE or AFTER armor DT, whether SetExplosionHitDamage bypasses DT, and GetExplosionRefRadius/Source on live EXPL GetSelfAlt.",
+          "expected": "Check GetExplosionHitDamage with DT=50 vs DT=0, HP loss after SetExplosionHitDamage 30 with DT=50, and live GetExplosionRefRadius/Source.",
+          "script_lines": [
+            "ref cb = CompileScript \"nvseprobe_s_w6d1_18_cb.gek\"",
+            "Player.AuxVarSetRef \"*w6d1_18_cb\" cb",
+            "Player.AuxVarSetFlt \"*w6d1_18_step\" 1",
+            "SetEventHandlerAlt \"ShowOff:OnExplosionHit\" cb 1::Player",
+            "Player.RestoreAV Health 500",
+            "Player.ForceAV DamageThreshold 50",
+            "Player.AuxVarSetFlt \"*w6d1_18_hp1a\" (Player.GetAV Health)",
+            "ref rExpl = GetFormFromMod \"FalloutNV.esm\" \"7078B\"",
+            "Player.PlaceAtMe rExpl 1"
+          ],
+          "wait_ticks_after": 4,
+          "helper_scripts": {
+            "nvseprobe_s_w6d1_18_cb.gek": [
+              "begin Function { ref rHit, ref rSrc }",
+              "ref rE = GetSelfAlt",
+              "float fD = GetExplosionHitDamage",
+              "int st = Player.AuxVarGetFlt \"*w6d1_18_step\"",
+              "if st == 1",
+              "  Player.AuxVarSetFlt \"*w6d1_18_d1\" fD",
+              "  Player.AuxVarSetFlt \"*w6d1_18_rad\" (rE.GetExplosionRefRadius)",
+              "  Player.AuxVarSetRef \"*w6d1_18_src\" (rE.GetExplosionRefSource)",
+              "elseif st == 2",
+              "  Player.AuxVarSetFlt \"*w6d1_18_d2\" fD",
+              "  SetExplosionHitDamage 30",
+              "endif"
+            ]
+          },
+          "extra_steps": [
+            {
+              "suffix": "blast2",
+              "wait_ticks": 4,
+              "script_lines": [
+                "Player.AuxVarSetFlt \"*w6d1_18_loss1\" ((Player.AuxVarGetFlt \"*w6d1_18_hp1a\") - (Player.GetAV Health))",
+                "Player.RestoreAV Health 500",
+                "Player.AuxVarSetFlt \"*w6d1_18_step\" 2",
+                "Player.AuxVarSetFlt \"*w6d1_18_hp2a\" (Player.GetAV Health)",
+                "ref rExpl = GetFormFromMod \"FalloutNV.esm\" \"7078B\"",
+                "Player.PlaceAtMe rExpl 1"
+              ]
+            },
+            {
+              "suffix": "read",
+              "wait_ticks": 0,
+              "script_lines": [
+                "float loss2 = (Player.AuxVarGetFlt \"*w6d1_18_hp2a\") - (Player.GetAV Health)",
+                "Player.ForceAV DamageThreshold 0",
+                "Player.RestoreAV Health 500",
+                "RemoveEventHandler \"ShowOff:OnExplosionHit\" (Player.AuxVarGetRef \"*w6d1_18_cb\")",
+                "float dOut = GetExplosionHitDamage",
+                "int srcP = ((Player.AuxVarGetRef \"*w6d1_18_src\") == Player)",
+                "PrintToConsole \"PROBE|w6d1_18_on_explosion_hit_armor_dt|dt50(dmg=%.1f,loss=%.1f)|set30(dmg=%.1f,loss=%.1f)|rad=%.1f,srcP=%g,out=%.1f\" (Player.AuxVarGetFlt \"*w6d1_18_d1\") (Player.AuxVarGetFlt \"*w6d1_18_loss1\") (Player.AuxVarGetFlt \"*w6d1_18_d2\") loss2 (Player.AuxVarGetFlt \"*w6d1_18_rad\") srcP dOut"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

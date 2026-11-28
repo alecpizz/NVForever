@@ -1872,7 +1872,7 @@
             "SetWeaponItemMod rW 1 rSt",
             "ref m1 = GetWeaponItemMod 1 rW",
             "SetWeaponItemMod rW 1 m0",
-            "PrintToConsole \"PROBE|jip_20_weapon_item_mod_non_imod|%g,%z,%z\" (m0 == m1) (GetFormIDString m0) (GetFormIDString m1)"
+            "PrintToConsole \"PROBE|jip_20_weapon_item_mod_non_imod|m0=%i,m1=%i,eq0=%g,eqSt=%g,eqM0=%g\" m0 m1 (m1 == 0) (m1 == rSt) (m1 == m0)"
           ]
         },
         {

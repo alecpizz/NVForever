@@ -28,6 +28,7 @@ pub(super) struct ExtractedStateBuffers {
 pub(super) fn extract_buffers(
     mut commands: Commands,
     changed: Extract<Query<(RenderEntity, &AutoExposure), Changed<AutoExposure>>>,
+    render_entities: Extract<Query<RenderEntity>>,
     mut removed: Extract<RemovedComponents<AutoExposure>>,
 ) {
     commands.insert_resource(ExtractedStateBuffers {
@@ -35,7 +36,12 @@ pub(super) fn extract_buffers(
             .iter()
             .map(|(entity, settings)| (entity, settings.clone()))
             .collect(),
-        removed: removed.read().collect(),
+        // NVForever (#3917): map main-world Entities to RenderEntities so removal matches
+        // `AutoExposureBuffers.buffers` (keyed by RenderEntity).
+        removed: removed
+            .read()
+            .filter_map(|entity| render_entities.get(entity).ok())
+            .collect(),
     });
 }
 
@@ -44,7 +50,14 @@ pub(super) fn prepare_buffers(
     queue: Res<RenderQueue>,
     mut extracted: ResMut<ExtractedStateBuffers>,
     mut buffers: ResMut<AutoExposureBuffers>,
+    active: Query<(), With<AutoExposure>>,
 ) {
+    // NVForever (#3917): remove before inserting `changed` so a same-frame remove+re-add
+    // starts with fresh initial state rather than dropping the re-added buffer.
+    for entity in extracted.removed.drain(..) {
+        buffers.buffers.remove(&entity);
+    }
+
     for (entity, settings) in extracted.changed.drain(..) {
         let (min_log_lum, max_log_lum) = settings.range.into_inner();
         let (low_percent, high_percent) = settings.filter.into_inner();
@@ -81,7 +94,6 @@ pub(super) fn prepare_buffers(
         }
     }
 
-    for entity in extracted.removed.drain(..) {
-        buffers.buffers.remove(&entity);
-    }
+    // NVForever (#3917): also prune views whose AutoExposure was removed or despawned.
+    buffers.buffers.retain(|entity, _| active.contains(*entity));
 }

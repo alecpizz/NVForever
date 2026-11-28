@@ -22,6 +22,8 @@ use bevy_render::{
 use indexmap::IndexMap;
 
 pub struct Transmissive3d {
+    /// This item contributes to the scene color copied for the remaining items.
+    pub before_copy: bool,
     pub sorting_info: TransparentSortingInfo3d,
     pub distance: f32,
     pub pipeline: CachedRenderPipelineId,
@@ -84,11 +86,11 @@ impl PhaseItem for Transmissive3d {
 
 impl SortedPhaseItem for Transmissive3d {
     // NOTE: Values increase towards the camera. Back-to-front ordering for transmissive means we need an ascending sort.
-    type SortKey = FloatOrd;
+    type SortKey = (bool, FloatOrd);
 
     #[inline]
     fn sort_key(&self) -> Self::SortKey {
-        FloatOrd(self.distance)
+        (!self.before_copy, FloatOrd(self.distance))
     }
 
     #[inline]

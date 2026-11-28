@@ -179,6 +179,9 @@ pub struct PlayerControl {
     /// A kill camera has the view (`crate::kill_cam`): it counts as a third-person view,
     /// so the body is drawn and the first-person arms are not.
     pub cinematic: bool,
+    /// A minigame's camera has the view (the slot machine's, nvforever `slots_view.rs`):
+    /// counted as a third-person view, as [`Self::cinematic`] is.
+    pub scene_cam: bool,
     /// A conversation's close-up from third person (`crate::dialogue_zoom`): how far the
     /// camera has travelled from its place behind the player to the first-person eye, 0 to 1.
     /// [`Self::pov`] stays the player's own.
@@ -207,6 +210,7 @@ impl Default for PlayerControl {
             crosshair: None,
             portrait: None,
             cinematic: false,
+            scene_cam: false,
             talk_camera: 0.0,
         }
     }
@@ -219,6 +223,7 @@ impl PlayerControl {
         self.orbit.held = false;
         self.orbit.moved = false;
         self.ready_held = None;
+        self.reload_wait = None;
         self.aiming = false;
         self.trigger = false;
         self.sprint_held = false;
@@ -234,7 +239,7 @@ impl PlayerControl {
     /// conversation's close-up has come so close that the body goes
     /// ([`TALK_CAMERA_CLOSE`]), or a camera that does (the creator's, a kill camera).
     pub fn third_person_view(&self) -> bool {
-        self.portrait.is_some() || self.cinematic || (self.own_third_person() && self.talk_camera < TALK_CAMERA_CLOSE)
+        self.portrait.is_some() || self.cinematic || self.scene_cam || (self.own_third_person() && self.talk_camera < TALK_CAMERA_CLOSE)
     }
 
     /// The heading the view looks along for a player facing `heading`: turned by the
@@ -477,7 +482,7 @@ pub fn enforce_locks(
 /// (IsSneaking) every frame; movement is told by detection (`nvforever` `detection.rs`).
 /// First JIP's ToggleFirstPerson and TogglePlayerSneaking take effect
 /// (`fnv_game::nvse_gaps`), and the scripted draws and holsters (`fnv_game::nvse_hud`).
-pub fn tell_scripts(mut control: ResMut<PlayerControl>, mut script: Option<ResMut<crate::script::ScriptState>>) {
+pub fn tell_scripts(mut control: ResMut<PlayerControl>, mut script: Option<ResMut<crate::script::ScriptState>>, mut held_sneak: Option<ResMut<HeldSneakInput>>) {
     let Some(rt) = script.as_deref_mut().and_then(|s| s.rt.as_mut()) else { return };
     let g = &mut rt.game;
     if let Some(first) = g.gaps.view_request.take() {
@@ -485,6 +490,7 @@ pub fn tell_scripts(mut control: ResMut<PlayerControl>, mut script: Option<ResMu
     }
     if let Some(sneak) = g.gaps.sneak_request.take() {
         control.sneak = sneak;
+        if let Some(held) = held_sneak.as_deref_mut() { held.record_base(sneak); }
     }
     // SetWeaponOut and HolsterWeapon on the player (`fnv_game::nvse_hud`); an NPC's draw
     // follows the rule the engine draws by, which SetWeaponOut 1 holds.
@@ -591,8 +597,44 @@ pub fn init_settings(mut commands: Commands, sim: Res<SimState>) {
     commands.insert_resource(s);
 }
 
+/// Optional momentary touch/controller sneak sources. Native toggle input stays
+/// independent underneath it; no resource means the ordinary behavior is unchanged.
+#[derive(Resource, Default, Debug)]
+pub struct HeldSneakInput {
+    pub active: bool,
+    pub(crate) controller_active: bool,
+    base: Option<bool>,
+    applied: bool,
+}
+impl HeldSneakInput {
+    fn base(&self, visible: bool) -> bool {
+        // A changed value from a script/lock becomes the new base, rather than being
+        // overwritten with the remembered state from before the touch hold.
+        self.base.filter(|_| visible == self.applied).unwrap_or(visible)
+    }
+    pub(crate) fn effective(&self, visible: bool, permitted: bool) -> bool {
+        self.base(visible) || (self.active && permitted) || self.controller_active
+    }
+    fn record_base(&mut self, value: bool) {
+        // Explicit script requests matter even if they equal the visible held state.
+        if self.base.is_some() { self.base = Some(value); self.applied = value; }
+    }
+    fn apply(&mut self, base: bool, permitted: bool) -> bool {
+        let held = (self.active && permitted) || self.controller_active;
+        self.base = held.then_some(base);
+        self.applied = base || held;
+        self.applied
+    }
+}
+
 /// The controls that are bound but not built yet.
 const NOT_BUILT: [Control; 0] = [];
+
+type ControlContext<'w, 's> = (
+    ResMut<'w, PlayerControl>, Option<ResMut<'w, HeldSneakInput>>,
+    Option<Res<'w, crate::pad::TouchDeviceSwitch>>, Option<Res<'w, crate::controller_aim::Options>>,
+    Option<Res<'w, crate::controller_aim::Gestures>>, Local<'s, bool>,
+);
 
 /// The real clock and the tweaks, for the holster hold (`crate::tweaks`).
 type HoldClock<'w> = (Option<Res<'w, Time<Real>>>, Option<Res<'w, crate::tweaks::TweakSettings>>);
@@ -611,15 +653,26 @@ pub fn read_controls(
     (real, tweaks): HoldClock,
     scroll: Res<AccumulatedMouseScroll>,
     state: Res<State<PlayState>>,
-    mut control: ResMut<PlayerControl>,
+    (mut control, mut held_sneak, touch_switch, controller_options, controller_gestures, mut native_sneak_hold): ControlContext<'_, '_>,
     hud: Option<ResMut<HudMessage>>,
     switches: Option<Res<crate::script_switches::ScriptSwitches>>,
     stance: Option<Res<crate::inertia::MovementInertia>>,
 ) {
+    if let Some(held) = held_sneak.as_deref_mut() {
+        control.sneak = held.base(control.sneak);
+    }
     if *state.get() != PlayState::Playing {
+        if (cfg!(target_os = "android") || held_sneak.is_some()) && std::mem::take(&mut *native_sneak_hold) {
+            control.sneak = false;
+        }
+        if let Some(held) = held_sneak.as_deref_mut() {
+            held.controller_active = false;
+            control.sneak = held.apply(control.sneak, false);
+        }
         control.aiming = false;
         control.trigger = false;
         control.ready_held = None;
+        control.reload_wait = None;
         control.orbit.held = false;
         control.sprint_held = false;
         return;
@@ -628,16 +681,30 @@ pub fn read_controls(
     let mut message: Option<String> = None;
     let c = &mut *control;
     let was_out = c.weapon_out;
-    // The player's tweak: sneak while the key is held, not by toggling [design: docs/design/tweaks.md].
-    if tweaks.as_ref().is_some_and(|t| t.hold_to_sneak) {
-        let held = input.pressed(Control::CrouchSneak);
-        if held != c.sneak && (input.just_pressed(Control::CrouchSneak) || input.just_released(Control::CrouchSneak)) {
-            c.sneak = held;
+    let android_sneak_hold = cfg!(target_os = "android") || held_sneak.is_some();
+    let controller_hold = android_sneak_hold && input.controller() && controller_options.as_deref().is_some_and(|o|o.hold_sneak);
+    let sneak_pressed = if controller_hold { crate::bindings::keys_with_pad() && input.physical_pressed(Control::CrouchSneak) } else { input.pressed(Control::CrouchSneak) };
+    let sneak_start = if controller_hold { crate::bindings::keys_with_pad() && input.physical_just_pressed(Control::CrouchSneak) } else { input.just_pressed(Control::CrouchSneak) };
+    let sneak_end = if controller_hold { crate::bindings::keys_with_pad() && input.physical_just_released(Control::CrouchSneak) } else { input.just_released(Control::CrouchSneak) };
+    let native_hold_mode = tweaks.as_ref().is_some_and(|t| t.hold_to_sneak);
+    if *native_sneak_hold && (!native_hold_mode || !sneak_pressed) {
+        c.sneak = false;
+        *native_sneak_hold = false;
+    }
+    // Native hold affects only the restored base; virtual/controller holds apply below.
+    if native_hold_mode {
+        if sneak_start { *native_sneak_hold = true; }
+        if sneak_pressed != c.sneak && (sneak_start || sneak_end) {
+            c.sneak = sneak_pressed;
             info!("Crouch/Sneak held: sneaking {} asked", if c.sneak { "on" } else { "off" });
         }
-    } else if input.just_pressed(Control::CrouchSneak) {
+    } else if sneak_start {
         c.sneak = !c.sneak;
         info!("Crouch/Sneak pressed: sneaking {} asked", if c.sneak { "on" } else { "off" });
+    }
+    if let Some(held) = held_sneak.as_deref_mut() {
+        c.sneak = held.apply(c.sneak, input.virtual_action_allowed(Control::CrouchSneak)
+            && touch_switch.as_deref().is_none_or(crate::pad::TouchDeviceSwitch::allows_actions));
     }
     if input.just_pressed(Control::AlwaysRun) {
         c.always_run = !c.always_run;
@@ -717,7 +784,11 @@ pub fn read_controls(
             message = Some(format!("{}: not available yet", Bindings::name(ctl)));
         }
     }
-    c.aiming = input.pressed(Control::Block) && !c.wheel;
+    c.aiming = if input.controller() {
+        // A genuine mouse/key hold remains native even when pad aim is a toggle.
+        controller_gestures.as_deref().map_or_else(||input.pad_pressed(Control::Block),|g|g.aim_requested)
+            || (crate::bindings::keys_with_pad() && input.physical_pressed(Control::Block))
+    } else {input.pressed(Control::Block)} && !c.wheel;
     // The player's tweak: aiming draws the weapon [design: docs/design/tweaks.md].
     if c.aiming && !c.weapon_out && tweaks.as_ref().is_some_and(|t| t.aiming_draws_weapon) {
         c.weapon_out = true;
@@ -1185,6 +1256,77 @@ mod tests {
     }
 
     #[test]
+    fn momentary_sneak_keeps_the_independent_native_toggle_base() {
+        let mut app=app();app.init_resource::<HeldSneakInput>();
+        app.world_mut().resource_mut::<HeldSneakInput>().active=true;app.update();assert!(control(&app).sneak);
+        tap(&mut app,KeyCode::ControlLeft);
+        app.world_mut().resource_mut::<HeldSneakInput>().active=false;app.update();
+        assert!(control(&app).sneak,"keyboard toggle on survives releasing touch hold");
+        tap(&mut app,KeyCode::ControlLeft);assert!(!control(&app).sneak);
+        app.world_mut().resource_mut::<HeldSneakInput>().active=true;app.update();
+        tap(&mut app,KeyCode::ControlLeft);tap(&mut app,KeyCode::ControlLeft);
+        assert!(control(&app).sneak,"touch still holds sneak over a toggled-off base");
+        app.world_mut().resource_mut::<HeldSneakInput>().active=false;app.update();assert!(!control(&app).sneak);
+    }
+    #[test]
+    fn explicit_script_sneak_requests_survive_even_when_the_held_value_is_the_same() {
+        for requested in [false,true] {
+            let mut app=app();app.init_resource::<HeldSneakInput>();
+            app.world_mut().resource_mut::<HeldSneakInput>().active=true;app.update();assert!(control(&app).sneak);
+            // tell_scripts records JIP's explicit state request, including true->true.
+            app.world_mut().resource_mut::<PlayerControl>().sneak=requested;
+            app.world_mut().resource_mut::<HeldSneakInput>().record_base(requested);
+            app.update();assert!(control(&app).sneak,"held input still owns the visible momentary state");
+            app.world_mut().resource_mut::<HeldSneakInput>().active=false;app.update();
+            assert_eq!(control(&app).sneak,requested);
+        }
+    }
+    #[test]
+    fn momentary_sneak_respects_capture_disabled_bindings_controller_and_menu() {
+        for case in 0..4 {
+            let mut app=app();app.init_resource::<HeldSneakInput>();
+            app.world_mut().resource_mut::<HeldSneakInput>().active=true;
+            match case {
+                0=>{app.insert_resource(crate::bindings::KeyboardCapture(true));},
+                1=>{app.insert_resource(crate::script_input::ScriptBlocked {keys:vec![KeyCode::ControlLeft],mouse:vec![]});},
+                2=>app.world_mut().resource_mut::<Bindings>().device=crate::bindings::InputDevice::Controller,
+                _=>{app.insert_state(PlayState::Menu);},
+            }
+            app.update();assert!(!control(&app).sneak,"restriction {case} cannot be bypassed by platform input");
+        }
+    }
+    #[test]
+    fn momentary_sneak_uses_the_same_primary_binding_as_touch_translation() {
+        let mut app=app();app.init_resource::<HeldSneakInput>();
+        app.world_mut().resource_mut::<Bindings>().set(Control::CrouchSneak,crate::bindings::Binding {key:Some(KeyCode::ControlLeft),mouse:Some(MouseButton::Right)});
+        app.insert_resource(crate::script_input::ScriptBlocked {keys:vec![KeyCode::ControlLeft],mouse:vec![]});
+        app.world_mut().resource_mut::<HeldSneakInput>().active=true;app.update();
+        assert!(!control(&app).sneak,"touch cannot bypass its disabled primary through a secondary binding");
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right);app.update();
+        assert!(control(&app).sneak,"the independent physical secondary binding keeps native behavior");
+    }
+    #[test]
+    fn momentary_sneak_does_not_restore_a_base_that_a_lock_changed() {
+        let mut app=app();app.init_resource::<HeldSneakInput>();
+        app.world_mut().resource_mut::<PlayerControl>().sneak=true;
+        app.world_mut().resource_mut::<HeldSneakInput>().active=true;app.update();assert!(control(&app).sneak);
+        app.world_mut().resource_mut::<PlayerControl>().sneak=false;
+        app.world_mut().resource_mut::<HeldSneakInput>().active=false;app.update();assert!(!control(&app).sneak);
+    }
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn desktop_hold_to_sneak_is_not_dropped_on_menu_entry() {
+        let mut app = app();
+        app.insert_resource(crate::tweaks::TweakSettings { hold_to_sneak: true, ..default() });
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::ControlLeft);
+        app.update();
+        assert!(control(&app).sneak, "hold to sneak starts sneaking while held");
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+        app.insert_state(PlayState::Menu);
+        app.update();
+        assert!(control(&app).sneak, "desktop does not clear hold-to-sneak on entering a menu");
+    }
+    #[test]
     fn game_keys_toggle() {
         let mut app = app();
         tap(&mut app, KeyCode::ControlLeft);
@@ -1291,7 +1433,7 @@ mod tests {
 
     /// Everything a player can ask for at once.
     fn busy() -> (MoveIntent, PlayerControl) {
-        let intent = MoveIntent { forward: 1.0, right: -1.0, walk: true, sneak: true, jump: true };
+        let intent = MoveIntent { forward: 1.0, right: -1.0, walk: true, sneak: true, jump: true, ..default() };
         let control = PlayerControl {
             sneak: true,
             weapon_out: true,

@@ -196,3 +196,55 @@ fn model_queries_keep_file_fallback_until_a_reference_tree_is_published() {
     });
     files.unchanged();
 }
+
+#[test]
+fn knvse_ini_loads_from_disk_layer_and_vfs_and_reloads_when_roots_update() {
+    let files = Files::new();
+    // Start with roots containing no kNVSE.ini -> vanilla empty list.
+    with_game(|game| {
+        assert!(game.knvse_ini.legacy_anim_time_paths.is_empty());
+
+        // Populate VFS reader fallback first.
+        mod_files::update_roots(|r| {
+            r.reader = Some(std::sync::Arc::new(|p: &str| {
+                if p.replace('/', "\\").eq_ignore_ascii_case("NVSE\\Plugins\\kNVSE.ini") {
+                    Some(b"[Anim Fixes]\nsLegacyAnimTimePaths = B42Inject\n".to_vec())
+                } else {
+                    None
+                }
+            }));
+        });
+        game.tick();
+        assert_eq!(game.knvse_ini.legacy_anim_time_paths, vec!["b42inject"]);
+
+        // Loose file in Data overrides archive/VFS reader; mods layer overrides Data.
+        let data_plugins = files.root.join("game/Data/nvse/plugins");
+        let layer_plugins = files.root.join("layer/NVSE/Plugins");
+        std::fs::create_dir_all(&data_plugins).unwrap();
+        std::fs::create_dir_all(&layer_plugins).unwrap();
+        std::fs::write(
+            data_plugins.join("knvse.ini"),
+            b"[Anim Fixes]\nsLegacyAnimTimePaths = B42Interact\n",
+        )
+        .unwrap();
+        mod_files::update_roots(|_| {});
+        game.tick();
+        assert_eq!(game.knvse_ini.legacy_anim_time_paths, vec!["b42interact"]);
+
+        std::fs::write(
+            layer_plugins.join("kNVSE.ini"),
+            b"\xEF\xBB\xBF[Anim Fixes]\nsLegacyAnimTimePaths = B42Inject,B42Interact,B42Loot\n",
+        )
+        .unwrap();
+        mod_files::update_roots(|_| {});
+        game.tick();
+        assert_eq!(game.knvse_ini.legacy_anim_time_paths, vec!["b42inject", "b42interact", "b42loot"]);
+
+        // Manual override is preserved across subsequent ticks and root updates.
+        game.knvse_ini.legacy_anim_time_paths.clear();
+        mod_files::update_roots(|_| {});
+        game.tick();
+        assert!(game.knvse_ini.legacy_anim_time_paths.is_empty());
+    });
+    files.unchanged();
+}

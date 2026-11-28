@@ -40,13 +40,7 @@ pub fn programs() -> [String; 3] {
 }
 
 /// A release's file, as GitHub's release list gives it.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Asset {
-    pub name: String,
-    pub browser_download_url: String,
-    #[serde(default)]
-    pub size: u64,
-}
+pub use crate::news::Asset;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArchiveKind {

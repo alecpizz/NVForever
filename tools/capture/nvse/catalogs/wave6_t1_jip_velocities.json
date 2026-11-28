@@ -1,0 +1,103 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6_t1_jip_velocities",
+  "description": "Wave 6 Tier 1 strictly read-only console-only clean-room probe verifying JIP LN GetActorVelocityAlt, GetLinearVelocityAlt, and GetAngularVelocityAlt output variable behavior.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)",
+    "lStewieAl Tweaks": "1005"
+  },
+  "batches": [
+    {
+      "id": "w6_t1_jip_velocities",
+      "title": "Wave 6 Tier 1 - JIP LN Velocity Alt Output-Variable Probes",
+      "extender": "xNVSE 6.4.9 + JIP LN 57.30",
+      "required_plugins": [
+        "jip_nvse.dll"
+      ],
+      "default_wait_ticks": 1,
+      "probes": [
+        {
+          "id": "w6_t1_05_velocities_jip",
+          "bucket": "A",
+          "extender": "JIP LN 57.30",
+          "required_plugins": [
+            "jip_nvse.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": false,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/jip-physics-13.md",
+          "spec_line": 30,
+          "functions_tested": [
+            "GetActorVelocityAlt",
+            "GetLinearVelocityAlt",
+            "GetAngularVelocityAlt"
+          ],
+          "claim": "Verify GetActorVelocityAlt (world vs local, return value), GetLinearVelocityAlt, and GetAngularVelocityAlt on Doc Mitchell (0x104C0F) valid node vs missing node.",
+          "expected": "Return values and output variable behavior for stationary actor and missing node.",
+          "script_lines": [
+            "ref rDoc = GetFormFromMod \"FalloutNV.esm\" \"104C0F\"",
+            "float ox = 111",
+            "float oy = 222",
+            "float oz = 333",
+            "int ra0 = Player.GetActorVelocityAlt (ox) (oy) (oz) 0",
+            "float a0x = ox",
+            "float a0y = oy",
+            "float a0z = oz",
+            "ox = 111",
+            "oy = 222",
+            "oz = 333",
+            "int ra1 = Player.GetActorVelocityAlt (ox) (oy) (oz) 1",
+            "float a1x = ox",
+            "float a1y = oy",
+            "float a1z = oz",
+            "ox = 111",
+            "oy = 222",
+            "oz = 333",
+            "int rl0 = rDoc.GetLinearVelocityAlt \"Bip01\" (ox) (oy) (oz) 0",
+            "float l0x = ox",
+            "float l0y = oy",
+            "float l0z = oz",
+            "ox = 111",
+            "oy = 222",
+            "oz = 333",
+            "int rlm = rDoc.GetLinearVelocityAlt \"NvfNoSuchNode\" (ox) (oy) (oz) 0",
+            "float lmx = ox",
+            "float lmy = oy",
+            "float lmz = oz",
+            "ox = 111",
+            "oy = 222",
+            "oz = 333",
+            "int rg0 = rDoc.GetAngularVelocityAlt \"Bip01\" (ox) (oy) (oz) 0",
+            "float g0x = ox",
+            "float g0y = oy",
+            "float g0z = oz",
+            "ox = 111",
+            "oy = 222",
+            "oz = 333",
+            "int rgm = rDoc.GetAngularVelocityAlt \"NvfNoSuchNode\" (ox) (oy) (oz) 0",
+            "string_var s1 = sv_Construct \"act0=%g(%.1f,%.1f,%.1f)|act1=%g(%.1f,%.1f,%.1f)\" ra0 a0x a0y a0z ra1 a1x a1y a1z",
+            "string_var s2 = sv_Construct \"lin=%g(%.1f,%.1f,%.1f)|linM=%g(%.0f,%.0f,%.0f)|ang=%g(%.1f,%.1f,%.1f)|angM=%g(%.0f,%.0f,%.0f)\" rl0 l0x l0y l0z rlm lmx lmy lmz rg0 g0x g0y g0z rgm ox oy oz",
+            "PrintToConsole \"PROBE|w6_t1_05_velocities_jip|%z|%z\" s1 s2"
+          ]
+        }
+      ]
+    }
+  ]
+}

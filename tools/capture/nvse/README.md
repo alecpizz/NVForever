@@ -78,43 +78,12 @@ Probes in `catalogs/` target:
     write JSON and Markdown scoreboards.
   - `cite` — format copy-paste-ready clean-room `[observed: ...]` citations with
     the automated privacy gate.
-- `catalogs/` — 8 sanitized declarative console-only JSON catalogs (26 batches,
-  538 read-only probes total; all file-writing and `con_Save` probes excluded):
-  - `wave1_parity_probes.json` — Wave 1/2 parity probes covering xNVSE compound
-    assignments & `dATan2`, JIP hit 3D direction/base damage/reticle limbs,
-    ShowOff `OnFireWeapon` & `ForceWeaponJamAnim`, ShowOff objective/unholster
-    & xNVSE `OnApplyIMOD`/`OnRemoveIMOD` events, and `SetCritDam` alias.
-  - `wave4a_extenders.json` — Wave 4A read-only extender hypothesis catalog
-    across 6 families (`w4_showoff`, `w4_jip_lutana`, `w4_jg`, `w4_sup`,
-    `w4_knvse_misc`, `w4_itr_pp`).
-  - `wave4b_extenders.json` — Wave 4B remaining read-only Bucket A & B extender
-    catalog across JIP/Lutana, ShowOff/Core/kNVSE/AnhNVSE/Stewie, JohnnyGuitar,
-    and SUP.
-  - `wave4c_extenders.json` — Wave 4C read-only console-only discrepancy
-    follow-ups and remaining Bucket A & B extender sweep (5 batches, 100
-    probes: `w4c_phase_a`, `w4c_b_jip_lutana`, `w4c_b_showoff_core`,
-    `w4c_b_jg`, `w4c_b_sup_knvse_opt`).
-  - `wave4d_extenders.json` — Wave 4D read-only console-only open-PR and
-    merged-PR NVSE/extender/vanilla edge-case probes, including 12 expanded
-    maintainer-requested follow-ups (4 batches, 43 probes:
-    `w4d_01_open_pr_quickwins`, `w4d_02_jip_lutana_edges`,
-    `w4d_03_jg_sup_anh_showoff_edges`, `w4d_04_xnvse_compiler_and_vanilla_cmds`).
-  - `wave4e_mods.json` — Wave 4E read-only console-only mod-ecosystem and
-    vanilla runtime probes covering yUI 140/ySI, kNVSE 37, UI Organizer 230,
-    MCM XML bitwise math, BaseObjectSwapper, SUP LockPickMenu, JIP Script
-    Runner `gx_`, and vanilla combat/AI behavior (3 batches, 17 probes:
-    `w4e_01_yui_ysi_and_knvse`, `w4e_02_uio_xml_mcm_bos`,
-    `w4e_03_vanilla_runtime_and_script_runner`).
-  - `wave4g_f2_extenders.json` — Wave 4G read-only console-only Bucket (f2)
-    extender and runtime hypothesis probes (1 batch, 13 probes:
-    `w4g_01_bucket_f2_readonly`).
-  - `wave4h_reconcile.json` — Wave 4H read-only console-only maintainer-requested
-    reconciliation probes covering XML parenting, EXPL slot 4 null vs omit,
-    UIO `<ln>` nonzero start, float crit damage, multi-tick
-    `SetCombatDisabled`, hex `DisableMuzzleFlashLights`, indoor moon/days/climate,
-    `StewieGetValue` whitespace, `ApplyWeaponPoison` Stimpak vs poison,
-    `SetSystemColor` truncation, and SUP `GetLockPickMenuValue` tiers (1 batch,
-    11 probes: `w4h_01_maintainer_reconcile`).
+- `catalogs/` — sanitized declarative console-only JSON probe catalogs (all
+  file-writing and `con_Save` probes excluded). Catalogs are discovered
+  dynamically from this directory; run
+  `python tools/capture/nvse/harness.py list` (or `--json`) for the live
+  catalog, batch, and probe inventory, and
+  `python tools/capture/nvse/harness.py validate` to validate every catalog.
 - `tests/test_nvse_harness.py` — offline stdlib `unittest` suite (no game
   install or captured logs required).
 

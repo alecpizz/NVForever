@@ -174,11 +174,10 @@ fn terrain_pbr_occlusion(p_in: PbrInput, n_pre: vec3<f32>) -> PbrInput {
 // that has no folded layers, a layer drawn blended over it, every layer where the GPU has
 // no bindless textures): the surface as Bevy's pbr_input_from_standard_material would set
 // it up for the landscape's material, with the diffuse texture and normal map read
-// anti-tiled. Colour: vertex colour (a layer's opacity in its alpha) x material colour x
-// texture. A blended layer whose coverage before any read is exactly 0 adds nothing: it
-// reads nothing. An opaque base keeps its coverage whatever its texture's alpha (the
-// caller's alpha_discard makes it opaque). A blended layer whose texture alpha turns out 0
-// reads no normal map.
+// anti-tiled. Colour: vertex colour x material colour x texture; alpha: a layer's opacity
+// (the vertex colour's alpha) x the material's, never the texture's (#3789). A blended layer
+// whose coverage is exactly 0 adds nothing: it reads nothing. The caller's alpha_discard
+// makes an opaque base opaque.
 fn terrain_pbr_standard(in: VertexOutput, is_front: bool, fp: TerrainFootprint) -> PbrInput {
     let standard = terrain_standard_material(in.instance_index);
     var p = terrain_pbr_begin(in, is_front, standard);
@@ -189,12 +188,10 @@ fn terrain_pbr_standard(in: VertexOutput, is_front: bool, fp: TerrainFootprint) 
         return terrain_pbr_occlusion(p, n_pre);
     }
     let taps = terrain_taps(fp.uv);
-    p.material.base_color = p.material.base_color * terrain_base_diffuse(in.instance_index, standard.flags, taps, fp);
+    p.material.base_color = vec4(p.material.base_color.rgb * terrain_base_diffuse(in.instance_index, standard.flags, taps, fp).rgb, p.material.base_color.a);
     @if(VERTEX_TANGENTS && STANDARD_MATERIAL_NORMAL_MAP) {
-        if !blended || p.material.base_color.a != 0.0 {
-            let tbn = calculate_tbn_mikktspace(p.world_normal, in.world_tangent);
-            p.N = terrain_world_normal(tbn, terrain_base_normal(in.instance_index, standard.flags, taps, fp), terrain_back_face(p, is_front));
-        }
+        let tbn = calculate_tbn_mikktspace(p.world_normal, in.world_tangent);
+        p.N = terrain_world_normal(tbn, terrain_base_normal(in.instance_index, standard.flags, taps, fp), terrain_back_face(p, is_front));
     }
     return terrain_pbr_occlusion(p, n_pre);
 }

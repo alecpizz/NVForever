@@ -42,7 +42,8 @@ impl<S: Subscriber> Layer<S> for Warnings {
 fn capture(f: impl FnOnce()) -> Vec<Fields> {
     let warnings = Warnings::default();
     tracing::subscriber::with_default(tracing_subscriber::registry().with(warnings.clone()), f);
-    Arc::try_unwrap(warnings.0).unwrap().into_inner().unwrap()
+    let out = std::mem::take(&mut *warnings.0.lock().unwrap());
+    out
 }
 
 struct Names;

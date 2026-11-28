@@ -80,7 +80,7 @@ from its whole list (follow-up: drawing only the models toggled on).
 
 | Function | NVForever |
 |---|---|
-| Get/SetMessageFlags `message [flags]` | DNAM: 1 Is Message Box, 2 Auto-display [documented]; ShowMessage shows a message as a box by the changed flag |
+| Get/SetMessageFlags `message [flags]` | DNAM: 1 Is Message Box, 2 Auto-display [documented]; `7` (`> 3`) is rejected without mutating flags (`mf=1->1`) [observed: Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9 + JIP LN 57.30, 2026-11-25, `GSDocMitchellHouse` (`0x00103DF9`), 10 official base masters, isolated clean-room staging copy (read-only probe; zero writes to game install or Saves), `w6d2p3_47_jip6_messages_creatures_and_bptd` (`tools/capture/nvse/catalogs/wave6d2_set_message_flags_bounds.json`): `PROBE\|w6d2p3_47_jip6_messages_creatures_and_bptd\|mf=1->1\|md=0->1\|cr(h=1->0,t=1/1,n=5)\|bp=[W6D2Head]`; zero DLL, PDB, or third-party source consulted]; rejecting `< 0` (e.g., `-1`) and truncating fractional values (`.trunc()`) are [hypothesis], and ignoring omitted/non-finite arguments is [design]; ShowMessage shows a message as a box by the changed flag |
 | SetMessageDisplayTime `message seconds` | TNAM, the seconds a corner message stays; a negative value, one past the u32 field, NaN or infinity is not set [hypothesis] |
 | Get/SetMessageDisabled `messageOrList [0/1]` | a disabled message is never shown [documented]: by ShowMessage, nor as the box the engine shows on refusing power armour without the training; a form list disables or enables each message in it [documented] |
 | ToggleCraftingMessages `0/1` | the recipe menu's "added" corner lines off or on [documented]; returns the state before the call, 1 shown [observed: jip6 msg.crafting, jip6b msg.crafting.twice] |

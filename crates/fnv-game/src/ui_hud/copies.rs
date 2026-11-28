@@ -108,11 +108,17 @@ fn num(ui: &mut Ui, tile: TileId, name: &str, value: f64) {
 }
 
 fn string(ui: &mut Ui, tile: TileId, value: &str) {
-    ui.set_trait(tile, "string", Value::Str(value.into()));
+    ui.set_trait_str(tile, "string", value);
 }
 
 fn find(ui: &Ui, path: &str) -> Option<TileId> {
-    ui.find_tile(&format!("HUDMainMenu/{path}")).filter(|id| ui.tile(*id).get("_NVFHudTemplate").is_some())
+    let root = ui.find_tile("HUDMainMenu")?;
+    find_under(ui, root, path)
+}
+
+#[inline]
+fn find_under(ui: &Ui, parent: TileId, path: &str) -> Option<TileId> {
+    ui.find_child_path(parent, path).filter(|id| ui.tile(*id).get("_NVFHudTemplate").is_some())
 }
 
 /// Called once after building each HUD menu, including save-load rebuilds [design].
@@ -263,23 +269,23 @@ fn share(value: f64) -> f64 {
     }
 }
 
-pub(super) fn write(ui: &mut Ui, shown: Shown, texts: &Texts) {
+pub(super) fn write_under(ui: &mut Ui, root: TileId, shown: Shown, texts: &Texts) {
     let input = &texts.frame;
     // Whole ticks, AP right anchored; condition nearest unit [observed: hud.md §14.3].
     for (path, value, right) in [("HitPoints/meter", input.health, false), ("ActionPoints/meter:1", input.action_points, true)] {
-        if let Some(tile) = find(ui, path) {
+        if let Some(tile) = find_under(ui, root, path) {
             let width = (share(value) * 37.0).floor() * 8.0;
             num(ui, tile, "width", width);
             num(ui, tile, "x", if right { 30.0 + 296.0 - width } else { 20.0 });
         }
     }
-    if let Some(tile) = find(ui, "ActionPoints/meter:0") {
+    if let Some(tile) = find_under(ui, root, "ActionPoints/meter:0") {
         num(ui, tile, "width", (59.0 * share(input.condition.unwrap_or(0.0))).round());
     }
-    if let Some(tile) = find(ui, "ActionPoints/justify_right_text:1") {
+    if let Some(tile) = find_under(ui, root, "ActionPoints/justify_right_text:1") {
         string(ui, tile, &input.ammo);
     }
-    if let Some(tile) = find(ui, "ReticleCenter/reticle_center") {
+    if let Some(tile) = find_under(ui, root, "ReticleCenter/reticle_center") {
         // Keep user0/user1 as the template's strings: their numeric reads are 0
         // [observed: hud.md §14.4]. Select the loaded alternate [design].
         num(ui, tile, "systemcolor", if input.aim_hostile && !shown.aiming { 2.0 } else { 1.0 });
@@ -288,16 +294,16 @@ pub(super) fn write(ui: &mut Ui, shown: Shown, texts: &Texts) {
             ui.set_trait(tile, "filename", picture);
         }
     }
-    write_prompt(ui, shown, input);
+    write_prompt(ui, root, shown, input);
     if shown.radiation {
-        if let Some(tile) = ui.find_tile("HUDMainMenu/RadiationMeter/radiation_pointer") {
+        if let Some(tile) = ui.find_child_path(root, "RadiationMeter/radiation_pointer") {
             num(ui, tile, "x", radiation_pointer_x(input.radiation));
         }
     }
-    write_enemy(ui, shown, input);
-    write_needs(ui, input);
-    write_animations(ui, shown, input);
-    write_marks(ui, &input.marks);
+    write_enemy(ui, root, shown, input);
+    write_needs(ui, root, input);
+    write_animations(ui, root, shown, input);
+    write_marks(ui, root, &input.marks);
 }
 
 /// [observed: private job hud_radiation2 r_in_000-r_in_990; hypothesis: the rule
@@ -308,52 +314,54 @@ pub(super) fn radiation_pointer_x(rads: f64) -> f64 {
     15.0 + 0.3 * rads
 }
 
-fn write_prompt(ui: &mut Ui, shown: Shown, input: &Frame) {
+fn write_prompt(ui: &mut Ui, root: TileId, shown: Shown, input: &Frame) {
     let prompt = input.prompt.as_ref().filter(|_| shown.info);
     let on = prompt.is_some();
-    if let Some(prompt) = prompt {
-        for (path, text) in [
-            ("Info/justify_right_text:0", prompt.value.as_str()),
-            ("Info/justify_right_text:1", prompt.weight.as_str()),
-            ("Info/justify_center_text:2", prompt.name.as_str()),
-            ("Info/justify_center_text:1", prompt.lock_text.as_str()),
-        ] {
-            if let Some(tile) = find(ui, path) {
-                string(ui, tile, text);
+    if let Some(info) = ui.find_child_path(root, "Info") {
+        if let Some(prompt) = prompt {
+            for (path, text) in [
+                ("justify_right_text:0", prompt.value.as_str()),
+                ("justify_right_text:1", prompt.weight.as_str()),
+                ("justify_center_text:2", prompt.name.as_str()),
+                ("justify_center_text:1", prompt.lock_text.as_str()),
+            ] {
+                if let Some(tile) = find_under(ui, info, path) {
+                    string(ui, tile, text);
+                }
+            }
+            if let Some(tile) = find_under(ui, info, "justify_center_text:2") {
+                num(ui, tile, "height", prompt.height);
             }
         }
-        if let Some(tile) = find(ui, "Info/justify_center_text:2") {
-            num(ui, tile, "height", prompt.height);
-        }
-    }
-    // [observed: private job hud_prompt2 p2-p8] Hidden strings and alphas persist.
-    for path in ["info_seperator", "justify_left_text:0", "justify_right_text:0", "justify_left_text:1", "justify_right_text:1", "justify_center_text:0", "justify_center_text:1", "justify_center_text:2"] {
-        if let Some(tile) = find(ui, &format!("Info/{path}")) {
-            let visible = match path {
-                "justify_center_text:2" | "justify_center_text:1" => on,
-                "justify_center_text:0" => prompt.is_some_and(|p| !p.locked),
-                _ => prompt.is_some_and(|p| p.item),
-            };
-            num(ui, tile, "visible", f64::from(visible));
-            if let Some(p) = prompt {
-                let alpha = match path {
-                    "justify_center_text:0" => p.empty && !p.locked,
-                    "justify_center_text:1" => p.locked,
-                    _ => true,
+        // [observed: private job hud_prompt2 p2-p8] Hidden strings and alphas persist.
+        for path in ["info_seperator", "justify_left_text:0", "justify_right_text:0", "justify_left_text:1", "justify_right_text:1", "justify_center_text:0", "justify_center_text:1", "justify_center_text:2"] {
+            if let Some(tile) = find_under(ui, info, path) {
+                let visible = match path {
+                    "justify_center_text:2" | "justify_center_text:1" => on,
+                    "justify_center_text:0" => prompt.is_some_and(|p| !p.locked),
+                    _ => prompt.is_some_and(|p| p.item),
                 };
-                num(ui, tile, "alpha", if alpha { 255.0 } else { 0.0 });
+                num(ui, tile, "visible", f64::from(visible));
+                if let Some(p) = prompt {
+                    let alpha = match path {
+                        "justify_center_text:0" => p.empty && !p.locked,
+                        "justify_center_text:1" => p.locked,
+                        _ => true,
+                    };
+                    num(ui, tile, "alpha", if alpha { 255.0 } else { 0.0 });
+                }
+            }
+        }
+        if let Some(tile) = ui.find_child_path(info, "justify_center_hotrect") {
+            num(ui, tile, "visible", if on { 2.0 } else { 0.0 });
+            if on {
+                if let Some(label) = ui.find_child_path(tile, "PCShortcutLabel") {
+                    num(ui, label, "visible", 1.0);
+                }
             }
         }
     }
-    if let Some(tile) = ui.find_tile("HUDMainMenu/Info/justify_center_hotrect") {
-        num(ui, tile, "visible", if on { 2.0 } else { 0.0 });
-    }
-    if on {
-        if let Some(tile) = ui.find_tile("HUDMainMenu/Info/justify_center_hotrect/PCShortcutLabel") {
-            num(ui, tile, "visible", 1.0);
-        }
-    }
-    if let Some(tile) = ui.find_tile("HUDMainMenu/Subtitles") {
+    if let Some(tile) = ui.find_child_path(root, "Subtitles") {
         // [observed: private job hud_prompt2 p8_gone] Raised y persists for 19.9 s.
         // [hypothesis] A later prompt height replaces the previous offset.
         let y = prompt.map_or_else(|| ui.tile(tile).get("_NVFSubtitleY").map_or(660.0, Value::num), |p| 660.0 - (p.height.max(0.0) + 8.0));
@@ -365,28 +373,27 @@ fn write_prompt(ui: &mut Ui, shown: Shown, input: &Frame) {
     }
 }
 
-fn write_enemy(ui: &mut Ui, shown: Shown, input: &Frame) {
+fn write_enemy(ui: &mut Ui, root: TileId, shown: Shown, input: &Frame) {
+    let Some(enemy_root) = ui.find_child_path(root, "EnemyHealth") else { return };
     let enemy = input.enemy.as_ref();
     // [design, #2659] Shown owns visibility: classic VATS also shows full-health targets
     // (engine/nvf-play/src/tiles/mod.rs::HudTiles::shown).
     let visible = shown.enemy && enemy.is_some();
     if let Some(enemy) = enemy {
-        if let Some(tile) = ui.find_tile("HUDMainMenu/EnemyHealth") {
-            num(ui, tile, "systemcolor", if enemy.hostile { 2.0 } else { 1.0 });
-        }
-        if let Some(tile) = find(ui, "EnemyHealth/meter") {
+        num(ui, enemy_root, "systemcolor", if enemy.hostile { 2.0 } else { 1.0 });
+        if let Some(tile) = find_under(ui, enemy_root, "meter") {
             // [observed: private jobs hud_enemy2 e5, hud_enemy3 n2, h1, g2;
             // hypothesis: rule between shares 0.156, 0.178, 0.5, 1.0].
             let width = 16.0 * (share(enemy.health) * 15.0).floor();
             num(ui, tile, "width", width);
             num(ui, tile, "x", 171.0 - width / 2.0);
         }
-        if let Some(tile) = find(ui, "EnemyHealth/justify_center_text") {
+        if let Some(tile) = find_under(ui, enemy_root, "justify_center_text") {
             string(ui, tile, &enemy.name);
         }
     }
     for name in ["enemy_health_bracket", "meter", "justify_center_text"] {
-        if let Some(tile) = find(ui, &format!("EnemyHealth/{name}")) {
+        if let Some(tile) = find_under(ui, enemy_root, name) {
             num(ui, tile, "visible", f64::from(visible));
         }
     }
@@ -408,10 +415,11 @@ fn limb_word(crippled: usize) -> (f64, f64) {
     }
 }
 
-fn write_needs(ui: &mut Ui, input: &Frame) {
+fn write_needs(ui: &mut Ui, root: TileId, input: &Frame) {
+    let Some(hc) = ui.find_child_path(root, "HardcoreMode") else { return };
     // [observed: private job hud_hardcore2 hc0-hc11] Fixed places in every mode.
     for (i, (name, x)) in [("Dehydration", 0.0), ("Hunger", 55.0), ("Sleep", 109.0), ("Rads", 162.0), ("LMBs", 218.0)].into_iter().enumerate() {
-        let Some(tile) = ui.find_tile(&format!("HUDMainMenu/HardcoreMode/{name}")) else { continue };
+        let Some(tile) = ui.find_child_path(hc, name) else { continue };
         let (alpha, colour) = if i == 4 {
             limb_word(input.crippled.iter().filter(|c| **c).count())
         } else if i < 3 && !input.hardcore {
@@ -436,41 +444,44 @@ fn write_needs(ui: &mut Ui, input: &Frame) {
     }
 }
 
-fn write_animations(ui: &mut Ui, shown: Shown, input: &Frame) {
+fn write_animations(ui: &mut Ui, root: TileId, shown: Shown, input: &Frame) {
     use super::timelines::{level_alpha, limb_alpha, xp_alpha};
     let xp = input.animation.xp.as_ref();
-    for name in ["XPBracket", "XPPointer", "XPAmount", "XPLabel", "XPLastLevel", "XPNextLevel", "XPLevelUp"] {
-        let Some(tile) = ui.find_tile(&format!("HUDMainMenu/XPMeter/{name}")) else { continue };
-        let alpha = xp.map_or(if name == "XPLevelUp" { 255.0 } else { 0.0 }, |s| if name == "XPLevelUp" { level_alpha(s.age) } else { xp_alpha(s.age) });
-        let visible = shown.corners && xp.is_some_and(|s| if name == "XPLevelUp" { s.level_up && s.age >= 7.2 } else { s.age < 6.0 });
-        num(ui, tile, "alpha", alpha);
-        num(ui, tile, "visible", f64::from(visible));
-        if let Some(s) = xp {
-            match name {
-                "XPAmount" => string(ui, tile, &format!("+{:.0}", s.amount)),
-                "XPLastLevel" => string(ui, tile, &s.level.to_string()),
-                "XPNextLevel" => string(ui, tile, &(s.level + 1).to_string()),
-                "XPPointer" => {
-                    // [observed: private jobs hud_xp_limbs x1-x2b, hud_xp_limbs2 x9;
-                    // hypothesis: interpolation, level 1 XP 10..200 only].
-                    let t = ((s.age - 2.0) / 2.0).clamp(0.0, 1.0);
-                    num(ui, tile, "x", 55.0 + 215.0 * share(s.from + (s.to - s.from) * t));
+    if let Some(xp_root) = ui.find_child_path(root, "XPMeter") {
+        for name in ["XPBracket", "XPPointer", "XPAmount", "XPLabel", "XPLastLevel", "XPNextLevel", "XPLevelUp"] {
+            let Some(tile) = ui.find_child_path(xp_root, name) else { continue };
+            let alpha = xp.map_or(if name == "XPLevelUp" { 255.0 } else { 0.0 }, |s| if name == "XPLevelUp" { level_alpha(s.age) } else { xp_alpha(s.age) });
+            let visible = shown.corners && xp.is_some_and(|s| if name == "XPLevelUp" { s.level_up && s.age >= 7.2 } else { s.age < 6.0 });
+            num(ui, tile, "alpha", alpha);
+            num(ui, tile, "visible", f64::from(visible));
+            if let Some(s) = xp {
+                match name {
+                    "XPAmount" => string(ui, tile, &format!("+{:.0}", s.amount)),
+                    "XPLastLevel" => string(ui, tile, &s.level.to_string()),
+                    "XPNextLevel" => string(ui, tile, &(s.level + 1).to_string()),
+                    "XPPointer" => {
+                        // [observed: private jobs hud_xp_limbs x1-x2b, hud_xp_limbs2 x9;
+                        // hypothesis: interpolation, level 1 XP 10..200 only].
+                        let t = ((s.age - 2.0) / 2.0).clamp(0.0, 1.0);
+                        num(ui, tile, "x", 55.0 + 215.0 * share(s.from + (s.to - s.from) * t));
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
     }
+    let Some(limb_root) = ui.find_child_path(root, "crippled_limb_indicator") else { return };
     // [observed: private job hud_xp_limbs l1-l3] One run only; zoom and places.
-    for (name, limb, x, y, w, h) in [
-        ("Head", Some(0), 0.0, 40.0, 63.75, 69.0),
-        ("Face", None, 13.88, 62.5, 36.0, 48.0),
-        ("Torso", Some(1), -10.5, 104.5, 76.5, 96.0),
-        ("Left_Arm", Some(2), 57.0, 104.5, 75.0, 39.0),
-        ("Right_Arm", Some(3), -76.5, 100.75, 72.0, 40.5),
-        ("Left_Leg", Some(4), 24.75, 169.0, 54.0, 84.0),
-        ("Right_Leg", Some(5), -38.25, 166.75, 63.0, 84.0),
+    for (name, limb, x, y, w, h, tex, tex_broken) in [
+        ("Head", Some(0), 0.0, 40.0, 63.75, 69.0, "Interface\\Stats\\head.dds", "Interface\\Stats\\head_broken.dds"),
+        ("Face", None, 13.88, 62.5, 36.0, 48.0, "", ""),
+        ("Torso", Some(1), -10.5, 104.5, 76.5, 96.0, "Interface\\Stats\\torso.dds", "Interface\\Stats\\torso_broken.dds"),
+        ("Left_Arm", Some(2), 57.0, 104.5, 75.0, 39.0, "Interface\\Stats\\left_arm.dds", "Interface\\Stats\\left_arm_broken.dds"),
+        ("Right_Arm", Some(3), -76.5, 100.75, 72.0, 40.5, "Interface\\Stats\\right_arm.dds", "Interface\\Stats\\right_arm_broken.dds"),
+        ("Left_Leg", Some(4), 24.75, 169.0, 54.0, 84.0, "Interface\\Stats\\left_leg.dds", "Interface\\Stats\\left_leg_broken.dds"),
+        ("Right_Leg", Some(5), -38.25, 166.75, 63.0, 84.0, "Interface\\Stats\\right_leg.dds", "Interface\\Stats\\right_leg_broken.dds"),
     ] {
-        let Some(tile) = ui.find_tile(&format!("HUDMainMenu/crippled_limb_indicator/{name}")) else { continue };
+        let Some(tile) = ui.find_child_path(limb_root, name) else { continue };
         let broken = limb.is_some_and(|i| input.animation.broken[i]);
         for (key, value) in [("x", x), ("y", y), ("width", w), ("height", h), ("zoom", 75.0), ("visible", 1.0)] {
             num(ui, tile, key, value);
@@ -479,16 +490,16 @@ fn write_animations(ui: &mut Ui, shown: Shown, input: &Frame) {
         num(ui, tile, "alpha", alpha);
         if limb.is_some() {
             num(ui, tile, "systemcolor", if broken { 2.0 } else { 1.0 });
-            let stem = name.to_ascii_lowercase();
-            ui.set_trait(tile, "filename", Value::Str(format!("Interface\\Stats\\{stem}{}.dds", if broken { "_broken" } else { "" })));
+            ui.set_trait_str(tile, "filename", if broken { tex_broken } else { tex });
         }
     }
 }
 
-fn write_marks(ui: &mut Ui, marks: &[CompassMark]) {
-    let window = "HitPoints/compass_window";
+fn write_marks(ui: &mut Ui, root: TileId, marks: &[CompassMark]) {
+    let Some(window) = ui.find_child_path(root, "HitPoints/compass_window") else { return };
     // Reuse slots, hiding the surplus [design]. Ten NPC slots were captured;
     // overflow slots and the other pools grow only as needed [hypothesis: hud.md §14.6].
+    let mut slots = Vec::with_capacity(16);
     for (group, template, name, kinds) in [
         ("compass_npc_icon_group", "compass_npc_icon", "compass_npc_icon", &[MarkKind::Actor, MarkKind::Hostile][..]),
         ("compass_icon_group:0", "template_compass_icon_player", "compass_icon", &[MarkKind::Player][..]),
@@ -500,29 +511,44 @@ fn write_marks(ui: &mut Ui, marks: &[CompassMark]) {
             &[MarkKind::Place, MarkKind::Found][..],
         ),
     ] {
-        let path = format!("HUDMainMenu/{window}/{group}");
-        let Some(parent) = find(ui, &format!("{window}/{group}")) else {
+        let Some(parent) = find_under(ui, window, group) else {
             continue;
         };
-        let mut slots: Vec<_> = ui
-            .tile(parent)
-            .children
-            .iter()
-            .rev()
-            .copied()
-            .filter(|id| ui.tile(*id).get("_NVFHudTemplate").is_some_and(|v| v.text() == template))
-            .collect();
-        let incoming: Vec<_> = marks.iter().filter(|m| kinds.contains(&m.kind)).collect();
-        while slots.len() < incoming.len() {
-            let Some(tile) = code_copy(ui, &path, template, name) else {
-                break;
-            };
-            slots.push(tile);
+        slots.clear();
+        slots.extend(
+            ui.tile(parent)
+                .children
+                .iter()
+                .rev()
+                .copied()
+                .filter(|id| ui.tile(*id).get("_NVFHudTemplate").is_some_and(|v| v.text() == template)),
+        );
+        let incoming_count = marks.iter().filter(|m| kinds.contains(&m.kind)).count();
+        if slots.len() < incoming_count {
+            let path = format!("HUDMainMenu/HitPoints/compass_window/{group}");
+            let mut grew = false;
+            while slots.len() < incoming_count {
+                let Some(tile) = code_copy(ui, &path, template, name) else {
+                    break;
+                };
+                slots.push(tile);
+                grew = true;
+            }
+            if grew {
+                slots.clear();
+                slots.extend(
+                    ui.tile(parent)
+                        .children
+                        .iter()
+                        .rev()
+                        .copied()
+                        .filter(|id| ui.tile(*id).get("_NVFHudTemplate").is_some_and(|v| v.text() == template)),
+                );
+            }
         }
-        slots = ui.tile(parent).children.iter().rev().copied()
-            .filter(|id| ui.tile(*id).get("_NVFHudTemplate").is_some_and(|v| v.text() == template)).collect();
-        for (i, tile) in slots.into_iter().enumerate() {
-            let Some(mark) = incoming.get(i) else {
+        let mut incoming = marks.iter().filter(|m| kinds.contains(&m.kind));
+        for &tile in &slots {
+            let Some(mark) = incoming.next() else {
                 num(ui, tile, "visible", 0.0);
                 continue;
             };

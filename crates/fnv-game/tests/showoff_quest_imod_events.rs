@@ -324,17 +324,17 @@ End) 1::OwnedHoldImad"#,
     assert_eq!(num(&mut g, "imod.apply.list"), 0.0);
 
     // Re-applying an already active non-animatable IMOD fires OnApplyIMOD with IsImageSpaceActive == 1
-    // and keeps a single ActiveImageModifier entry while counting stacked instances for OnRemoveIMOD.
+    // and pushes another ActiveImageModifier entry in application order (capped at MAX_IMOD_STACK).
     query(&mut g, "ApplyImageSpaceModifier OwnedHoldImad");
     assert_eq!(num(&mut g, "imod.apply.calls"), 2.0);
     assert_eq!(num(&mut g, "imod.apply.active"), 1.0, "stacked re-apply sees IsImageSpaceActive == 1");
-    assert_eq!(g.image_modifiers.len(), 1, "non-animatable re-apply keeps one active entry without unbounded growth");
+    assert_eq!(g.image_modifiers.len(), 2, "non-animatable re-apply preserves stacked entries in application order");
 
     // Snapshot restore with active IMOD must not spuriously fire OnApplyIMOD.
     let snap = g.snapshot();
     let restored = Game::restore(&f.data, World::new(&f.forms, &f.refs, Default::default()), GameConfig { strict: true, ..Default::default() }, &snap).unwrap();
     assert!(restored.image_modifier_active(FormId(IMAD_HOLD)));
-    assert_eq!(restored.image_modifiers.len(), 1);
+    assert_eq!(restored.image_modifiers.len(), 2);
     assert!(restored.events.is_empty());
 
     // Single RemoveImageSpaceModifier removes BOTH stacked instances and fires OnRemoveIMOD TWICE,
@@ -348,11 +348,15 @@ End) 1::OwnedHoldImad"#,
     assert_eq!(text(&mut g, "imod.remove.ev"), "OnRemoveIMOD");
     assert_eq!(num(&mut g, "imod.remove.hold"), 2.0);
 
-    // Repeated non-animatable re-applies stay bounded (single vec entry, capped at MAX_IMOD_STACK).
+    // Repeated non-animatable re-applies stay bounded at MAX_IMOD_STACK entries per form.
     for _ in 0..80 {
         query(&mut g, "ApplyImageSpaceModifier OwnedHoldImad");
     }
-    assert_eq!(g.image_modifiers.len(), 1, "80 non-animatable re-applies must not grow image_modifiers");
+    assert_eq!(
+        g.image_modifiers.len(),
+        Game::MAX_IMOD_STACK,
+        "80 non-animatable re-applies stay capped at MAX_IMOD_STACK"
+    );
     let before_cap_rm = num(&mut g, "imod.remove.calls");
     query(&mut g, "RemoveImageSpaceModifier OwnedHoldImad");
     assert_eq!(
@@ -407,7 +411,7 @@ End) 1::OwnedHoldImad"#,
     let _ = g.run_query("Begin Function {}\nApplyImageSpaceModifier OwnedPistol\nEnd", Default::default());
     assert_eq!(num(&mut g, "imod.apply.calls"), before);
     // Keep `restored` live through the end.
-    assert_eq!(restored.image_modifiers.len(), 1);
+    assert_eq!(restored.image_modifiers.len(), 2);
 }
 
 #[test]

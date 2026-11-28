@@ -976,6 +976,7 @@ fn indexed_rig_spawn_preserves_group_rig_and_unrelated_prepared_materials() {
                     refraction: 0.,
                     animated: true,
                     morph: None,
+                    block: 0,
                 }
             })
         })

@@ -14,6 +14,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+#[cfg(feature = "desktop")]
 use std::time::Duration;
 
 pub const SITE_NEWS: &str = "https://nv-forever.com/news.json";
@@ -21,6 +22,7 @@ pub const RELEASES: &str = "https://api.github.com/repos/LootJunkieAzza/NVForeve
 pub const SITE: &str = "https://nv-forever.com";
 const CACHE_FILE: &str = "launcher-news.json";
 /// The longest a news image may be; a bigger one is left out.
+#[cfg(feature = "desktop")]
 const MAX_IMAGE: u64 = 8 << 20;
 /// The most posts kept from a fetch (and so the most images fetched at once).
 const MAX_POSTS: usize = 20;
@@ -110,11 +112,13 @@ pub fn parse_releases(text: &str) -> Result<Vec<Post>, String> {
         .collect())
 }
 
+#[cfg(feature = "desktop")]
 fn tls() -> ureq::tls::TlsConfig {
     ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).root_certs(ureq::tls::RootCerts::PlatformVerifier).build()
 }
 
 /// The agent of the small requests: 15 s for the whole of each.
+#[cfg(feature = "desktop")]
 pub(crate) fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .tls_config(tls())
@@ -129,6 +133,7 @@ pub(crate) fn agent() -> ureq::Agent {
 
 /// The agent of a release download (100 MB and more): no limit on the whole, but 15 s to
 /// connect and 30 s for any one read, so a dead connection ends in an error.
+#[cfg(feature = "desktop")]
 pub(crate) fn download_agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .tls_config(tls())
@@ -140,6 +145,7 @@ pub(crate) fn download_agent() -> ureq::Agent {
         .into()
 }
 
+#[cfg(feature = "desktop")]
 pub(crate) fn get_text(agent: &ureq::Agent, url: &str) -> Result<String, String> {
     let mut r = agent.get(url).header("Accept", "application/json").call().map_err(|e| format!("{url}: {e}"))?;
     r.body_mut().read_to_string().map_err(|e| format!("{url}: {e}"))
@@ -147,6 +153,7 @@ pub(crate) fn get_text(agent: &ureq::Agent, url: &str) -> Result<String, String>
 
 /// The release list, fetched at most once a minute: the news (when the site has none) and
 /// the update check both read it, and GitHub allows 60 requests an hour without a sign-in.
+#[cfg(feature = "desktop")]
 fn release_list(agent: &ureq::Agent) -> Result<String, String> {
     use std::sync::Mutex;
     use std::time::Instant;
@@ -166,6 +173,7 @@ fn release_list(agent: &ureq::Agent) -> Result<String, String> {
     Ok(text)
 }
 
+#[cfg(feature = "desktop")]
 fn get_bytes(agent: &ureq::Agent, url: &str) -> Option<Vec<u8>> {
     let mut r = agent.get(url).call().ok()?;
     r.body_mut().with_config().limit(MAX_IMAGE).read_to_vec().ok()
@@ -180,19 +188,10 @@ pub enum Source {
 }
 
 /// The site's posts, else the releases, each with its image when it has one.
+#[cfg(feature = "desktop")]
 pub fn fetch() -> Result<(Vec<Post>, Source), String> {
     let agent = agent();
-    let (mut posts, source) = match get_text(&agent, SITE_NEWS).and_then(|t| parse_site(&t)) {
-        Ok(p) if !p.is_empty() => (p, Source::Site),
-        site => {
-            let site_err = site.err().unwrap_or_else(|| "news.json: no posts".into());
-            match release_list(&agent).and_then(|t| parse_releases(&t)) {
-                Ok(p) => (p, Source::Releases),
-                Err(e) => return Err(format!("{site_err}; {e}")),
-            }
-        }
-    };
-    posts.truncate(MAX_POSTS);
+    let (mut posts, source) = select_posts(get_text(&agent, SITE_NEWS), || release_list(&agent))?;
     std::thread::scope(|s| {
         for p in &mut posts {
             if let Some(url) = p.image.clone().filter(|u| u.starts_with("https://")) {
@@ -201,6 +200,20 @@ pub fn fetch() -> Result<(Vec<Post>, Source), String> {
             }
         }
     });
+    Ok((posts, source))
+}
+
+/// Choose the news feed independently of the platform's HTTPS client.
+pub fn select_posts(site: Result<String, String>, releases: impl FnOnce() -> Result<String, String>) -> Result<(Vec<Post>, Source), String> {
+    let (mut posts, source) = match site.and_then(|t| parse_site(&t)) {
+        Ok(p) if !p.is_empty() => (p, Source::Site),
+        site => {
+            let site_err = site.err().unwrap_or_else(|| "news.json: no posts".into());
+            let posts = releases().and_then(|t| parse_releases(&t)).map_err(|e| format!("{site_err}; {e}"))?;
+            (posts, Source::Releases)
+        }
+    };
+    posts.truncate(MAX_POSTS);
     Ok((posts, source))
 }
 
@@ -268,7 +281,8 @@ pub fn parse_iso(t: &str) -> Option<i64> {
     let offset = match zone.rfind(['+', '-']) {
         Some(i) if zone.len() - i == 6 => {
             let z = &zone[i..];
-            let m = z[1..3].parse::<i64>().ok()? * 60 + z[4..6].parse::<i64>().ok()?;
+            // `get`, not an index: a byte range that splits a character is no date, not a panic.
+            let m = z.get(1..3)?.parse::<i64>().ok()? * 60 + z.get(4..6)?.parse::<i64>().ok()?;
             if z.starts_with('-') {
                 -m
             } else {
@@ -299,6 +313,15 @@ pub fn countdown_text(left: i64) -> String {
 }
 
 
+/// A release's file, as GitHub's release list gives it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Asset {
+    pub name: String,
+    pub browser_download_url: String,
+    #[serde(default)]
+    pub size: u64,
+}
+
 /// A published release on GitHub: its version (`0.8.0`, the tag without its `v`), tag, page,
 /// notes and files (the archives and `SHA256SUMS.txt`, for the updater).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -307,7 +330,7 @@ pub struct Latest {
     pub tag: String,
     pub url: String,
     pub notes: String,
-    pub assets: Vec<crate::update::Asset>,
+    pub assets: Vec<Asset>,
 }
 
 #[derive(Deserialize)]
@@ -320,7 +343,7 @@ struct ListedRelease {
     #[serde(default)]
     draft: bool,
     #[serde(default)]
-    assets: Vec<crate::update::Asset>,
+    assets: Vec<Asset>,
 }
 
 impl From<ListedRelease> for Latest {
@@ -402,18 +425,20 @@ pub fn is_newer(a: &str, b: &str) -> bool {
 /// The newest release, when GitHub answers.
 /// From the release list, not `releases/latest`: that one leaves pre-releases out, and every
 /// NVForever release so far is one (it answers 404).
+#[cfg(feature = "desktop")]
 pub fn fetch_latest() -> Result<Option<Latest>, String> {
     let text = release_list(&agent())?;
     Ok(newest(parse_release_list(&text)?))
 }
 
 /// The site's next release, if it announces one.
+#[cfg(feature = "desktop")]
 pub fn fetch_next_release() -> Result<Option<NextRelease>, String> {
     let js = get_text(&agent(), SITE_CONFIG)?;
     Ok(parse_next_release(&js))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop"))]
 mod tests {
     use super::*;
 
@@ -470,6 +495,8 @@ mod tests {
         assert_eq!(parse_iso("2000-03-01T00:00Z"), Some(951_868_800));
         assert_eq!(parse_iso("2026-11-18T21:00:00+01:00"), parse_iso("2026-11-18T20:00:00Z"));
         assert_eq!(parse_iso("nope"), None);
+        // A zone of the right length whose bytes split a character (#4590).
+        assert_eq!(parse_iso("2026-11-18T21:00:00+0\u{e9}00"), None);
         assert_eq!(countdown_text(2 * 86_400 + 14 * 3600 + 3 * 60 + 12), "2d 14h 03m 12s");
         assert_eq!(countdown_text(-5), "00h 00m 00s");
     }

@@ -32,10 +32,10 @@ fn the_sky_shader_compiles_with_the_night_sky_detail() {
             compiled.module.entry_points.iter().any(|e| e.stage == naga::ShaderStage::Fragment),
             "{extra:?}: a fragment entry point"
         );
-        // sky.rs `SkyLight`: seven vec4s in the Rust struct's order (ShaderType, std140).
+        // sky.rs `SkyLight`: eight vec4s in the Rust struct's order (ShaderType, std140).
         let (names, span) = sky_light_members(&compiled);
-        assert_eq!(names, ["params", "glow", "sun_dir", "sun", "glare", "moon", "night"], "{extra:?}");
-        assert_eq!(span, 7 * 16, "{extra:?}");
+        assert_eq!(names, ["params", "glow", "sun_dir", "sun", "glare", "moon", "night", "disc"], "{extra:?}");
+        assert_eq!(span, 8 * 16, "{extra:?}");
         // The twinkle's clock: the view's globals (group 0, binding 11).
         assert!(
             compiled

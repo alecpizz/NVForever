@@ -23,22 +23,24 @@ pub mod read_pool;
 pub mod reflection_cube;
 pub mod reflection_room;
 pub mod release;
+pub mod room_rays;
 pub mod nif_material;
 pub mod nif_spawn;
 pub mod tangents;
 pub mod terrain_sampling;
 pub mod texture;
+pub mod tone_input;
 
 pub use data::{ArchivePlugin, GameData};
 pub use particles::{ParticleSystemDef, PreparedParticles};
 pub use model::{ModelCache, PreparedModel, PreparedShape};
-pub use nif_material::{ambient_occlusion_opt_in, ambient_occlusion_opt_out, depth_equal, fade_prepass, grass_edges, nif_material, soft_edges, NifMaterial, NifMaterialPlugin, AMBIENT_OCCLUSION_DEF};
+pub use nif_material::{ambient_occlusion_opt_in, ambient_occlusion_opt_out, depth_equal, enable_foliage_canopy, fade_prepass, grass_edges, nif_material, soft_edges, NifMaterial, NifMaterialPlugin, AMBIENT_OCCLUSION_DEF};
 pub use nif_spawn::{NifHidden, NifRoot, SpawnCtx, SpawnReport};
 pub use release::{AssetReleasePlugin, KeepLimits};
 /// The reflections' mount-pack test aid (pbr_field/reflect.rs).
 pub use pbr_field::reflect::{mount_pack_requested, seed_mount_pack, MOUNT_PACK_ENV};
 /// The terrain parallax's ground-pack test aid (pbr_field/ground.rs).
-pub use pbr_field::ground::{ground_pack_requested, seed_ground_pack, GROUND_DEPTH, GROUND_PACK_ENV};
-pub use texture::TextureCache;
+pub use pbr_field::ground::{ground_pack_requested, seed_ground_pack, GroundPack, GROUND_DEPTH, GROUND_PACK_ENV};
+pub use texture::{TextureCache, ALPHA_HEIGHT_DEPTH};
 
 pub mod nif_surface_blend;

@@ -10,6 +10,11 @@ use crate::game::Game;
 use fnv_script::vm::Value;
 use fnv_sim::FormId;
 
+/// Vanilla `NVDefaultWeather` (`FalloutNV.esm` WTHR `0x00064609`), already active and
+/// settled at `1.0` (Pleasant) on a cold interior start before visiting any exterior
+/// [observed: w4g_04_weather_cold_start].
+pub const NV_DEFAULT_WEATHER: FormId = FormId(0x0006_4609);
+
 /// A weather a script asked for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WeatherRequest {
@@ -40,6 +45,37 @@ pub struct WeatherState {
     /// Destination classification and settled state from the same finite report.
     /// A fraction-only host must not reuse an earlier classification measurement.
     measured_classification: Option<(u8, bool)>,
+}
+
+impl WeatherState {
+    /// Cold-start weather state: when the load order defines vanilla `NVDefaultWeather`
+    /// (`0x00064609`, WTHR), start with it active and settled at progress `1.0` using its
+    /// authored WTHR DATA classification (defaulting to Pleasant `1` if `DATA` is omitted)
+    /// [observed: w4g_04_weather_cold_start]. Synthetic load orders without `0x00064609`
+    /// remain unmeasured (`0.0`) until a sky sample is reported [design].
+    pub(crate) fn cold_start(data: &crate::GameData) -> Self {
+        if data.sig(NV_DEFAULT_WEATHER) != Some(*b"WTHR") {
+            return Self::default();
+        }
+        let classification = data
+            .record_field(NV_DEFAULT_WEATHER, "DATA", "flags")
+            .and_then(|v| v.as_u64())
+            .map_or(1, |v| v as u8);
+        Self {
+            shown: Some(NV_DEFAULT_WEATHER),
+            raining: classification & 4 != 0,
+            measured_fraction: Some(1.0),
+            measured_classification: Some((classification, true)),
+            ..Self::default()
+        }
+    }
+
+    /// Clear transient sky measurements when restoring a saved session (`Game::restore`),
+    /// so restored sessions wait for the host sky bridge to report their live state.
+    pub(crate) fn clear_measurement(&mut self) {
+        self.measured_fraction = None;
+        self.measured_classification = None;
+    }
 }
 
 impl Game<'_> {
@@ -128,14 +164,17 @@ pub fn is_raining(g: &mut Game, _ctx: &Ctx, _a: &Args) -> Result<Value, String> 
 }
 
 /// The last measured transition fraction. The public command's range and alias
-/// are documented by GECK GetCurrentWeatherPercent. Unmeasured returns zero
-/// [hypothesis: engineering policy]; no native cold/endpoint parity is inferred.
+/// are documented by GECK GetCurrentWeatherPercent. When vanilla `NVDefaultWeather`
+/// (`0x00064609`) is present, cold start begins settled at `1.0` [observed:
+/// w4g_04_weather_cold_start]; synthetic load orders without `0x00064609` or
+/// invalidated/restored sessions without a sky report return `0.0` [design].
 pub fn get_current_weather_percent(g: &mut Game, _ctx: &Ctx, _a: &Args) -> Result<Value, String> {
     Ok(Value::Num(f64::from(g.weather.measured_fraction.unwrap_or(0.0))))
 }
 
-/// `IsSnowing`: the documented binary settled-snow query. Unmeasured is zero
-/// [hypothesis: engineering policy], as for the other measured sky queries.
+/// `IsSnowing`: the documented binary settled-snow query. Returns `0` for cold-start
+/// `NVDefaultWeather` (Pleasant) [observed: w4g_04_weather_cold_start] and `0` when
+/// unmeasured [design].
 pub fn is_snowing(g: &mut Game, _ctx: &Ctx, _a: &Args) -> Result<Value, String> {
     yes(g.weather.measured_classification.is_some_and(|(class, settled)| class & 8 != 0 && settled))
 }
@@ -189,7 +228,140 @@ impl Game<'_> {
         let Some(ws) = self.world.worldspace_of(FormId::PLAYER_REF) else { return };
         let Some(pos) = self.world.peek(FormId::PLAYER_REF).map(|p| p.pos) else { return };
         if let Some(w) = hook(ws, pos) {
-            self.weather.shown = Some(w);
+            if self.weather.shown != Some(w) {
+                let class = self
+                    .data
+                    .record_field(w, "DATA", "flags")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as u8);
+                self.set_shown_weather(w, class.is_some_and(|c| c & 4 != 0));
+                if let Some(class) = class {
+                    self.set_shown_weather_sample(1.0, class, true);
+                }
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game::{Game, GameConfig};
+    use crate::GameData;
+    use fnv_esm::{LoadOrder, Plugin, Schema};
+    use fnv_script::vm::XVal;
+    use fnv_script::FunctionTable;
+    use fnv_sim::{FormStore, RefTable, SimConfig, World};
+    use serde_json::Value as Json;
+
+    fn sub(sig: &[u8; 4], data: Vec<u8>) -> Vec<u8> {
+        let mut out = Vec::with_capacity(6 + data.len());
+        out.extend_from_slice(sig);
+        out.extend_from_slice(&(data.len() as u16).to_le_bytes());
+        out.extend_from_slice(&data);
+        out
+    }
+
+    fn record(sig: &[u8; 4], id: u32, subs: &[Vec<u8>]) -> Vec<u8> {
+        let body: Vec<u8> = subs.iter().flat_map(|s| s.iter().copied()).collect();
+        let mut out = Vec::with_capacity(24 + body.len());
+        out.extend_from_slice(sig);
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&id.to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&body);
+        out
+    }
+
+    fn top(sig: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(24 + body.len());
+        out.extend_from_slice(b"GRUP");
+        out.extend_from_slice(&((24 + body.len()) as u32).to_le_bytes());
+        out.extend_from_slice(sig);
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(body);
+        out
+    }
+
+    fn tes4() -> Vec<u8> {
+        let mut hedr = Vec::new();
+        hedr.extend_from_slice(&1.34f32.to_le_bytes());
+        hedr.extend_from_slice(&0u32.to_le_bytes());
+        hedr.extend_from_slice(&0x800u32.to_le_bytes());
+        record(b"TES4", 0, &[sub(b"HEDR", hedr)])
+    }
+
+    fn wthr(id: u32, edid: &str, classification: u8) -> Vec<u8> {
+        let mut data = vec![0u8; 15];
+        data[3] = 255;
+        data[11] = classification;
+        let mut name = edid.as_bytes().to_vec();
+        name.push(0);
+        record(b"WTHR", id, &[sub(b"EDID", name), sub(b"DATA", data)])
+    }
+
+    fn build_game_data(with_nv_default: bool) -> (GameData, FormStore, RefTable) {
+        let mut wthrs = wthr(0x0000_015E, "DefaultWeather", 1);
+        if with_nv_default {
+            wthrs.extend(wthr(NV_DEFAULT_WEATHER.0, "NVDefaultWeather", 1));
+            wthrs.extend(wthr(0x0012_37D7, "NVGoodspringsWeather", 1));
+        }
+        let bytes = [tes4(), top(b"WTHR", &wthrs)].concat();
+        let plugins = [Plugin::parse(&bytes, "ColdWeather.esm".into()).unwrap()];
+        let lo = LoadOrder::new(&plugins).unwrap();
+        let schema = Schema::load_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../../schemas/fnv")).unwrap();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schemas/script/functions.json");
+        let json: Json = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let table = FunctionTable::load(&path).unwrap();
+        let forms = FormStore::build(&lo, &schema);
+        let refs = RefTable::build(&lo, &schema);
+        let data = GameData::build(&lo, &schema, table, &json, &refs);
+        (data, forms, refs)
+    }
+
+    fn query(g: &mut Game, expr: &str) -> XVal {
+        g.run_query(&format!("Begin Function {{}}\nSetFunctionValue ({expr})\nEnd\n"), Default::default()).unwrap()
+    }
+
+    #[test]
+    fn cold_start_resolves_nv_default_weather_when_present_in_load_order() {
+        let (data, forms, refs) = build_game_data(true);
+        let world = World::new(&forms, &refs, SimConfig::default());
+        let mut g = Game::new(&data, world, GameConfig { strict: true, ..Default::default() });
+        assert_eq!(query(&mut g, "GetCurrentWeather"), XVal::Ref(NV_DEFAULT_WEATHER.0));
+        assert_eq!(query(&mut g, "GetCurrentWeatherPercent"), XVal::Num(1.0));
+        assert_eq!(query(&mut g, "IsPleasant"), XVal::Num(1.0));
+        assert_eq!(query(&mut g, "IsSnowing"), XVal::Num(0.0));
+        assert_eq!(query(&mut g, "IsRaining"), XVal::Num(0.0));
+        assert_eq!(query(&mut g, "IsCloudy"), XVal::Num(0.0));
+        assert_eq!(query(&mut g, "GetIsCurrentWeather NVDefaultWeather"), XVal::Num(1.0));
+        assert_eq!(query(&mut g, "GetIsCurrentWeather DefaultWeather"), XVal::Num(0.0));
+        // Entering an exterior replaces NVDefaultWeather with the exterior weather.
+        g.set_shown_weather(FormId(0x0012_37D7), false);
+        g.set_shown_weather_sample(1.0, 1, true);
+        assert_eq!(query(&mut g, "GetCurrentWeather"), XVal::Ref(0x0012_37D7));
+        assert_eq!(query(&mut g, "GetIsCurrentWeather NVGoodspringsWeather"), XVal::Num(1.0));
+        assert_eq!(query(&mut g, "GetIsCurrentWeather NVDefaultWeather"), XVal::Num(0.0));
+        assert_eq!(g.weather.outgoing, Some(NV_DEFAULT_WEATHER));
+        assert_eq!(query(&mut g, "GetCurrentWeatherPercent"), XVal::Num(1.0));
+        assert_eq!(query(&mut g, "IsPleasant"), XVal::Num(1.0));
+    }
+
+    #[test]
+    fn synthetic_load_order_without_nv_default_weather_stays_unmeasured() {
+        let (data, forms, refs) = build_game_data(false);
+        let world = World::new(&forms, &refs, SimConfig::default());
+        let mut g = Game::new(&data, world, GameConfig { strict: true, ..Default::default() });
+        assert_eq!(query(&mut g, "GetCurrentWeather"), XVal::Ref(0));
+        assert_eq!(query(&mut g, "GetCurrentWeatherPercent"), XVal::Num(0.0));
+        assert_eq!(query(&mut g, "IsPleasant"), XVal::Num(0.0));
+        assert_eq!(query(&mut g, "IsSnowing"), XVal::Num(0.0));
+        assert_eq!(query(&mut g, "IsRaining"), XVal::Num(0.0));
+        assert_eq!(query(&mut g, "IsCloudy"), XVal::Num(0.0));
+        assert_eq!(query(&mut g, "GetIsCurrentWeather DefaultWeather"), XVal::Num(0.0));
     }
 }

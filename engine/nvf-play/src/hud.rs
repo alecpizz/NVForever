@@ -232,7 +232,7 @@ const AMMO_LABEL_DROP: f32 = 17.0;
 const ENEMY_PIPS: usize = 31;
 /// The enemy's name: the line it stands on in its piece, centred.
 const ENEMY_NAME_BASE: f32 = 53.0;
-/// Living Anatomy's "HP:… DT:…" line stands on this y of the enemy's piece, a line under
+/// Living Anatomy's "Health … DT …" line stands on this y of the enemy's piece, a line under
 /// the name [observed: the owner's screenshot 2026-10-24 of the original, the two lines
 /// about 20 of 528 rows apart: 36 interface units].
 const ENEMY_STATS_BASE: f32 = ENEMY_NAME_BASE + 36.0;
@@ -267,17 +267,39 @@ pub struct HudView {
     pub weapon: HudWeapon,
     /// The sneak word, while the player sneaks (§9).
     pub sneak: Option<Sneak>,
-    /// `[DETECTED]` with who detects the player, under the Detected by Whom tweak.
+    /// `[SPOTTED]` with who detects the player, under the Detected by Whom tweak.
     pub detected_by: Option<String>,
     /// The body armour's condition, 0 to 1, under the Armor Condition tweak.
     pub armor: Option<f32>,
     /// A kill camera has the view, which hides the HUD (`crate::kill_cam`).
     pub kill_cam: bool,
+    /// Why the HUD is not shown, in words for the log (`crate::xp_meter`'s level-up wait,
+    /// #3882); `None` while it is shown.
+    pub hidden: Option<&'static str>,
+}
+
+/// A slideshow's room, by its cell's Editor ID: the ending's slide room `Endgame` and the
+/// add-ons' intro rooms `NVDLC01Slideshow`, `NVDLC02SlideShow`, `NVDLC03Slideshow` and
+/// `NVDLC04SlideShow` [observed: the base game's and the four add-ons' interior cells'
+/// Editor IDs; no other interior's has "slideshow" in it]. The rooms hold only the slide,
+/// its light and the narrator: a player is there only for the slides, and the slideshow is
+/// over once a script moves the player out (or the ending's credits end the game). Co-op
+/// reads it (`nvforever`'s `coop/scene.rs`): a guest stands in the host's slide room too.
+pub fn slideshow_room(edid: &str) -> bool {
+    edid.eq_ignore_ascii_case("Endgame") || edid.to_ascii_lowercase().contains("slideshow")
+}
+
+/// Whether the interior cell `interior` is a slideshow's room ([`slideshow_room`]), its
+/// Editor ID looked up in the load order's cells (`RefTable::cell_edids`, lower case). A
+/// co-op guest stands in the host's slide room too (the host's MoveTo takes it along,
+/// `nvforever`'s `coop/scene.rs`), so its own cell says it.
+pub fn in_slideshow(interior: Option<u32>, cell_edids: &std::collections::HashMap<String, FormId>) -> bool {
+    interior.is_some_and(|c| cell_edids.iter().any(|(e, id)| id.0 == c && slideshow_room(e)))
 }
 
 impl Default for HudView {
     fn default() -> Self {
-        HudView { shown: false, enemy_shown: false, health: 1.0, action_points: 1.0, heading: 0.0, weapon: HudWeapon::default(), sneak: None, detected_by: None, armor: None, kill_cam: false }
+        HudView { shown: false, enemy_shown: false, health: 1.0, action_points: 1.0, heading: 0.0, weapon: HudWeapon::default(), sneak: None, detected_by: None, armor: None, kill_cam: false, hidden: None }
     }
 }
 
@@ -291,13 +313,13 @@ pub enum Sneak {
 }
 
 impl Sneak {
-    /// [observed: the owner's four screenshots of the original.]
+    /// [design: NVForever's own words, #2984.]
     pub fn word(self) -> &'static str {
         match self {
-            Sneak::Hidden => "[HIDDEN]",
-            Sneak::Detected => "[DETECTED]",
-            Sneak::Caution => "[CAUTION]",
-            Sneak::Danger => "[DANGER]",
+            Sneak::Hidden => "[UNSEEN]",
+            Sneak::Detected => "[SPOTTED]",
+            Sneak::Caution => "[ALERT]",
+            Sneak::Danger => "[COMBAT]",
         }
     }
 
@@ -323,7 +345,7 @@ impl Sneak {
     }
 }
 
-/// `[DETECTED]` naming who detects the player, under the player's Detected by Whom tweak:
+/// `[SPOTTED]` naming who detects the player, under the player's Detected by Whom tweak:
 /// the first `max` names, then how many more; with `max` 0 only how many [design: our
 /// own words, docs/design/tweaks.md].
 pub fn detected_word(names: &[String], max: usize) -> String {
@@ -331,7 +353,7 @@ pub fn detected_word(names: &[String], max: usize) -> String {
         return Sneak::Detected.word().to_string();
     }
     if max == 0 {
-        return format!("[DETECTED BY {}]", names.len());
+        return format!("[SPOTTED BY {}]", names.len());
     }
     let shown = &names[..names.len().min(max)];
     let rest = names.len() - shown.len();
@@ -341,14 +363,14 @@ pub fn detected_word(names: &[String], max: usize) -> String {
         (some, 1) => format!("{} and 1 other", some.join(", ")),
         (some, n) => format!("{} and {n} others", some.join(", ")),
     };
-    format!("[DETECTED BY {list}]")
+    format!("[SPOTTED BY {list}]")
 }
 
 /// The sneak word from the game's detection states (`fnv_game::awareness`) and the
 /// latest detection values (`Game::detection`) [design: shared by drawing and tree].
 /// Teammates and actors following the player (`Game::with_player`) count for neither
-/// `[CAUTION]` nor `[DETECTED]` (#1159); one in Combat with the player still means
-/// `[DANGER]` [design: a fight is a fight].
+/// `[ALERT]` nor `[SPOTTED]` (#1159); one in Combat with the player still means
+/// `[COMBAT]` [design: a fight is a fight].
 pub(crate) fn sneak_now(g: &fnv_game::Game) -> Sneak {
     let me = FormId::PLAYER_REF;
     let (mut fighting, mut searching) = (false, false);
@@ -563,7 +585,22 @@ fn gather(
         let why = if camera { "the kill camera has the view" } else { "the VATS attacks play" };
         info!("hud: {}", if killcam { format!("hidden: {why}") } else { "back after the kill camera".to_string() });
     }
-    let mut now = HudView { shown: *state.get() == PlayState::Playing && !held && !creating && !posed && !wheel_open && !killcam, kill_cam: killcam, ..view.clone() };
+    let hidden = if *state.get() != PlayState::Playing {
+        Some("the game is not in play (a menu, a conversation or a loading screen)")
+    } else if held {
+        Some("a script holds the player's movement (DisablePlayerControls)")
+    } else if creating {
+        Some("the character creator is up")
+    } else if posed {
+        Some("an idle holds the camera")
+    } else if wheel_open {
+        Some("the weapon wheel is open")
+    } else if killcam {
+        Some("a kill camera or VATS playback has the view")
+    } else {
+        None
+    };
+    let mut now = HudView { shown: hidden.is_none(), kill_cam: killcam, hidden, ..view.clone() };
     // [design, #2659] Only the classic enemy piece survives playback, including its
     // attack camera. All other HUD visibility rules keep using `shown`.
     now.enemy_shown = *state.get() == PlayState::Playing && !held && !creating && !posed && !wheel_open
@@ -716,7 +753,7 @@ fn picture_node(picture: &Picture, color: Color) -> ImageNode {
 #[derive(Component)]
 pub(crate) struct HudRoot;
 
-/// The health and compass piece, bottom left.
+/// The health and compass pieces, bottom left (separately scaled, hidden together).
 #[derive(Component)]
 struct HpPiece;
 
@@ -1023,13 +1060,19 @@ fn spawn_hud(commands: &mut Commands, art: &mut Art, images: &mut Assets<Image>,
     commands.spawn((HudRoot, screen.clone(), Visibility::Hidden, Pickable::IGNORE)).with_children(|root| {
         // Health and compass, bottom left.
         let piece = Node { position_type: PositionType::Absolute, left: u(MARGIN_X), bottom: u(MARGIN_Y), width: u(HP_PANEL.x), height: u(HP_PANEL.y), ..default() };
-        root.spawn((HpPiece, piece, DrawnByTiles)).with_children(|p| {
-            let mut marks = at(COMPASS_AT.x, COMPASS_AT.y, COMPASS.x, COMPASS.y);
-            marks.overflow = Overflow::clip_x();
-            p.spawn((CompassTicks, marks.clone()));
+        root.spawn((screen.clone(), Pickable::IGNORE, crate::hud_readability::HudSize(crate::hud_readability::Part::Health))).with_children(|wrapper| {
+          wrapper.spawn((HpPiece, piece.clone(), DrawnByTiles)).with_children(|p| {
             spawn_bracket(p, &art.left_bracket, 0.0, &[LEFT_UPRIGHT], color);
             label(p, HP, places.hp_label, UPPER_BASE);
             spawn_row(p, Bar::Health, places.hp_meter, places.meter_y, METER_WIDTH, PIPS, amber(METER_BRIGHTNESS));
+          });
+        });
+        // The compass is a sibling so changing health size cannot resize its marks.
+        root.spawn((screen.clone(), Pickable::IGNORE, crate::hud_readability::HudSize(crate::hud_readability::Part::Compass))).with_children(|wrapper| {
+          wrapper.spawn((HpPiece, piece, DrawnByTiles)).with_children(|p| {
+            let mut marks = at(COMPASS_AT.x, COMPASS_AT.y, COMPASS.x, COMPASS.y);
+            marks.overflow = Overflow::clip_x();
+            p.spawn((CompassTicks, marks.clone()));
             info!("compass: heading at x {x} of {w}, the strip's N at {n}, fading from {f}", x = COMPASS_HEADING, w = COMPASS.x, n = STRIP_HEADING, f = STRIP_FADE.0);
             let mut window_node = at(COMPASS_AT.x, COMPASS_AT.y, COMPASS.x, COMPASS.y);
             window_node.overflow = Overflow::clip();
@@ -1066,10 +1109,12 @@ fn spawn_hud(commands: &mut Commands, art: &mut Art, images: &mut Assets<Image>,
             });
             p.spawn((CompassMarks, marks));
             p.spawn((PlaceNameText, at(0.0, 0.0, HP_PANEL.x, 0.0)));
+          });
         });
         // Action points, condition and ammo, bottom right.
         let piece = Node { position_type: PositionType::Absolute, right: u(MARGIN_X), bottom: u(MARGIN_Y), width: u(AP_PANEL.x), height: u(AP_PANEL.y), ..default() };
-        root.spawn((ApPiece, piece, DrawnByTiles)).with_children(|p| {
+        root.spawn((screen.clone(), Pickable::IGNORE, crate::hud_readability::HudSize(crate::hud_readability::Part::ActionPoints))).with_children(|wrapper| {
+          wrapper.spawn((ApPiece, piece, DrawnByTiles)).with_children(|p| {
             spawn_bracket(p, &art.right_bracket, RIGHT_BRACKET_X, &[RIGHT_UPRIGHT, DIVIDER], color);
             spawn_row(p, Bar::ActionPoints, places.ap_meter, places.meter_y, METER_WIDTH, PIPS, amber(METER_BRIGHTNESS));
             label(p, AP, places.ap_label, UPPER_BASE);
@@ -1100,6 +1145,7 @@ fn spawn_hud(commands: &mut Commands, art: &mut Art, images: &mut Assets<Image>,
                 row.spawn((ArmorBar, at(places.cnd_x, places.cnd_y, CND_FILL_WIDTH, CND_BAR.y), BackgroundColor(amber(CONDITION_BRIGHTNESS))));
             });
             p.spawn((AmmoText, at(0.0, 0.0, AP_PANEL.x, AP_PANEL.y)));
+          });
         });
         // The sneak word, top middle.
         let piece = Node { position_type: PositionType::Absolute, left: Val::Percent(50.0), margin: UiRect::left(u(-SNEAK.x / 2.0)), top: u(0.0), width: u(SNEAK.x), height: u(SNEAK.y + SNEAK_BASE), ..default() };
@@ -1432,7 +1478,7 @@ fn texts(
             shown.1 = enemy;
         }
     }
-    // Living Anatomy: "HP:… DT:…" centred under the name, in its colour.
+    // Living Anatomy: "Health … DT …" centred under the name, in its colour.
     let anatomy = target.0.as_ref().and_then(|t| t.anatomy_line());
     if shown.3 != anatomy {
         if let Ok(e) = stats.single() {
@@ -1549,13 +1595,13 @@ mod tests {
     #[test]
     fn detected_names_the_first_detectors_then_counts_the_rest() {
         let n = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert_eq!(detected_word(&[], 2), "[DETECTED]");
-        assert_eq!(detected_word(&n(&["Easy Pete"]), 2), "[DETECTED BY Easy Pete]");
-        assert_eq!(detected_word(&n(&["Easy Pete", "Sunny"]), 2), "[DETECTED BY Easy Pete and Sunny]");
-        assert_eq!(detected_word(&n(&["A", "B", "C"]), 3), "[DETECTED BY A, B and C]");
-        assert_eq!(detected_word(&n(&["A", "B", "C"]), 2), "[DETECTED BY A, B and 1 other]");
-        assert_eq!(detected_word(&n(&["A", "B", "C", "D"]), 1), "[DETECTED BY A and 3 others]");
-        assert_eq!(detected_word(&n(&["A", "B"]), 0), "[DETECTED BY 2]");
+        assert_eq!(detected_word(&[], 2), "[SPOTTED]");
+        assert_eq!(detected_word(&n(&["Easy Pete"]), 2), "[SPOTTED BY Easy Pete]");
+        assert_eq!(detected_word(&n(&["Easy Pete", "Sunny"]), 2), "[SPOTTED BY Easy Pete and Sunny]");
+        assert_eq!(detected_word(&n(&["A", "B", "C"]), 3), "[SPOTTED BY A, B and C]");
+        assert_eq!(detected_word(&n(&["A", "B", "C"]), 2), "[SPOTTED BY A, B and 1 other]");
+        assert_eq!(detected_word(&n(&["A", "B", "C", "D"]), 1), "[SPOTTED BY A and 3 others]");
+        assert_eq!(detected_word(&n(&["A", "B"]), 0), "[SPOTTED BY 2]");
     }
 
     #[test]
@@ -1755,7 +1801,7 @@ mod tests {
         assert_eq!(Sneak::of(false, true, true), Sneak::Caution);
         assert_eq!(Sneak::of(true, true, true), Sneak::Danger);
         assert!(Sneak::Danger.warning() && Sneak::Caution.warning() && !Sneak::Detected.warning());
-        assert_eq!(Sneak::Hidden.word(), "[HIDDEN]");
+        assert_eq!(Sneak::Hidden.word(), "[UNSEEN]");
     }
 
     #[test]
@@ -1835,7 +1881,7 @@ mod tests {
         let (lefts, width) = tick_lefts(ENEMY_MARKS.1 - ENEMY_MARKS.0, TICK_BLOCK, ENEMY_PIPS);
         let ticks = from + (lefts[0] + lefts[ENEMY_PIPS - 1] + width) / 2.0;
         assert!((ticks - ENEMY_MIDDLE).abs() < 0.5, "ticks {ticks} middle {ENEMY_MIDDLE}");
-        for name in ["Fiend", "Gecko", "Cazador", "NCR Trooper", "Legion Veteran Decanus", "HP:120 DT:4"] {
+        for name in ["Fiend", "Gecko", "Cazador", "NCR Trooper", "Legion Veteran Decanus", "Health 120  DT 4.0"] {
             let line = font.lines(name, None).remove(0);
             let x = centred_x(&font, &line, ENEMY_MIDDLE);
             let first = &line.glyphs[0];

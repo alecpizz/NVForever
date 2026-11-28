@@ -3,7 +3,7 @@
 //! - A click on a marker of the World Map, or the controller's A on one (or the test
 //!   aid's `travel=`) is a [`FastTravelAsk`]; [`answer`] tries the refusals (§2,
 //!   [`refusal`]) and puts up the
-//!   question box ([`Popup`]): "Do you want to travel to …?" with Yes and No, or the
+//!   question box ([`Popup`]): "Travel to …?" with Yes and No, or the
 //!   refusal's text with OK. The DATA page draws the box over the map and takes its keys
 //!   and clicks (`super::take_input`); Yes is a [`FastTravelGo`].
 //! - [`go`] puts the Pip-Boy away and keeps the trip; once the game runs again
@@ -70,18 +70,18 @@ impl Refusal {
         }
     }
 
-    /// NVForever's own text where no plugin sets the setting [design]; the script one is
-    /// FalloutNV.esm's [observed].
+    /// NVForever's own text where no plugin sets the setting [design: our own words,
+    /// #2984]; the script one is FalloutNV.esm's `sNoFastTravelScriptBlock` [observed].
     fn own_text(self) -> &'static str {
         match self {
-            Refusal::Undiscovered => "You cannot fast travel to a location you have not discovered.",
+            Refusal::Undiscovered => "That place has not been found yet.",
             Refusal::Script => "Fast travel is currently unavailable from this location.",
-            Refusal::Place => "You cannot fast travel from this location.",
-            Refusal::InAir => "You cannot fast travel while in the air.",
-            Refusal::Combat => "You cannot fast travel during combat.",
-            Refusal::HostilesNear => "You cannot fast travel when enemies are nearby.",
-            Refusal::Encumbered => "You cannot fast travel while carrying too much.",
-            Refusal::CrippledLeg => "You cannot fast travel with a crippled leg.",
+            Refusal::Place => "Fast travel cannot start from here.",
+            Refusal::InAir => "Fast travel needs ground under your feet.",
+            Refusal::Combat => "Fast travel waits until the fight is over.",
+            Refusal::HostilesNear => "Fast travel cannot start with enemies close by.",
+            Refusal::Encumbered => "Too much weight to fast travel.",
+            Refusal::CrippledLeg => "Fast travel is not possible on a crippled leg.",
             Refusal::NoBottle => "Fast travel needs a Nuka-Cola Quantum, Quartz or Victory.",
         }
     }
@@ -144,10 +144,9 @@ fn travel_bottle(sim: &mut SimState) -> Option<FormId> {
     bottles.into_iter().find(|&b| sim.world.item_count(FormId::PLAYER_REF, b).is_ok_and(|n| n > 0))
 }
 
-/// The question [observed: the owner's screenshot, "Do you want to travel to
-/// Goodsprings?"]; a plugin's `sTravelQuestion` with `%s` takes the name there, one
+/// The question [design: NVForever's own words, #2984]; a plugin's `sTravelQuestion` with `%s` takes the name there, one
 /// without it is followed by the name [design].
-pub const OWN_QUESTION: &str = "Do you want to travel to %s?";
+pub const OWN_QUESTION: &str = "Travel to %s?";
 
 pub fn question(template: &str, name: &str) -> String {
     if template.contains("%s") {
@@ -174,7 +173,7 @@ const OWN_TIME_SCALE: f64 = 30.0;
 /// What the question box asks.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Ask {
-    /// "Do you want to travel to …?": the marker.
+    /// "Travel to …?": the marker.
     Travel(u32),
     /// A refusal: OK only.
     Refused,
@@ -524,7 +523,7 @@ mod tests {
 
     #[test]
     fn the_question_names_the_marker() {
-        assert_eq!(question(OWN_QUESTION, "Goodsprings"), "Do you want to travel to Goodsprings?");
+        assert_eq!(question(OWN_QUESTION, "Goodsprings"), "Travel to Goodsprings?");
         assert_eq!(question("Travel to", "Primm"), "Travel to Primm?");
     }
 
@@ -538,7 +537,7 @@ mod tests {
 
     #[test]
     fn the_box_answers() {
-        let mut p = Popup::travel(7, "Do you want to travel to X?".into());
+        let mut p = Popup::travel(7, "Travel to X?".into());
         assert_eq!(p.take(p.selected), Some(7));
         p.step(1);
         p.step(1);

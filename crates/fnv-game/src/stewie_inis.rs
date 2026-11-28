@@ -202,6 +202,8 @@ pub fn load_modular_inis(mod_files: &ModFiles) -> (usize, StewieIniMap) {
 /// Query a `key:section` setting across `nvse_stewie_tweaks.ini` layered beneath
 /// `Data\NVSE\Plugins\Tweaks\INIs\*.ini` (sorted `A..Z`, modular files overriding the
 /// base INI) [design]. When no modular `.ini` files exist, reads only the base INI.
+/// Does NOT trim `key` or `section` (matching observed `StewieGetValue`/`StewVal`
+/// whitespace semantics in `w4h_08_stewie_get_value_whitespace`).
 pub fn query_value(mod_files: &ModFiles, key: &str, section: &str) -> Option<String> {
     let mut merged = StewieIniMap::default();
     if let Some(base) = mod_files.read_text_any_case(BASE_INI_PATH) {
@@ -210,7 +212,7 @@ pub fn query_value(mod_files: &ModFiles, key: &str, section: &str) -> Option<Str
     for (_, text) in mod_files.read_folder_inis(MODULAR_INIS_DIR) {
         merged.parse_into(&text);
     }
-    merged.get(section, key).map(str::to_string)
+    merged.entries.get(&(section.to_ascii_lowercase(), key.to_ascii_lowercase())).cloned()
 }
 
 /// Apply recognized modular tweak overrides from `Data\NVSE\Plugins\Tweaks\INIs\*.ini`
@@ -441,6 +443,9 @@ pub fn apply_modular_tweaks_to_game(overrides: &StewieIniMap, tweaks: &mut Tweak
     bool_tweak!("Tweaks", "bReloadingWithNoAmmoSwapsAmmoTypes", empty_reload_swaps_ammo);
     bool_tweak!("Tweaks", "bMenuSearch", menu_search);
     bool_tweak!("Tweaks", "bArmorConditionLabel", armor_condition);
+    bool_tweak!("Tweaks", "bNoLockEncounterZoneLevels", no_lock_encounter_zone_levels);
+    bool_tweak!("Tweaks", "bFasterSleepWait", faster_sleep_wait);
+    bool_tweak!("Tweaks", "bUseWASDAsArrowKeys", wasd_as_arrow_keys);
 
     // Numeric [Tweaks] settings with documented domains.
     if let Some(n) = overrides.get_i32("Tweaks", "iPerksPerLevel").filter(|&n| n >= 1) {
@@ -449,6 +454,10 @@ pub fn apply_modular_tweaks_to_game(overrides: &StewieIniMap, tweaks: &mut Tweak
     }
     if let Some(n) = overrides.get_i32("Tweaks", "iMaxCharacterLevel").filter(|&n| n >= 0) {
         tweaks.max_level = n.clamp(0, 100) as u32;
+        applied += 1;
+    }
+    if let Some(pct) = overrides.get_f64("Tweaks", "fCraftedItemHealthPct").filter(|v| v.is_finite() && *v >= 0.0) {
+        tweaks.crafted_item_health_pct = (pct as f32).clamp(0.0, 100.0);
         applied += 1;
     }
 
@@ -705,6 +714,7 @@ mod tests {
             "[Tweaks]\n\
              bCritChanceIgnoresFireRate=1\n\
              bMenuSearch=1\n\
+             bNoLockEncounterZoneLevels=1\n\
              bHardcoreTweaks=1\n\
              iPerksPerLevel=3\n\
              iMaxCharacterLevel=50\n\
@@ -720,9 +730,10 @@ mod tests {
 
         let mut tweaks = Tweaks::default();
         let count = apply_modular_tweaks_to_game(&map, &mut tweaks);
-        assert_eq!(count, 9);
+        assert_eq!(count, 10);
         assert!(tweaks.crit_ignores_fire_rate);
         assert!(tweaks.menu_search);
+        assert!(tweaks.no_lock_encounter_zone_levels);
         assert!(tweaks.hardcore_tweaks);
         assert!(!tweaks.hardcore_ammo_weight);
         assert!(tweaks.hardcore_essential_companions);

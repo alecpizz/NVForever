@@ -18,12 +18,15 @@ use serde_json::Value as Json;
 
 const QUEST: u32 = 0x900;
 const NPC: u32 = 0x920;
+const ROBOT_CREA: u32 = 0x921;
 const SCRIPT: u32 = 0x930;
 const STIMPAK: u32 = 0x940;
+const SCRAP_METAL: u32 = 0x941;
 const FOLLOW: u32 = 0x950;
 const CELL: u32 = 0x200;
 const REF: u32 = 0x320;
 const OTHER_REF: u32 = 0x321;
+const ROBOT_REF: u32 = 0x322;
 
 /// The companion script's variables, as the shipped companions name them.
 const WAITING: u16 = 1;
@@ -104,6 +107,10 @@ fn plugin_bytes() -> Vec<u8> {
     let player = record(b"NPC_", 0, 0x7, &[sub(b"EDID", z("Player")), sub(b"DATA", [100i32.to_le_bytes().to_vec(), vec![5; 7]].concat())]);
     let enit = [u32s(&[1]), vec![4, 0, 0, 0], u32s(&[0]), f32b(0.0), u32s(&[0])].concat();
     let stim = record(b"ALCH", 0, STIMPAK, &[sub(b"EDID", z("Stimpak")), sub(b"ETYP", 11i32.to_le_bytes().to_vec()), sub(b"DATA", f32b(0.0)), sub(b"ENIT", enit)]);
+    let scrap = record(b"MISC", 0, SCRAP_METAL, &[sub(b"EDID", z("SpareParts")), sub(b"DATA", [1i32.to_le_bytes().to_vec(), f32b(1.0)].concat())]);
+    // Robot creature (creature_type = 6, Robot) with 100 base health (DATA bytes 4..8 = health: u32 in FNV CREA).
+    let crea_data = [vec![6u8, 0, 0, 0], 100u32.to_le_bytes().to_vec(), vec![0; 9]].concat();
+    let robot = record(b"CREA", 0, ROBOT_CREA, &[sub(b"EDID", z("EDE")), sub(b"DATA", crea_data)]);
     // A Follow package on the player (PTDT: a specific reference, the player).
     let pack = record(
         b"PACK",
@@ -137,14 +144,17 @@ fn plugin_bytes() -> Vec<u8> {
     }
     dial.extend(topic(STEALTHING, "FollowersStealthing", &line(0xB20, "Going quiet", vec![], vec![])));
     let placed = |id: u32, edid: &str| record(b"ACHR", 0, id, &[sub(b"EDID", z(edid)), sub(b"NAME", u32b(NPC)), sub(b"DATA", vec![0; 24])]);
+    let placed_robot = record(b"ACRE", 0, ROBOT_REF, &[sub(b"EDID", z("EDERef")), sub(b"NAME", u32b(ROBOT_CREA)), sub(b"DATA", vec![0; 24])]);
     let cell = record(b"CELL", 0, CELL, &[sub(b"EDID", z("WheelCell"))]);
-    let children = group(CELL.to_le_bytes(), 6, &group(CELL.to_le_bytes(), 9, &[placed(REF, "CompanionREF"), placed(OTHER_REF, "StrangerREF")].concat()));
+    let children = group(CELL.to_le_bytes(), 6, &group(CELL.to_le_bytes(), 9, &[placed(REF, "CompanionREF"), placed(OTHER_REF, "StrangerREF"), placed_robot].concat()));
     [
         tes4(),
         top(b"GMST", &gmst),
         top(b"SCPT", &scpt),
         top(b"NPC_", &[player, npc].concat()),
+        top(b"CREA", &robot),
         top(b"ALCH", &stim),
+        top(b"MISC", &scrap),
         top(b"PACK", &pack),
         top(b"QUST", &quest),
         top(b"DIAL", &dial),
@@ -275,7 +285,7 @@ fn talk_closes_the_wheel_and_inventory_asks_for_the_teammates_container() {
     let f = fixture();
     let mut g = hired(&f);
     let b = button(&mut g, Command::OpenInventory);
-    assert!(b.context.as_deref().is_some_and(|c| c == "WG 0/200"), "{b:?}");
+    assert!(b.context.as_deref().is_some_and(|c| c == "Weight 0/200"), "{b:?}");
     assert!(matches!(g.wheel_command(Command::OpenInventory).unwrap(), Outcome::Said { .. }));
     assert_eq!(g.teammate_containers, vec![companion()]);
     let out = g.wheel_command(Command::Talk).unwrap();
@@ -308,16 +318,56 @@ fn a_stimpak_is_used_on_a_hurt_companion() {
     let stim = FormId(STIMPAK);
     // Not hurt, no stimpak: the button cannot be used.
     assert!(!button(&mut g, Command::UseStimpak).enabled);
+    assert_eq!(g.wheel_unavailable_reason(Command::UseStimpak).as_deref(), Some("You have no stimpaks."));
     assert_eq!(g.wheel_command(Command::UseStimpak).unwrap(), Outcome::Refused);
     g.world.add_item(FormId::PLAYER_REF, stim, 2).unwrap();
     assert!(!button(&mut g, Command::UseStimpak).enabled, "at full health");
+    assert_eq!(g.wheel_unavailable_reason(Command::UseStimpak).as_deref(), Some("The companion is already at full health."));
     add_actor_value_damage(&mut g, companion(), HEALTH, 40.0);
     let b = button(&mut g, Command::UseStimpak);
     assert!(b.enabled, "{b:?}");
+    assert!(g.wheel_unavailable_reason(Command::UseStimpak).is_none());
     assert!(b.context.as_deref().is_some_and(|c| c.ends_with("Stimpak 2")), "{b:?}");
     let out = g.wheel_command(Command::UseStimpak).unwrap();
     assert!(matches!(out, Outcome::Stimpak { item, line: Some(l) } if item == stim && l == FormId(0xB0A)), "{out:?}");
     assert_eq!(g.world.item_count(FormId::PLAYER_REF, stim).unwrap(), 1);
+}
+
+#[test]
+fn robot_companion_scrap_heal_unavailable_reason_tracks_scrap_metal_not_stimpaks() {
+    let f = fixture();
+    let mut g = game(&f);
+    let stim = FormId(STIMPAK);
+    let scrap = FormId(SCRAP_METAL);
+    let ede = FormId(ROBOT_REF);
+    g.extra.entry(ede).or_default().teammate = true;
+    g.tweaks.robots_heal_with_scrap = true;
+    assert!(g.open_companion_wheel(ede));
+
+    // Case 1: Full health with Scrap Metal -> disabled with full-health reason.
+    g.world.add_item(FormId::PLAYER_REF, scrap, 2).unwrap();
+    let buttons = g.wheel_buttons(ede);
+    let stim_btn = buttons.iter().find(|b| b.command == Command::UseStimpak).unwrap();
+    assert!(!stim_btn.enabled, "full-health robot must have disabled heal button");
+    assert_eq!(g.wheel_unavailable_reason_for(ede, stim_btn).as_deref(), Some("The companion is already at full health."));
+    assert_eq!(g.wheel_unavailable_reason(Command::UseStimpak).as_deref(), Some("The companion is already at full health."));
+
+    // Case 2: Injured ED-E with Scrap Metal & NO Stimpaks -> enabled, NO unavailable reason.
+    add_actor_value_damage(&mut g, ede, HEALTH, 40.0);
+    let buttons = g.wheel_buttons(ede);
+    let stim_btn = buttons.iter().find(|b| b.command == Command::UseStimpak).unwrap();
+    assert!(stim_btn.enabled, "injured robot with scrap must have enabled heal button");
+    assert_eq!(g.wheel_unavailable_reason_for(ede, stim_btn), None);
+    assert_eq!(g.wheel_unavailable_reason(Command::UseStimpak), None);
+
+    // Case 3: Remove Scrap Metal and add Stimpaks -> disabled, reason names Scrap Metal (not Stimpaks).
+    g.world.remove_item(FormId::PLAYER_REF, scrap, 2).unwrap();
+    g.world.add_item(FormId::PLAYER_REF, stim, 3).unwrap();
+    let buttons = g.wheel_buttons(ede);
+    let stim_btn = buttons.iter().find(|b| b.command == Command::UseStimpak).unwrap();
+    assert!(!stim_btn.enabled, "robot without scrap must have disabled heal button even with stimpaks");
+    assert_eq!(g.wheel_unavailable_reason_for(ede, stim_btn).as_deref(), Some("You have no scrap metal."));
+    assert_eq!(g.wheel_unavailable_reason(Command::UseStimpak).as_deref(), Some("You have no scrap metal."));
 }
 
 #[test]

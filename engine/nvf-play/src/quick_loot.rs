@@ -201,7 +201,7 @@ pub struct Spec {
     pub more_up: bool,
     pub more_down: bool,
     pub columns: Columns,
-    /// The keys' lines ("E) Take").
+    /// The keys' lines ("[E] Take").
     pub prompts: Vec<String>,
     pub crime: bool,
 }
@@ -239,8 +239,11 @@ fn search_word() -> &'static str {
 }
 /// The names' head, on the columns' heads' line [design, #2933: sixth look].
 const ITEM: &str = "ITEM";
-const WG: &str = "WG";
-const VAL: &str = "VAL";
+/// The weight and value columns' heads: NVForever's own words (WT, an English abbreviation the
+/// original does not show, to keep the box inside the HUD with every column) [design, #4495:
+/// in place of the abbreviations read from the original's screen].
+const WG: &str = "WT";
+const VAL: &str = "VALUE";
 const PER_WG: &str = "V/W";
 const CHANCE: &str = "CHANCE";
 
@@ -351,7 +354,7 @@ pub enum Which {
 pub enum Ink {
     /// The HUD colour, full.
     Hud,
-    /// The columns' heads (ITEM, WG …): the HUD colour at 50% [design, #2933: sixth
+    /// The columns' heads (ITEM, WT …): the HUD colour at 50% [design, #2933: sixth
     /// look, "not that visible"].
     Head,
     /// The HUD colour, dim.
@@ -1159,11 +1162,11 @@ mod tests {
     }
 
     fn spec(columns: Columns, rows: Vec<RowSpec>) -> Spec {
-        let mut prompts = vec!["E) Take".to_string()];
+        let mut prompts = vec!["[E] Take".to_string()];
         if !columns.chance {
-            prompts.push("R) Take All".into());
+            prompts.push("[R] Take All".into());
         }
-        prompts.push("T) Search".into());
+        prompts.push("[T] Search".into());
         Spec { title: "Footlocker".into(), position: "3/8".into(), more_up: true, more_down: true, rows, columns, prompts, crime: false }
     }
 
@@ -1269,12 +1272,12 @@ mod tests {
         for (font, fonts) in both_fonts() {
             let short = Spec { title: "Box".into(), rows: vec![row("Gum", 1, true)], ..spec(Columns::default(), Vec::new()) };
             for (what, l) in [("short", layout(&short, &fonts, room())), ("wide", layout(&spec(ALL, rows()), &fonts, room()))] {
-                let (first, last) = (find(&l, "E) Take"), find(&l, "T) Search"));
+                let (first, last) = (find(&l, "[E] Take"), find(&l, "[T] Search"));
                 let (before, after) = (first.x, l.size.x - (last.x + last.width));
                 assert!((before - after).abs() < 0.01, "{font}, {what}: {before} before the keys, {after} after");
             }
             let l = layout(&short, &fonts, room());
-            let (title, key) = (find(&l, "Box"), find(&l, "E) Take"));
+            let (title, key) = (find(&l, "Box"), find(&l, "[E] Take"));
             assert!((key.x - title.x).abs() < 0.01, "{font}: the narrowest box has the words' room before E: {} and {}", key.x, title.x);
         }
     }
@@ -1346,7 +1349,7 @@ mod tests {
         for (font, fonts) in both_fonts() {
             let room_at = |s: f32| widest(480.0 * 5.0 / 4.0 / s, crate::hud::RIGHT_EDGE_IN / s);
             let mut wide = spec(ALL, rows());
-            wide.prompts = vec!["E) Tout prendre ici".into(), "R) Tout voler partout".into(), "T) Fouiller le conteneur".into()];
+            wide.prompts = vec!["[E] Tout prendre ici".into(), "[R] Tout voler partout".into(), "[T] Fouiller le conteneur".into()];
             let l = layout(&wide, &fonts, room_at(1.0));
             assert!(l.size.x > room_at(1.0) + 0.01, "{font}: the case is too wide at 100% ({} in {})", l.size.x, room_at(1.0));
             let s = fitted_scale(room_at(1.0), l.size.x, 1.0);

@@ -98,12 +98,13 @@ fn prewarm(
     }
     if screen && !state.released {
         for e in &unmarked {
-            commands.entity(e).insert((NoFrustumCulling, Prewarmed));
+            // A solid core (solid_cores.rs) may go before this is applied.
+            commands.entity(e).try_insert((NoFrustumCulling, Prewarmed));
             state.marked += 1;
         }
     } else if state.marked > 0 {
         for e in &marked {
-            commands.entity(e).remove::<(NoFrustumCulling, Prewarmed)>();
+            commands.entity(e).try_remove::<(NoFrustumCulling, Prewarmed)>();
         }
         info!(
             "pipeline prewarm: {} meshes drawn unculled under the screen; {} pipelines asked by then",

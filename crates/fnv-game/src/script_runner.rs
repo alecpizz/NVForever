@@ -25,6 +25,11 @@ use std::collections::HashMap;
 /// to ..\Data\NVSE\plugins\scripts\"].
 pub const FOLDER: &str = "nvse\\plugins\\scripts";
 
+/// A file that takes this long to compile and run is named in the log [engineering choice:
+/// 219 files of Nuclear Sunset held the loading screen ~80 s on 2026-11-25 (log
+/// nvforever-20261125-142835-8120.log), most well under this].
+const SLOW_FILE_MS: u128 = 250;
+
 /// When the files run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Moment {
@@ -124,9 +129,17 @@ pub struct SrState<'a> {
     /// Whether `Moment::Exit` (`gx_`) files have already run for this game instance [design:
     /// repeated exit signals must not execute exit scripts twice].
     exit_ran: bool,
+    /// While files run: each extender function's calls and time in µs (`Game::ext_call`),
+    /// named in the log after the moment's files so a slow call can be found.
+    pub(crate) call_times: HashMap<String, (u32, u128)>,
 }
 
 impl SrState<'_> {
+    /// Whether files are running now (`Game::ext_call` keeps time only then).
+    pub(crate) fn is_running(&self) -> bool {
+        self.running.is_some()
+    }
+
     pub(crate) fn take_registered(&mut self) -> Vec<String> {
         std::mem::take(&mut self.registered).into_iter().map(|f| f.path).collect()
     }
@@ -171,19 +184,33 @@ impl<'a> Game<'a> {
             if !file.prefix.runs_at(m) {
                 continue;
             }
-            let result = self.sr_unit(&file.path).and_then(|unit| {
+            let started = std::time::Instant::now();
+            let unit = self.sr_unit(&file.path);
+            let compiled = started.elapsed();
+            let result = unit.and_then(|unit| {
                 if self.run_statements(unit, RunCtx::default()) {
                     Ok(())
                 } else {
                     Err("the script stopped on an error".into())
                 }
             });
+            // A slow file holds the loading screen (Nuclear Sunset has 219 of them): name it.
+            let took = started.elapsed();
+            if took.as_millis() >= SLOW_FILE_MS {
+                tracing::info!("script runner: {} took {} ms ({} ms to read and compile)", file.path, took.as_millis(), compiled.as_millis());
+            }
             if let Err(e) = &result {
                 self.emit(crate::trace::EventKind::Skipped { unit: format!("Script Runner {}", file.path), what: e.clone() });
             }
             runs.push(SrRun { path: file.path, result });
         }
         self.sr.running = None;
+        let mut calls: Vec<_> = std::mem::take(&mut self.sr.call_times).into_iter().collect();
+        calls.sort_by_key(|c| std::cmp::Reverse(c.1 .1));
+        let top: Vec<String> = calls.iter().take(8).filter(|(_, (_, us))| *us >= 50_000).map(|(n, (c, us))| format!("{n} {c}x {} ms", us / 1000)).collect();
+        if !top.is_empty() {
+            tracing::info!("script runner: {} files' slowest functions: {}", m.name(), top.join(", "));
+        }
         runs
     }
 

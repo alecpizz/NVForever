@@ -316,46 +316,54 @@ fn reload_weapon_event_fires_once_per_reload_for_player_and_npcs() {
     assert_eq!(aux_size(&mut g, "*rl_a"), 1.0);
     assert_eq!(global(&g, RELOAD_HITS), 1.0);
 
-    // Jam (ForceScriptAnim) does not fire reloadweapon.
+    // Non-jam ForceScriptAnim does not fire reloadweapon.
     g.set_anim_state(FormId::PLAYER_REF, anim(None));
     g.set_anim_state(FormId::PLAYER_REF, anim(Some(AnimAction::ForceScriptAnim)));
     assert_eq!(aux_size(&mut g, "*rl_a"), 1.0);
     assert_eq!(global(&g, RELOAD_HITS), 1.0);
+
+    // Entering AnimAction::Jam DOES fire reloadweapon once while GetSequenceAnimGroup 4 reads 200 (JamA)
+    // [observed 2026-11-24: w6t2_14_jip_on_reload_and_seq_anim_group].
+    g.set_anim_state(FormId::PLAYER_REF, anim(Some(AnimAction::Jam)));
+    g.set_anim_state(FormId::PLAYER_REF, anim(Some(AnimAction::Jam)));
+    assert_eq!(aux_size(&mut g, "*rl_a"), 2.0);
+    assert_eq!(aux_flt(&mut g, "*rl_act", 1), 9.0);
+    assert_eq!(global(&g, RELOAD_HITS), 2.0);
 
     // Round-by-round reload (ReloadOpen -> Reload -> None) fires once on ReloadOpen (17).
     g.set_anim_state(FormId::PLAYER_REF, anim(None));
     g.set_anim_state(FormId::PLAYER_REF, anim(Some(AnimAction::ReloadOpen)));
     g.set_anim_state(FormId::PLAYER_REF, anim(Some(AnimAction::Reload)));
     g.set_anim_state(FormId::PLAYER_REF, anim(None));
-    assert_eq!(aux_size(&mut g, "*rl_a"), 2.0);
-    assert_eq!(aux_flt(&mut g, "*rl_act", 1), 17.0);
-    assert_eq!(global(&g, RELOAD_HITS), 2.0);
+    assert_eq!(aux_size(&mut g, "*rl_a"), 3.0);
+    assert_eq!(aux_flt(&mut g, "*rl_act", 2), 17.0);
+    assert_eq!(global(&g, RELOAD_HITS), 3.0);
 
     // NPC with equipped weapon and NPC with held_weapon fallback both fire reloadweapon.
     g.set_anim_state(GUARD_REF, anim(Some(AnimAction::Reload)));
-    assert_eq!(aux_size(&mut g, "*rl_a"), 3.0);
-    assert_eq!(aux_ref(&mut g, "*rl_a", 2), GUARD_REF);
-    assert_eq!(aux_ref(&mut g, "*rl_w", 2), FormId(SHOTGUN));
-    assert_eq!(global(&g, RELOAD_HITS), 3.0);
+    assert_eq!(aux_size(&mut g, "*rl_a"), 4.0);
+    assert_eq!(aux_ref(&mut g, "*rl_a", 3), GUARD_REF);
+    assert_eq!(aux_ref(&mut g, "*rl_w", 3), FormId(SHOTGUN));
+    assert_eq!(global(&g, RELOAD_HITS), 4.0);
 
     g.set_anim_state(RAIDER_REF, anim(Some(AnimAction::Reload)));
-    assert_eq!(aux_size(&mut g, "*rl_a"), 4.0);
-    assert_eq!(aux_ref(&mut g, "*rl_a", 3), RAIDER_REF);
-    assert_eq!(aux_ref(&mut g, "*rl_w", 3), FormId(PISTOL));
-    assert_eq!(global(&g, RELOAD_HITS), 4.0);
+    assert_eq!(aux_size(&mut g, "*rl_a"), 5.0);
+    assert_eq!(aux_ref(&mut g, "*rl_a", 4), RAIDER_REF);
+    assert_eq!(aux_ref(&mut g, "*rl_w", 4), FormId(PISTOL));
+    assert_eq!(global(&g, RELOAD_HITS), 5.0);
 
     // Actor with no equipped or held weapon entering Reload does not fire with form 0.
     g.set_anim_state(RAIDER_REF, anim(None));
     g.set_held_weapon(RAIDER_REF, None);
     g.set_anim_state(RAIDER_REF, anim(Some(AnimAction::Reload)));
-    assert_eq!(aux_size(&mut g, "*rl_a"), 4.0);
-    assert_eq!(global(&g, RELOAD_HITS), 4.0);
+    assert_eq!(aux_size(&mut g, "*rl_a"), 5.0);
+    assert_eq!(global(&g, RELOAD_HITS), 5.0);
 
     // Removing the named handler stops ReloadUdf while the inline handler still fires.
     q(&mut g, "SetOnReloadWeaponEventHandler ReloadUdf 0");
     g.set_anim_state(FormId::PLAYER_REF, anim(Some(AnimAction::Reload)));
-    assert_eq!(aux_size(&mut g, "*rl_a"), 5.0);
-    assert_eq!(global(&g, RELOAD_HITS), 4.0, "removed ReloadUdf no longer runs");
+    assert_eq!(aux_size(&mut g, "*rl_a"), 6.0);
+    assert_eq!(global(&g, RELOAD_HITS), 5.0, "removed ReloadUdf no longer runs");
 }
 
 #[test]
@@ -698,4 +706,37 @@ fn get_reticle_target_limb_tracks_actor_limb_max_range_and_clear() {
     assert_eq!(q(&mut g, "SetFunctionValue (GetReticleTargetLimb)"), XVal::Num(-1.0));
     g.senses.reticle = None;
     assert_eq!(q(&mut g, "SetFunctionValue (GetReticleTargetLimb)"), XVal::Num(-1.0));
+}
+
+#[test]
+fn jip_xmarker_wildcard_applies_only_to_critical_hit() {
+    let f = fixture();
+    let mut g = game(&f);
+    q(
+        &mut g,
+        r#"SetOnHealthDamageEventHandler (Begin Function {float dmg, ref src}
+             PlayerREF.AuxVarSetFlt "*xm_hd" ((PlayerREF.AuxVarGetFlt "*xm_hd") + 1)
+           End) 1 XMarker
+           SetOnHealthDamageEventHandler (Begin Function {float dmg, ref src}
+             PlayerREF.AuxVarSetFlt "*ex_hd" ((PlayerREF.AuxVarGetFlt "*ex_hd") + 1)
+           End) 1 PlayerREF
+           SetOnAnimActionEventHandler (Begin Function {int act}
+             PlayerREF.AuxVarSetFlt "*xm_aa" ((PlayerREF.AuxVarGetFlt "*xm_aa") + 1)
+           End) 1 XMarker 0
+           SetOnCrippledLimbEventHandler (Begin Function {int limb}
+             PlayerREF.AuxVarSetFlt "*xm_cl" ((PlayerREF.AuxVarGetFlt "*xm_cl") + 1)
+           End) 1 XMarker
+           SetOnUseAidItemEventHandler (Begin Function {ref it}
+             PlayerREF.AuxVarSetFlt "*xm_ai" ((PlayerREF.AuxVarGetFlt "*xm_ai") + 1)
+           End) 1 XMarker"#,
+    );
+    g.jip_event("healthdamage", Some(FormId::PLAYER_REF), vec![XVal::Num(-5.0), XVal::Ref(0)]);
+    g.jip_event("animaction", Some(FormId::PLAYER_REF), vec![XVal::Num(0.0)]);
+    g.jip_event("crippledlimb", Some(FormId::PLAYER_REF), vec![XVal::Num(2.0)]);
+    g.jip_event("useaiditem", Some(FormId::PLAYER_REF), vec![XVal::Ref(PISTOL)]);
+    assert_eq!(aux_flt(&mut g, "*ex_hd", 0), 1.0, "exact PlayerREF filter fires");
+    assert_eq!(aux_size(&mut g, "*xm_hd"), 0.0, "XMarker must not wildcard healthdamage");
+    assert_eq!(aux_size(&mut g, "*xm_aa"), 0.0, "XMarker must not wildcard animaction");
+    assert_eq!(aux_size(&mut g, "*xm_cl"), 0.0, "XMarker must not wildcard crippledlimb");
+    assert_eq!(aux_size(&mut g, "*xm_ai"), 0.0, "XMarker must not wildcard useaiditem");
 }

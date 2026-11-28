@@ -52,6 +52,11 @@ pub struct UiRequests {
     /// ResetPipboyManager calls: the Pip-Boy takes each new count once
     /// (`nvf_play::pipboy`).
     pub pipboy_resets: u64,
+    /// Engine-synced Pip-Boy transition override for `GetPipBoyMode` (`Some(2)` opening,
+    /// `Some(4)` closing, `Some(0)` while covered during startup warming; `None` in resting
+    /// `Down`/`Up` phases and headless runs, where `GetPipBoyMode` evaluates live
+    /// `Game::menu_open(menus::PIPBOY)` -> `3` / `0`) [design].
+    pub pipboy_mode: Option<u8>,
     /// ExitGame calls the engine has not taken yet (`nvf_play::script`).
     pub exit_game: u32,
     /// EnableLoadingMenu 1 this frame ([`enable_loading_menu`]): the engine takes it

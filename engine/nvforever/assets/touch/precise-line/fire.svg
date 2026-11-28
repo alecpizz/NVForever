@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Original NVForever geometry; Precise line family. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="currentColor" color="#ffffff" fill-rule="evenodd" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+  <title>Fire</title>
+  <path d="M 12 27 L 12 15 C 12 11 16 6 16 6 C 16 6 20 11 20 15 L 20 27 Z M 12 23 L 20 23 M 5 13 L 8 16 M 24 16 L 27 13 M 16 3 L 16 4"/>
+</svg>

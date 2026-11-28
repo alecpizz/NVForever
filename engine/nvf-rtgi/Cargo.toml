@@ -1,0 +1,7 @@
+[package]
+name = "nvf-rtgi"
+description = "A cell's bounce light from its lamps, solved on the CPU into a small texture"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false

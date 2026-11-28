@@ -322,3 +322,144 @@ fn a_small_move_of_the_clock_is_no_jump() {
     s.game.set_global_by_script(FormId(G_HOUR), 6.5).unwrap();
     assert_eq!(s.game.take_hour_jump(), None);
 }
+
+/// Issue #3041: Goodsprings night stalkers (`VERStalkersSouth01`). A Low-process actor
+/// running a 23:00 `Must Reach Location` patrol package conditioned on a quest/global flag
+/// is still en route when a script jumps `GameHour` to 8 (`VCG01` stage 200). Later, the
+/// quest's day branch calls `MoveTo` to put the actor in a closed holding interior cell
+/// (no doors to the patrol route) and 1.8 s later clears the flag without calling
+/// `EvaluatePackage`. Even across `FAR_PROCESS_SECONDS` (120 s) of subsequent Low-process
+/// updates — and even if the actor's low-process timer was nearly due when `MoveTo` ran —
+/// it drops the raid package cleanly and logs zero `Unreachable` path failures.
+#[test]
+fn relocated_low_process_night_raider_drops_expired_must_reach_patrol_at_0800() {
+    use fnv_ai::{AiEvent, ProcessLevel};
+    use fnv_game::package::flags;
+
+    const G_ON: u32 = 0x907;
+    const P_RAID: u32 = 0x924;
+    const N_STALKER: u32 = 0x932;
+    const HOLDING: u32 = 0x942;
+    const MARK_HOLD: u32 = 0x956;
+    const MARK_PATROL_A: u32 = 0x957;
+    const MARK_PATROL_B: u32 = 0x958;
+    const R_STALKER: u32 = 0x962;
+    const PATROL: u8 = 13;
+    const GET_GLOBAL_VALUE: u16 = 0x4A;
+
+    let mut cond = vec![0u8, 0, 0, 0];
+    cond.extend(1.0f32.to_le_bytes());
+    cond.extend(GET_GLOBAL_VALUE.to_le_bytes());
+    cond.extend([0, 0]);
+    cond.extend(G_ON.to_le_bytes());
+    cond.extend([0u8; 12]);
+    let raid_pack = record(
+        b"PACK",
+        P_RAID,
+        &[
+            sub(b"EDID", z("NightRaidMWF3")),
+            sub(b"PKDT", [&flags::MUST_REACH_LOCATION.to_le_bytes()[..], &[PATROL, 0, 0, 0], &[0; 4]].concat()),
+            sub(b"PLDT", [0i32.to_le_bytes(), MARK_PATROL_A.to_le_bytes(), 0i32.to_le_bytes()].concat()),
+            sub(b"PSDT", [&[0xFF, 0xFF, 0, 23][..], &1u32.to_le_bytes()].concat()),
+            sub(b"CTDA", cond),
+        ],
+    );
+    let linked_placed = |fid: u32, edid: &str, pos: [f32; 3], linked: Option<u32>| {
+        let mut subs = vec![sub(b"EDID", z(edid)), sub(b"NAME", STAT.to_le_bytes().to_vec())];
+        if let Some(l) = linked {
+            subs.push(sub(b"XLKR", l.to_le_bytes().to_vec()));
+        }
+        subs.push(sub(b"DATA", [pos[0].to_le_bytes(), pos[1].to_le_bytes(), pos[2].to_le_bytes(), [0; 4], [0; 4], [0; 4]].concat()));
+        record(b"REFR", fid, &subs)
+    };
+    let globs = [
+        glob(0x901, "GameYear", 2281.0),
+        glob(0x902, "GameMonth", 9.0),
+        glob(0x903, "GameDay", 19.0),
+        glob(G_HOUR, "GameHour", 23.0),
+        glob(0x905, "GameDaysPassed", 5.0),
+        glob(0x906, "TimeScale", 30.0),
+        glob(G_ON, "StalkersOn", 1.0),
+    ]
+    .concat();
+    let stat = record(b"STAT", STAT, &[sub(b"EDID", z("Marker"))]);
+    let npcs = [npc(0x7, "Player", &[]), npc(N_STALKER, "NightStalker", &[P_RAID])].concat();
+    let street_refs = [
+        linked_placed(MARK_PATROL_A, "PatrolA", [5250.0, 5250.0, 50.0], Some(MARK_PATROL_B)),
+        linked_placed(MARK_PATROL_B, "PatrolB", [5050.0, 5250.0, 50.0], None),
+        placed(b"ACHR", R_STALKER, "StalkerRef", N_STALKER, [5050.0, 5050.0, 50.0]),
+    ]
+    .concat();
+    let hold_refs = [placed(b"REFR", MARK_HOLD, "RestMarker", STAT, [150.0, 150.0, 0.0])].concat();
+    let cell = |id: u32, edid: &str, refs: &[u8]| {
+        let rec = record(b"CELL", id, &[sub(b"EDID", z(edid))]);
+        [rec, group(id.to_le_bytes(), 6, &group(id.to_le_bytes(), 9, refs))].concat()
+    };
+    let cells = [cell(STREET, "Exterior", &street_refs), cell(HOLDING, "RestCell", &hold_refs)].concat();
+    let top = |sig: &[u8; 4], body: &[u8]| group(*sig, 0, body);
+    let bytes = [
+        tes4(),
+        top(b"GLOB", &globs),
+        top(b"STAT", &stat),
+        top(b"NPC_", &npcs),
+        top(b"PACK", &raid_pack),
+        top(b"CELL", &group(0i32.to_le_bytes(), 2, &group(0i32.to_le_bytes(), 3, &cells))),
+    ]
+    .concat();
+    let plugins = vec![Plugin::parse(&bytes, "StalkerRaid.esm".into()).unwrap()];
+    let lo = LoadOrder::new(&plugins).unwrap();
+    let schema = Schema::load_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../../schemas/fnv")).unwrap();
+    let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schemas/script/functions.json");
+    let j: Json = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+    let forms = FormStore::build(&lo, &schema);
+    let refs = RefTable::build(&lo, &schema);
+    let data = GameData::build(&lo, &schema, FunctionTable::load(&p).unwrap(), &j, &refs);
+
+    // Two disconnected navmeshes: the exterior street and the closed holding cell (no doors).
+    let street_nm = grid(1, [5000.0, 5000.0], 3, 50.0);
+    let hold_nm = grid(2, [0.0, 0.0], 2, 0.0);
+    let nav = NavGraph::assemble(&[(&street_nm, Some(STREET), Some(IN_STREET)), (&hold_nm, Some(HOLDING), Some(Space::Interior(HOLDING)))]);
+
+    let world = World::new(&forms, &refs, SimConfig::default());
+    let mut game = Game::new(&data, world, GameConfig { strict: true, frame_seconds: 0.5, package_interval: Some(10.0), ..GameConfig::default() });
+    let mut ai = Ai::new(AiConfig { walk_speed: 100.0, run_speed: 400.0, ..AiConfig::default() });
+    let stalker = FormId(R_STALKER);
+    ai.add(&game, stalker).unwrap();
+
+    // 23:00 with StalkersOn == 1: stalker chooses the Must Reach Location raid patrol while
+    // outside and moves to Low process (unloaded exterior).
+    assert_eq!(game.evaluate_package(stalker), Some(FormId(P_RAID)));
+    ai.set_level(&game, stalker, ProcessLevel::Low);
+
+    // VCG01 stage 200 jumps the clock from 23:00 to 08:00 while StalkersOn is still 1.
+    game.set_global_by_script(FormId(G_HOUR), 8.0).unwrap();
+    assert!(game.take_hour_jump().is_some());
+    ai.hour_jumped(&mut game, &nav, &|_| false);
+
+    // Advance close to a Low-process update boundary, then VERStalkersSouth01's day branch
+    // moves the stalker to the closed holding cell (`MoveTo`), and 2 s later clears
+    // `StalkersOn = 0` without calling `EvaluatePackage`.
+    for _ in 0..10 {
+        game.tick();
+        ai.update(&mut game, &nav, 0.5);
+    }
+    fnv_game::functions::console::call_words(&mut game, Some(stalker), "moveto", &[format!("{MARK_HOLD:08X}")], "test").unwrap();
+    assert_eq!(ai.moved_by_scripts(&mut game), vec![(stalker, true)]);
+    // 2 s gap between MoveTo and setting StalkersOn = 0 (VERStalkersSouth01 loops 18 actors).
+    for _ in 0..4 {
+        game.tick();
+        ai.update(&mut game, &nav, 0.5);
+    }
+    game.set_global_by_script(FormId(G_ON), 0.0).unwrap();
+
+    // Run for > FAR_PROCESS_SECONDS (140 s) so both periodic package evaluation and Low-process
+    // updates run well past the initial smoke window.
+    for _ in 0..280 {
+        game.tick();
+        ai.update(&mut game, &nav, 0.5);
+    }
+
+    assert_eq!(game.extra[&stalker].current_package, None, "expired raid package must be dropped once relocated and StalkersOn == 0");
+    let unreachable: Vec<_> = ai.events.iter().filter(|e| matches!(e.event, AiEvent::Unreachable { .. })).collect();
+    assert!(unreachable.is_empty(), "stalker must not log Unreachable from its holding cell: {unreachable:?}");
+}

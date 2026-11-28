@@ -35,9 +35,9 @@
 //!   Health and DT values are displayed with their health bar" [documented: GECK wiki
 //!   Entry Point]: the actor's health, full health and DT (its armour's and its own,
 //!   `crate::combat::target_armor`) on a line of their own under its name,
-//!   "HP:250 DT:15.00" ([`TargetHealth::anatomy_line`]) [observed: the owner's screenshot
-//!   2026-10-24 of the original, a Deathclaw: "Deathclaw" under the bar, "HP:250
-//!   DT:15.00" under it, centred, in the same red and font].
+//!   "Health 250  DT 15.0" ([`TargetHealth::anatomy_line`], our own form, #2984), centred,
+//!   in the same red and font [observed: the place, colour and font on the owner's
+//!   screenshot 2026-10-24 of the original].
 
 use crate::combat::{ActorHit, Combat};
 use crate::phys::PhysState;
@@ -94,14 +94,15 @@ pub struct TargetHealth {
 }
 
 impl TargetHealth {
-    /// With Living Anatomy, the line under the name: "HP:<health> DT:<dt>", the health
-    /// whole and the DT to two places [observed: the original's "HP:250 DT:15.00", the
-    /// owner's screenshot 2026-10-24].
+    /// With Living Anatomy, the line under the name: "Health <health>  DT <dt>", the health
+    /// whole and the DT to one place [design: NVForever's own form, #2984; "Health" as the
+    /// perk's own description says it (LivingAnatomy 0x00146099 DESC), DT as the built-in
+    /// label of `sInventoryDamageThreshold`].
     pub fn anatomy_line(&self) -> Option<String> {
         // The player's tweak adds the DR, whole [design: docs/design/tweaks.md].
         self.anatomy.map(|(h, dt)| match self.anatomy_dr {
-            Some(dr) => format!("HP:{:.0} DT:{:.2} DR:{:.0}", h.max(0.0), dt, dr),
-            None => format!("HP:{:.0} DT:{:.2}", h.max(0.0), dt),
+            Some(dr) => format!("Health {:.0}  DT {:.1}  DR {:.0}", h.max(0.0), dt, dr),
+            None => format!("Health {:.0}  DT {:.1}", h.max(0.0), dt),
         })
     }
 }
@@ -406,11 +407,11 @@ mod tests {
     #[test]
     fn living_anatomy_reads_as_the_original() {
         let t = |anatomy| TargetHealth { form_id: 1, name: "Deathclaw".into(), health: 1.0, hostile: true, anatomy, anatomy_dr: None, after: None };
-        assert_eq!(t(Some((250.0, 15.0))).anatomy_line().as_deref(), Some("HP:250 DT:15.00"));
-        assert_eq!(t(Some((-3.0, 0.5))).anatomy_line().as_deref(), Some("HP:0 DT:0.50"));
+        assert_eq!(t(Some((250.0, 15.0))).anatomy_line().as_deref(), Some("Health 250  DT 15.0"));
+        assert_eq!(t(Some((-3.0, 0.5))).anatomy_line().as_deref(), Some("Health 0  DT 0.5"));
         assert_eq!(t(None).anatomy_line(), None);
         let with_dr = TargetHealth { anatomy_dr: Some(20.4), ..t(Some((250.0, 15.0))) };
-        assert_eq!(with_dr.anatomy_line().as_deref(), Some("HP:250 DT:15.00 DR:20"), "the DR tweak");
+        assert_eq!(with_dr.anatomy_line().as_deref(), Some("Health 250  DT 15.0  DR 20"), "the DR tweak");
     }
 
     /// A hurt actor out of combat: nothing picked, no prompt, not hit, not held.

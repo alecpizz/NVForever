@@ -20,8 +20,24 @@ pub struct AnimPathsPlugin;
 
 impl Plugin for AnimPathsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, apply.before(crate::locomotion::drive));
+        app.init_resource::<ActorAnimFiles>().add_systems(Update, apply.before(crate::locomotion::drive));
     }
+}
+
+/// The third-person files each drawn actor's kNVSE replacements give it now (folders and
+/// SetActorAnimationPath, `Game::anim_overrides`), by reference, for the players of clips
+/// other than locomotion: `attack_anims` takes an NPC's attack, reload and aim-form clips
+/// from them ([`replaced`]). Empty for an actor with none.
+#[derive(Resource, Default, Debug, PartialEq)]
+pub struct ActorAnimFiles(pub HashMap<u32, Vec<String>>);
+
+/// The replacement among `files` for the clip at `path` (`meshes\…`): the last file of
+/// the same file name, any case, as a `meshes\` path [hypothesis, as `idles::clip_path_for`:
+/// a kNVSE replacement shares the replaced file's name, and of two the later wins].
+pub fn replaced(files: &[String], path: &str) -> Option<String> {
+    let name = |p: &str| p.rsplit(['\\', '/']).next().map(str::to_ascii_lowercase);
+    let want = name(path)?;
+    files.iter().rev().find(|f| name(f).as_deref() == Some(want.as_str())).map(|f| fnv_actor::idle::meshes_path(f))
 }
 
 /// Original shared posture sets saved before applying per-actor kNVSE overrides.
@@ -40,10 +56,22 @@ type Applied = HashMap<u32, (Vec<String>, SharedSets)>;
 /// Each frame: the files that apply to each drawn actor now. SetActorAnimationPath's
 /// conditional paths count while their condition holds (`Game::anim_overrides_now`, run
 /// only for actors that have one), with the world put back.
-fn apply(mut script: Option<ResMut<ScriptState>>, sim: Option<ResMut<nvf_play::sim::SimState>>, parts: Option<ResMut<ActorParts>>, mut models: ModelCtx, mut actors: Query<(&ActorRig, &mut Locomotion)>, mut applied: Local<Applied>) {
+#[allow(clippy::too_many_arguments)]
+fn apply(
+    mut script: Option<ResMut<ScriptState>>,
+    sim: Option<ResMut<nvf_play::sim::SimState>>,
+    parts: Option<ResMut<ActorParts>>,
+    mut models: ModelCtx,
+    mut actors: Query<(&ActorRig, &mut Locomotion)>,
+    mut applied: Local<Applied>,
+    mut files: Option<ResMut<ActorAnimFiles>>,
+) {
     let Some(rt) = script.as_deref_mut().and_then(|s| s.rt.as_mut()) else { return };
     let forced = rt.game.take_npc_anim_refreshes();
     if rt.game.anim_paths.actor.is_empty() && rt.game.anim_paths.weapon.is_empty() && rt.game.anim_folders.active.is_empty() && applied.is_empty() && forced.is_empty() {
+        if let Some(f) = files.as_mut().filter(|f| !f.0.is_empty()) {
+            f.0.clear();
+        }
         return;
     }
     let Some(mut parts) = parts else { return };
@@ -63,6 +91,13 @@ fn apply(mut script: Option<ResMut<ScriptState>>, sim: Option<ResMut<nvf_play::s
         // The world put back: the conditions and the weapon in hand read it.
         Some(mut sim) => nvf_play::script::with_world(rt, &mut sim, run),
         None => run(rt),
+    }
+    // The files for the other clip players, written only when they change.
+    if let Some(f) = files.as_mut() {
+        let now: HashMap<u32, Vec<String>> = wanted.iter().filter(|(_, p)| !p.is_empty()).map(|(a, p)| (*a, p.clone())).collect();
+        if f.0 != now {
+            f.0 = now;
+        }
     }
     let mut ctx = ActorCtx { cache: &mut parts, models: &mut models };
     for (rig, mut lo) in &mut actors {
@@ -117,6 +152,48 @@ mod tests {
     use fnv_game::game::RunCtx;
     use fnv_script::vm::XVal;
     use nvf_assets::actor::PreparedSkeleton;
+
+    #[test]
+    fn a_replacement_is_the_last_file_of_the_clips_name_in_any_case() {
+        let files = vec![
+            "AnimGroupOverride\\WWPSR\\_Male\\2haAttack3.kf".to_string(),
+            "AnimGroupOverride\\WWPSR\\_Male\\2haReloadF.kf".to_string(),
+            "meshes/AnimGroupOverride/Later/_male/2haattack3.KF".to_string(),
+        ];
+        assert_eq!(replaced(&files, "meshes\\characters\\_male\\2haattack3.kf").as_deref(), Some("meshes\\animgroupoverride\\later\\_male\\2haattack3.kf"));
+        assert_eq!(replaced(&files, "meshes\\characters\\_male\\2hareloadf.kf").as_deref(), Some("meshes\\animgroupoverride\\wwpsr\\_male\\2hareloadf.kf"));
+        assert_eq!(replaced(&files, "meshes\\characters\\_male\\2haattack3up.kf"), None, "no file of that name: the clip itself");
+        assert_eq!(replaced(&[], "meshes\\characters\\_male\\2haattack3.kf"), None);
+    }
+
+    #[test]
+    fn the_files_are_published_for_the_other_clip_players_and_cleared() {
+        let (mut app, _files) = crate::outfits::tests::asset_fixture();
+        let npc = FormId(0x2000);
+        app.world_mut().spawn((
+            ActorRig {
+                reference: npc.0,
+                base: crate::outfits::tests::OTHER.0,
+                body: crate::outfits::tests::OTHER.0,
+                skeleton: "skeleton.nif".into(),
+                skel: Arc::new(PreparedSkeleton::default()),
+                nodes: vec![],
+                base_scale: 1.0,
+            },
+            Locomotion::new(Arc::new(ClipSet::default()), 0.0),
+        ));
+        let mut script = ScriptState::over_plugins(&[]);
+        script.rt.as_mut().unwrap().game.anim_folders.active.insert((npc, false), vec!["AnimGroupOverride\\M\\_male\\2haattack3.kf".into()]);
+        app.insert_resource(script);
+        app.init_resource::<ActorAnimFiles>();
+        app.add_systems(Update, apply);
+        app.update();
+        assert_eq!(app.world().resource::<ActorAnimFiles>().0.get(&npc.0).map(Vec::len), Some(1));
+        app.world_mut().resource_mut::<ScriptState>().rt.as_mut().unwrap().game.anim_folders.active.clear();
+        app.update();
+        app.update();
+        assert!(app.world().resource::<ActorAnimFiles>().0.is_empty(), "no replacements left: nothing published");
+    }
 
     #[test]
     fn refresh_anim_data_forces_npc_locomotion_stand_rebuild_one_shot() {

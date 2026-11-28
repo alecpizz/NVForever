@@ -384,6 +384,8 @@ fn control_tell_scripts_dispatches_showoff_on_pov_change_without_frame_spam() {
         r#"SetEventHandler "ShowOff:OnPOVChange" (Begin Function {int iPOV}
 SetModLocalData "ctrl.pov_calls" ((GetModLocalData "ctrl.pov_calls") + 1)
 SetModLocalData "ctrl.pov_val" iPOV
+SetModLocalData "ctrl.pov_self_is_p" (GetSelfAlt == Player)
+SetModLocalData "ctrl.pov_in_cb" (IsPC1stPerson)
 End)"#,
     );
 
@@ -392,19 +394,26 @@ End)"#,
     app.update();
     assert_eq!(query(&mut app, "SetFunctionValue (GetModLocalData \"ctrl.pov_calls\")"), XVal::Num(0.0));
 
-    // Switch to third person -> fires once with 0.
+    // Switch to third person -> fires once with 0; inside callback GetSelfAlt == Player and IsPC1stPerson == 1.
     app.world_mut().resource_mut::<PlayerControl>().pov = Pov::Third;
     app.update();
     app.update();
     assert_eq!(query(&mut app, "SetFunctionValue (GetModLocalData \"ctrl.pov_calls\")"), XVal::Num(1.0));
     assert_eq!(query(&mut app, "SetFunctionValue (GetModLocalData \"ctrl.pov_val\")"), XVal::Num(0.0));
+    assert_eq!(query(&mut app, "SetFunctionValue (GetModLocalData \"ctrl.pov_self_is_p\")"), XVal::Num(1.0));
+    assert_eq!(query(&mut app, "SetFunctionValue (GetModLocalData \"ctrl.pov_in_cb\")"), XVal::Num(1.0));
+    assert_eq!(query(&mut app, "SetFunctionValue (IsPC1stPerson)"), XVal::Num(0.0));
 
-    // Scripted ToggleFirstPerson 1 -> switches back to first person and fires once with 1.
+    // Scripted ToggleFirstPerson 1 -> switches back to first person and fires once with 1;
+    // inside callback GetSelfAlt == Player and IsPC1stPerson == 1.
     query(&mut app, "ToggleFirstPerson 1");
     app.update();
     app.update();
     assert_eq!(app.world().resource::<PlayerControl>().pov, Pov::First);
     assert_eq!(query(&mut app, "SetFunctionValue (GetModLocalData \"ctrl.pov_calls\")"), XVal::Num(2.0));
     assert_eq!(query(&mut app, "SetFunctionValue (GetModLocalData \"ctrl.pov_val\")"), XVal::Num(1.0));
+    assert_eq!(query(&mut app, "SetFunctionValue (GetModLocalData \"ctrl.pov_self_is_p\")"), XVal::Num(1.0));
+    assert_eq!(query(&mut app, "SetFunctionValue (GetModLocalData \"ctrl.pov_in_cb\")"), XVal::Num(1.0));
+    assert_eq!(query(&mut app, "SetFunctionValue (IsPC1stPerson)"), XVal::Num(1.0));
     no_errors(&app);
 }

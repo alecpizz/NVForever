@@ -68,12 +68,45 @@ const REACH_GRID: f32 = 1.3;
 const REACH_OUTSIDE: f32 = 4.5;
 /// The chip model's height in chips [design].
 const CHIPS_PER_MODEL: f32 = 10.0;
-
 pub struct RouletteViewPlugin;
 
 impl Plugin for RouletteViewPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, show.after(nvf_play::PlaySet::Ui).before(nvf_play::PlaySet::Sync));
+        app.init_resource::<TableCamera>()
+            .add_systems(Update, show.after(nvf_play::PlaySet::Ui).before(nvf_play::PlaySet::Sync))
+            .add_systems(PostUpdate, world_camera.before(bevy::transform::TransformSystems::Propagate));
+    }
+}
+
+/// Where the game's own camera looks from while a casino table's menu shows the table
+/// where it stands in the world (Bevy space), and its view height (degrees); shared with
+/// blackjack (`blackjack_view.rs`).
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq)]
+pub struct TableCamera(pub Option<(Transform, f32)>);
+
+/// The game's camera at the table's while [`TableCamera`] says so (after the player's
+/// camera has been placed this frame, as the darts' throw line is); its field of view
+/// put back after.
+fn world_camera(want: Res<TableCamera>, mut cams: Query<(&mut Transform, &mut Projection), With<nvf_play::PlayerCamera>>, mut saved: Local<Option<f32>>) {
+    let Ok((mut t, mut proj)) = cams.single_mut() else { return };
+    let Projection::Perspective(p) = &mut *proj else { return };
+    match want.0 {
+        Some((at, fov_deg)) if at.translation.is_finite() && at.rotation.is_finite() => {
+            *t = at;
+            if saved.is_none() {
+                *saved = Some(p.fov);
+            }
+            let fov = fov_deg.to_radians();
+            if p.fov != fov {
+                p.fov = fov;
+            }
+        }
+        Some(_) => {}
+        None => {
+            if let Some(f) = saved.take() {
+                p.fov = f;
+            }
+        }
     }
 }
 
@@ -173,6 +206,126 @@ struct Drawn {
     eye: (Vec3, Vec3),
     cursor: Option<Vec2>,
     warned: bool,
+    /// The table's place in the world (game space), when it stands where the world's does.
+    world: Option<Affine3A>,
+    /// The world's own drawing of that table, hidden while the menu's stands in for it:
+    /// each entity and its visibility before.
+    hidden: Vec<(Entity, Visibility)>,
+}
+
+impl Drawn {
+    fn layer(&self) -> RenderLayers {
+        RenderLayers::layer(if self.world.is_some() { 0 } else { ROULETTE_LAYER })
+    }
+
+    /// Model space of the table to Bevy space.
+    fn to_bevy(&self, p: Vec3) -> Vec3 {
+        match self.world {
+            Some(a) => nvf_play::space::to_bevy(a.transform_point3(p).to_array()),
+            None => PLACE + nvf_play::space::to_bevy(p.to_array()),
+        }
+    }
+}
+
+/// The menu's table model fitted onto the world's table (its model space into the
+/// world's model space): the world's tables are other models (the casinos' clutter tables)
+/// [observed: FalloutNV.esm ACTI `RouletteTableUltraLuxe`: `clutter\casino\
+/// roulettetable01.nif`], so the menu's is turned by quarter turns until the long sides
+/// agree, scaled to the world's length, centred on it and stood on its foot; of the two ways
+/// round, the one that puts the menu's camera (`eye`, menu model space) on the side
+/// nearer the player (`player`, world model space) [design].
+pub fn fit((mlo, mhi): (Vec3, Vec3), (wlo, whi): (Vec3, Vec3), eye: Vec3, player: Vec3) -> Affine3A {
+    let (me, we) = (mhi - mlo, whi - wlo);
+    let (m_long_x, w_long_x) = (me.x >= me.y, we.x >= we.y);
+    let k = (if w_long_x { we.x } else { we.y }) / (if m_long_x { me.x } else { me.y }).max(1e-3);
+    let base = if m_long_x == w_long_x { 0.0 } else { std::f32::consts::FRAC_PI_2 };
+    let (mc, wc) = ((mlo + mhi) * 0.5, (wlo + whi) * 0.5);
+    let make = |turn: f32| {
+        let r = Quat::from_rotation_z(turn);
+        let c = r * (mc * k);
+        let t = Vec3::new(wc.x - c.x, wc.y - c.y, wlo.z - mlo.z * k);
+        Affine3A::from_scale_rotation_translation(Vec3::splat(k), r, t)
+    };
+    let (a, b) = (make(base), make(base + std::f32::consts::PI));
+    if a.transform_point3(eye).distance(player) <= b.transform_point3(eye).distance(player) {
+        a
+    } else {
+        b
+    }
+}
+
+/// The lamp over a casino table while its menu is open in the world: the casinos' floors
+/// are dim and the felt must be read; a warm spot light this high over the felt, about as
+/// bright as a placed light of fade [`TABLE_LAMP`] [design].
+pub const TABLE_LAMP: f32 = 1.2;
+pub const LAMP_HEIGHT: f32 = 110.0;
+
+/// The lamp over the felt at `felt` (Bevy space); despawned with the menu's table.
+pub fn table_lamp(commands: &mut Commands, felt: Vec3) -> Entity {
+    let light = SpotLight {
+        color: Color::srgb(1.0, 0.93, 0.82),
+        intensity: crate::lights::lumens(TABLE_LAMP, crate::sky::light_unit()),
+        range: 3.0 * LAMP_HEIGHT,
+        outer_angle: 0.75,
+        inner_angle: 0.45,
+        shadow_maps_enabled: false,
+        ..default()
+    };
+    commands.spawn((Name::new("Casino table lamp"), light, Transform::from_translation(felt + Vec3::Y * LAMP_HEIGHT).looking_at(felt, Vec3::Z))).id()
+}
+
+/// The largest thing at a table hidden with it, game units across: stools and chairs, not
+/// the floor or the walls [design].
+pub const FURNITURE_MAX: f32 = 120.0;
+
+/// What would stand in the menu camera's way at a world table (`nvf_play::roulette::
+/// table_staff`): its actors, and the small models about it.
+pub fn in_the_way(sim: &nvf_play::sim::SimState, play: &nvf_play::PlayWorld, models: &mut ModelCtx, table: fnv_sim::FormId) -> Vec<fnv_sim::FormId> {
+    nvf_play::roulette::table_staff(sim, table)
+        .into_iter()
+        .filter(|r| {
+            if sim.is_actor(r.0) {
+                return true;
+            }
+            let Some(base) = sim.world.peek(*r).map(|s| s.base).or_else(|| sim.base_of(r.0)) else { return false };
+            // Stools and chairs, loaded or not.
+            if sim.forms.sig(base).is_some_and(|s| s == *b"FURN") {
+                return true;
+            }
+            let Some(path) = nvf_play::dropped::model_path(&play.0, base, 0) else { return false };
+            let full = format!("meshes\\{}", path.trim_start_matches("meshes\\").trim_start_matches("Meshes\\"));
+            models.model(&full).and_then(|m| m.bounds).is_some_and(|(lo, hi)| (hi - lo).max_element() * sim.ref_scale(r.0) <= FURNITURE_MAX)
+        })
+        .collect()
+}
+
+/// Where a reference stands (game space), as the world draws it.
+pub fn ref_place(sim: &nvf_play::sim::SimState, r: fnv_sim::FormId) -> Option<Affine3A> {
+    let (pos, rot) = sim.world.peek(r).map(|s| (s.pos, s.rot)).or_else(|| sim.refs.get(r).map(|p| (p.pos, p.rot)))?;
+    Some(nvf_play::moved::ref_affine(pos, rot, sim.ref_scale(r.0)))
+}
+
+/// Hide the world's own drawing of a reference; what each entity was, for [`unhide`].
+pub fn hide_ref(r: u32, refs: &Query<(Entity, &nvf_play::RefVisual)>, visibility: &mut Query<&mut Visibility>) -> Vec<(Entity, Visibility)> {
+    let mut out = Vec::new();
+    for (e, v) in refs.iter() {
+        if v.0 != r {
+            continue;
+        }
+        if let Ok(mut vis) = visibility.get_mut(e) {
+            out.push((e, *vis));
+            *vis = Visibility::Hidden;
+        }
+    }
+    out
+}
+
+pub fn unhide(hidden: &mut Vec<(Entity, Visibility)>, visibility: &mut Query<&mut Visibility>) {
+    for (e, was) in hidden.drain(..) {
+        if let Ok(mut vis) = visibility.get_mut(e) {
+            *vis = was;
+        }
+    }
 }
 
 /// Spawn a model's shapes (no sequences) under `parent` at `at` (game space); each entity
@@ -189,7 +342,7 @@ fn spawn_shapes(commands: &mut Commands, m: &PreparedModel, parent: Entity, laye
         .collect()
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn show(
     mut commands: Commands,
     screen: Res<RouletteScreen>,
@@ -201,19 +354,21 @@ fn show(
     mut transforms: Query<&mut Transform>,
     mut visibility: Query<&mut Visibility>,
     mut drawn: Local<Drawn>,
+    (sim, play, world_root, refs, mut table_camera): (Option<Res<nvf_play::sim::SimState>>, Option<Res<nvf_play::PlayWorld>>, Query<Entity, With<crate::world::WorldRoot>>, Query<(Entity, &nvf_play::RefVisual)>, ResMut<TableCamera>),
 ) {
     let Some(s) = screen.0.as_ref() else {
         if !drawn.entities.is_empty() || view.is_some() {
             for e in drawn.entities.drain(..) {
                 commands.entity(e).despawn();
             }
+            unhide(&mut drawn.hidden, &mut visibility);
             *drawn = Drawn::default();
             commands.remove_resource::<RouletteView>();
             pointer.point = None;
+            table_camera.set_if_neq(TableCamera(None));
         }
         return;
     };
-    let layer = RenderLayers::layer(ROULETTE_LAYER);
     if drawn.entities.is_empty() {
         let path = s.model.as_deref().map_or_else(|| DEFAULT_TABLE.to_string(), |m| format!("meshes\\{m}"));
         let loaded = (models.model(&path), models.model(POINTS_MODEL), models.model(BET_MODEL), models.model(CHIP_MODEL));
@@ -237,13 +392,33 @@ fn show(
             drawn.warned = true;
             return;
         };
-        let size = window.single().map(|w| Extent3d { width: w.physical_width().max(1), height: w.physical_height().max(1), depth_or_array_layers: 1 }).unwrap_or(Extent3d { width: 1280, height: 720, depth_or_array_layers: 1 });
-        let mut image = Image::new_fill(size, TextureDimension::D2, &[0, 0, 0, 255], TextureFormat::Bgra8UnormSrgb, RenderAssetUsages::default());
-        image.texture_descriptor.usage = TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::RENDER_ATTACHMENT;
-        let image = models.images.add(image);
-        let holder = commands.spawn((Name::new("Roulette table"), Transform::from_translation(PLACE), Visibility::Inherited)).id();
-        // Game space (Z up) into Bevy's (Y up), as the world root does.
-        let to_bevy = Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2));
+        // At the table in the world: the menu's table stands where the world's does (the
+        // world's hidden meanwhile), under the world root, drawn and lit with the world and
+        // seen by the game's own camera; else alone, far off, by a camera of its own.
+        let root = world_root.single().ok();
+        drawn.world = s.table_ref.zip(sim.as_deref()).zip(play.as_deref()).filter(|_| root.is_some()).and_then(|((t, sim), play)| {
+            let place = ref_place(sim, t)?;
+            let base = sim.world.peek(t).map(|r| r.base).or_else(|| sim.base_of(t.0))?;
+            let world_path = nvf_play::dropped::model_path(&play.0, base, 0)?;
+            let world_model = models.model(&format!("meshes\\{}", world_path.trim_start_matches("meshes\\").trim_start_matches("Meshes\\")))?;
+            let eye = crate::lockpick_view::model_space(&rig, None, 0.0).get(camera_node).map(|a| Vec3::from(a.translation))?;
+            let player = sim.world.peek(fnv_sim::FormId::PLAYER_REF).map(|p| Vec3::from(p.pos))?;
+            let f = fit(table.bounds?, world_model.bounds?, eye, place.inverse().transform_point3(player));
+            info!("roulette view: the menu's table fitted onto {world_path} ({t}): scale {:.3}, turned {:.0}°", f.matrix3.x_axis.length(), f.matrix3.x_axis.y.atan2(f.matrix3.x_axis.x).to_degrees());
+            Some(place * f)
+        });
+        let layer = drawn.layer();
+        let (holder, to_bevy) = match (drawn.world, root) {
+            (Some(at), Some(root)) => {
+                let h = commands.spawn((Name::new("Roulette table (at the world's)"), Transform::from_matrix(Mat4::from(at)), Visibility::Inherited, ChildOf(root))).id();
+                (h, Transform::IDENTITY)
+            }
+            _ => {
+                let h = commands.spawn((Name::new("Roulette table"), Transform::from_translation(PLACE), Visibility::Inherited)).id();
+                // Game space (Z up) into Bevy's (Y up), as the world root does.
+                (h, Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)))
+            }
+        };
         let (_, table_drawn, by_name) = rig.spawn_nodes(&mut commands, holder, to_bevy, &path, 0.0);
         for e in &table_drawn {
             commands.entity(*e).insert(layer.clone());
@@ -266,24 +441,44 @@ fn show(
                 rules::spot(&name).map(|_| (name, Vec3::from(w.translation)))
             })
             .collect();
-        let camera = commands
-            .spawn((
-                Name::new("Roulette camera"),
-                Camera3d::default(),
-                Camera { order: -3, clear_color: ClearColorConfig::Custom(Color::BLACK), ..default() },
-                RenderTarget::Image(ImageRenderTarget::from(image.clone())),
-                Projection::Perspective(PerspectiveProjection { fov: VFOV_DEG.to_radians(), near: 1.0, far: 4000.0, ..default() }),
-                Tonemapping::Linear,
-                Msaa::Sample4,
-                AmbientLight { color: Color::WHITE, brightness: 350.0, ..default() },
-                Transform::from_translation(PLACE),
-                layer.clone(),
-            ))
-            .id();
-        let to = |p: Vec3| PLACE + nvf_play::space::to_bevy(p.to_array());
-        let key = commands
-            .spawn((DirectionalLight { illuminance: 5000.0, ..default() }, Transform::from_translation(to(Vec3::new(10.0, -60.0, 90.0))).looking_at(to(Vec3::ZERO), Vec3::Y), layer.clone()))
-            .id();
+        let mut own_camera = None;
+        let mut lamp = None;
+        if drawn.world.is_none() {
+            let size = window.single().map(|w| Extent3d { width: w.physical_width().max(1), height: w.physical_height().max(1), depth_or_array_layers: 1 }).unwrap_or(Extent3d { width: 1280, height: 720, depth_or_array_layers: 1 });
+            let mut image = Image::new_fill(size, TextureDimension::D2, &[0, 0, 0, 255], TextureFormat::Bgra8UnormSrgb, RenderAssetUsages::default());
+            image.texture_descriptor.usage = TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::RENDER_ATTACHMENT;
+            let image = models.images.add(image);
+            let camera = commands
+                .spawn((
+                    Name::new("Roulette camera"),
+                    Camera3d::default(),
+                    Camera { order: -3, clear_color: ClearColorConfig::Custom(Color::BLACK), ..default() },
+                    RenderTarget::Image(ImageRenderTarget::from(image.clone())),
+                    Projection::Perspective(PerspectiveProjection { fov: VFOV_DEG.to_radians(), near: 1.0, far: 4000.0, ..default() }),
+                    Tonemapping::Linear,
+                    Msaa::Sample4,
+                    AmbientLight { color: Color::WHITE, brightness: 350.0, ..default() },
+                    Transform::from_translation(PLACE),
+                    layer.clone(),
+                ))
+                .id();
+            let to = |p: Vec3| PLACE + nvf_play::space::to_bevy(p.to_array());
+            let key = commands
+                .spawn((DirectionalLight { illuminance: 5000.0, ..default() }, Transform::from_translation(to(Vec3::new(10.0, -60.0, 90.0))).looking_at(to(Vec3::ZERO), Vec3::Y), layer.clone()))
+                .id();
+            own_camera = Some((camera, key, image));
+        } else if let (Some(t), Some(a)) = (s.table_ref, drawn.world) {
+            let staff = sim.as_deref().zip(play.as_deref()).map(|(sim, play)| in_the_way(sim, play, &mut models, t)).unwrap_or_default();
+            info!("roulette view: {} things at the table hidden: {staff:?}", staff.len());
+            for r in sim.as_deref().map_or_else(|| vec![t], |sim| nvf_play::roulette::table_twins(sim, play.as_deref(), t, "roulette")).into_iter().chain(staff) {
+                let more = hide_ref(r.0, &refs, &mut visibility);
+                drawn.hidden.extend(more);
+            }
+            let felt = points.values().fold(Vec3::ZERO, |sum, p| sum + *p) / points.len().max(1) as f32;
+            let wheel_at = crate::lockpick_view::model_space(&rig, None, 0.0).get(wheel).map_or(felt, |w| Vec3::from(w.translation));
+            // One over the felt, one over the wheel the spins' camera flies to.
+            lamp = Some([felt, wheel_at].map(|p| table_lamp(&mut commands, nvf_play::space::to_bevy(a.transform_point3(p).to_array()))));
+        }
         let mut t = Table { rig, by_name, wheel, camera: camera_node, target, ball_end: [None; 3] };
         for n in 1..=3u8 {
             let Some(c) = t.clip(n) else { continue };
@@ -292,14 +487,19 @@ fn show(
             t.ball_end[n as usize - 1] = Some(local.y.atan2(local.x).to_degrees());
         }
         info!(
-            "roulette view: {path} drawn ({} shapes), {} bet points, chip model {} shapes (bounds {:?}), ball at the spins' ends: {}",
+            "roulette view: {path} drawn ({} shapes){}, {} bet points, chip model {} shapes (bounds {:?}), ball at the spins' ends: {}",
             table_drawn.len(),
+            match (s.table_ref, drawn.world) {
+                (Some(r), Some(a)) => format!(" at the world's table {r} ({:.0}, {:.0}, {:.0}; {} of its entities hidden)", a.translation.x, a.translation.y, a.translation.z, drawn.hidden.len()),
+                _ => " alone (no table in the world)".to_string(),
+            },
             points.len(),
             chip.shapes.len(),
             chip.bounds,
             t.ball_end.iter().map(|a| a.map_or("none".to_string(), |a| format!("{a:.1}° (pocket {})", rules::pocket_name(pocket_at(a))))).collect::<Vec<_>>().join(", ")
         );
-        drawn.entities = vec![holder, camera, key];
+        drawn.entities = vec![holder];
+        drawn.entities.extend(lamp.into_iter().flatten());
         drawn.table = Some(t);
         drawn.points = points;
         drawn.space = Some(space);
@@ -307,9 +507,14 @@ fn show(
         drawn.selector = selector;
         drawn.invalid = invalid;
         drawn.chip_model = Some(chip);
-        drawn.camera = Some(camera);
+        let image = own_camera.map(|(camera, key, image)| {
+            drawn.entities.extend([camera, key]);
+            drawn.camera = Some(camera);
+            image
+        });
         commands.insert_resource(RouletteView { image });
     }
+    let layer = drawn.layer();
     let now = time.elapsed_secs();
     let Some(t) = drawn.table.as_ref() else { return };
     // The table's pose.
@@ -325,21 +530,23 @@ fn show(
     // The camera: from Camera01 towards its target.
     let eye = Vec3::from(world[t.camera].translation);
     let aim = Vec3::from(world[t.target].translation);
-    let to = |p: Vec3| PLACE + nvf_play::space::to_bevy(p.to_array());
-    if let Some(mut tr) = drawn.camera.and_then(|c| transforms.get_mut(c).ok()) {
-        *tr = Transform::from_translation(to(eye)).looking_at(to(aim), Vec3::Y);
+    let looking = Transform::from_translation(drawn.to_bevy(eye)).looking_at(drawn.to_bevy(aim), Vec3::Y);
+    if drawn.world.is_some() {
+        table_camera.set_if_neq(TableCamera(Some((looking, VFOV_DEG))));
+    } else if let Some(mut tr) = drawn.camera.and_then(|c| transforms.get_mut(c).ok()) {
+        *tr = looking;
     }
     drawn.eye = (eye, aim);
-    // The chips.
+    // The chips at the bet points.
     let key: String = s.table.bets.iter().map(|(b, a)| format!("{}={a};", b.point)).collect();
     if key != drawn.chips_key {
         for e in drawn.chips.drain(..) {
             commands.entity(e).despawn();
         }
         if let (Some(space), Some(m)) = (drawn.space, drawn.chip_model.clone()) {
-            for (b, amount) in &s.table.bets {
-                let Some(&p) = drawn.points.get(&b.point) else { continue };
-                let height = (stack_chips(*amount) as f32 / CHIPS_PER_MODEL).clamp(1.0 / CHIPS_PER_MODEL, 1.0);
+            let stacks: Vec<(Vec3, u32)> = s.table.bets.iter().filter_map(|(b, a)| drawn.points.get(&b.point).map(|p| (*p, *a))).collect();
+            for (p, amount) in stacks {
+                let height = (stack_chips(amount) as f32 / CHIPS_PER_MODEL).clamp(1.0 / CHIPS_PER_MODEL, 1.0);
                 // The model hangs under its origin [observed: its bounds, z −2.04 to 0]: the
                 // stack is lifted so its foot stands on the felt.
                 let lift = chip_depth(&m) * height;
@@ -429,6 +636,20 @@ mod tests {
         // The strip's first cell, 35, runs from −15.33° on.
         assert_eq!(pocket_at(-15.0), 35);
         assert_eq!(pocket_at(-16.0), 14);
+    }
+
+    #[test]
+    fn the_menu_table_is_fitted_onto_the_worlds() {
+        // A menu table 20 long in x, the world's 200 long in y, its foot at z 0; the
+        // player on the world's -x side: the menu's camera (at its -y side) ends there.
+        let m = (Vec3::new(-10.0, -5.0, -1.0), Vec3::new(10.0, 5.0, 2.0));
+        let w = (Vec3::new(-40.0, -100.0, 0.0), Vec3::new(40.0, 100.0, 30.0));
+        let f = fit(m, w, Vec3::new(0.0, -8.0, 6.0), Vec3::new(-300.0, 0.0, 0.0));
+        assert!((f.matrix3.x_axis.length() - 10.0).abs() < 1e-3, "scaled to the world's length");
+        let (lo, hi) = (f.transform_point3(m.0), f.transform_point3(m.1));
+        assert!((lo.y.min(hi.y) + 100.0).abs() < 1e-2 && (lo.y.max(hi.y) - 100.0).abs() < 1e-2, "long sides agree: {lo} {hi}");
+        assert!(lo.z.abs() < 1e-3, "on its foot");
+        assert!(f.transform_point3(Vec3::new(0.0, -8.0, 6.0)).x < 0.0, "the camera on the player's side");
     }
 
     #[test]

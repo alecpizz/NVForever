@@ -45,6 +45,12 @@ pub use nvf_settings_layout::*;
 
 use crate::settings::Setting;
 
+#[cfg(test)]
+pub const DESKTOP_TAB_ORDER: [&str; 8] = nvf_settings_layout::TAB_ORDER;
+#[cfg(target_os = "android")]
+pub const TAB_ORDER: [&str; 9] = MOBILE_TAB_ORDER;
+#[cfg(not(target_os = "android"))]
+pub const TAB_ORDER: [&str; 8] = nvf_settings_layout::TAB_ORDER;
 
 /// One line of a section: a registered row (its index in the registry) or a Controls row
 /// (its name after [`CONTROL_PREFIX`]).
@@ -127,10 +133,23 @@ pub struct ResolvedLayout {
 /// missing optional row left out, a section left with none dropped), then each tab's
 /// unnamed rows, then the unnamed groups' tabs. Every registered row is in it once.
 pub fn resolve_layout(list: &[Setting]) -> ResolvedLayout {
+    if cfg!(target_os = "android") {
+        resolve_layout_with(list, &TAB_ORDER, MOBILE_SECTIONS, ANDROID_SECTIONS)
+    } else {
+        resolve_layout_with(list, &TAB_ORDER, &[], &[])
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn resolve_desktop_layout(list: &[Setting]) -> ResolvedLayout {
+    resolve_layout_with(list, &nvf_settings_layout::TAB_ORDER, &[], &[])
+}
+
+fn resolve_layout_with(list: &[Setting], tab_order: &[&'static str], overrides: &[Section], extra: &[Section]) -> ResolvedLayout {
     let index: std::collections::HashMap<&str, usize> = list.iter().enumerate().map(|(i, s)| (s.key, i)).collect();
     let mut placements: Vec<Option<Placement>> = vec![None; list.len()];
-    let mut tabs: Vec<ResolvedTab> = TAB_ORDER.iter().map(|&name| ResolvedTab { name, sections: Vec::new() }).collect();
-    for s in SECTIONS {
+    let mut tabs: Vec<ResolvedTab> = tab_order.iter().map(|&name| ResolvedTab { name, sections: Vec::new() }).collect();
+    for s in overrides.iter().chain(SECTIONS).chain(extra) {
         let mut items = Vec::new();
         for k in s.keys {
             if let Some(c) = k.strip_prefix(CONTROL_PREFIX) {
@@ -145,7 +164,12 @@ pub fn resolve_layout(list: &[Setting]) -> ResolvedLayout {
         }
         let rows = items.iter().filter_map(|i| if let LayoutItem::Setting(i) = i { Some(*i) } else { None }).collect();
         if let Some(t) = tabs.iter_mut().find(|t| t.name == s.placement.tab) {
-            t.sections.push(ResolvedSection { placement: s.placement, rows, items });
+            if let Some(section) = t.sections.iter_mut().find(|section| section.placement == s.placement) {
+                section.rows.extend(rows);
+                section.items.extend(items);
+            } else {
+                t.sections.push(ResolvedSection { placement: s.placement, rows, items });
+            }
         }
     }
     // The unnamed rows, by tab, in registry order: one section after each tab's named ones.
@@ -260,9 +284,10 @@ impl ResolvedLayout {
 }
 
 #[cfg(test)]
-mod tests {
+mod shared_table_tests {
     use super::*;
     use crate::settings::Settings;
+    use super::{resolve_desktop_layout as resolve_layout, DESKTOP_TAB_ORDER as TAB_ORDER};
 
     fn row(key: &'static str, group: &'static str) -> Setting {
         Setting { key, group, label: key, note: "", switches: "", get: |_| false, set: |_, _| {}, slider: None }
@@ -307,8 +332,12 @@ mod tests {
     /// Quick Loot rows; #2965's heat haze row; #2675's desert haze row; Sprint; #2671's terrain
     /// shadows row; #2981's authored materials row and its reflections row; #2701's
     /// full-detail scenery row; #3014's distant objects row; #2993's aerial perspective row;
-    /// #2995's night sky detail row; #3013's distant lights row; #3322's terrain parallax row), by the group it registers with.
-    const KNOWN: [(&str, &str); 153] = [
+    /// #2995's night sky detail row; #3013's distant lights row; #3322's terrain parallax row;
+    /// #2991's volumetric clouds row; #3348's HDR output row; #3783's occlusion culling row;
+    /// #3032's volumetric light row and its strength; #3843's localized armor DT/DR row; the
+    /// casino screens' Caravan tips row; the
+    /// physical lighting row; #4690's tonemapping preset row), by the group it registers with.
+    pub(super) const KNOWN: &[(&str, &str)] = &[
         ("detached-camera", "Gameplay"),
         ("gore-shake", "Gameplay"),
         ("advanced-movement", "Gameplay"),
@@ -319,9 +348,14 @@ mod tests {
         ("sprint", "Gameplay"),
         ("animation-smoothing", "Gameplay"),
         ("sound-cover", "Gameplay"),
+        ("caravan-tips", "Gameplay"),
+        ("npc-weapon-mods", "Gameplay"),
+        ("quantity-select-short-keys", "Gameplay"),
+        ("sneak-bounding-box", "Gameplay"),
         ("menu-pause", "Gameplay"),
         ("dialogue-goodbye-hint", "Gameplay"),
         ("reload-slows", "Gameplay"),
+        ("localized-dt-dr", "Gameplay"),
         ("grass-fire", "Gameplay"),
         ("quick-loot", "Gameplay"),
         ("quick-loot-scale", "Gameplay"),
@@ -368,6 +402,7 @@ mod tests {
         ("pipboy-blue", "Interface"),
         ("language", "Interface"),
         ("menu-font", "Interface"),
+        ("location-load-screens", "Interface"),
         ("head-tracking", "World"),
         ("foot-ik", "World"),
         ("sky-clock", "World"),
@@ -434,15 +469,21 @@ mod tests {
         ("terrain-anti-tiling", "Graphics"),
         ("terrain-parallax", "Graphics"),
         ("mesh-terrain-blend", "Graphics"),
+        ("occlusion-culling", "Graphics"),
         ("full-detail", "Graphics"),
         ("distant-objects", "Graphics"),
         ("smooth-terrain", "Graphics"),
         ("light-shafts", "Graphics"),
         ("heat-haze", "Graphics"),
         ("desert-haze", "Graphics"),
+        ("volumetric-clouds", "Graphics"),
         ("aerial-perspective", "Graphics"),
         ("night-sky-detail", "Graphics"),
+        ("physical-pbr", "Graphics"),
+        ("tonemap-preset", "Graphics"),
         ("distant-lights", "Graphics"),
+        ("volumetric-light", "Graphics"),
+        ("volumetric-light-strength", "Graphics"),
         ("water-reflections", "Graphics"),
         ("water-effects", "Graphics"),
         ("water-mirror", "Graphics"),
@@ -462,14 +503,20 @@ mod tests {
         ("terrain-wireframe", "Debug"),
         ("send-reports", "Reports"),
         ("reports-delete", "Reports"),
+        ("coop", "Gameplay"),
+        // The co-op connection rows (nvforever `coop/net_settings.rs`).
+        ("coop-connection", "Gameplay"),
+        ("coop-router-port", "Gameplay"),
+        ("coop-relay", "Gameplay"),
+        ("coop-ask", "Gameplay"),
     ];
 
     /// What every tweak's key starts with (#1892's `tweaks.rs`: `concat!("tweak-", $key)`).
-    const TWEAK_PREFIX: &str = "tweak-";
+    pub(super) const TWEAK_PREFIX: &str = "tweak-";
 
     /// Every row #1892 registers under Tweaks (PR head 25bc53a28, `engine/nvf-play/src/tweaks.rs`),
     /// in its order, without [`TWEAK_PREFIX`]: what the table places ahead of it.
-    const TWEAK_ROWS: &str = "\
+    pub(super) const TWEAK_ROWS: &str = "\
         discovered-sound level-sound-every-a level-sound-a level-sound-every-b level-sound-b xp-multiplier \
         no-xp-messages no-karma-messages no-quest-failed no-location-popup no-objective-popup disable-fast-travel \
         midair-fast-travel fast-travel-enemies fast-travel-encumbered no-red-crosshair hide-enemy-markers \
@@ -574,20 +621,20 @@ mod tests {
         place-marker-here-says repeat-activate-takes-only hi-res-npc-weapons empty-reload-swaps-ammo keep-chosen-ammo \
         objectives-on-arrival objectives-gap sleep-in-owned-beds power-armor-no-training \
         sleep-misc-stat-requires-duration revive-on-cell-change no-self-explosion-non-hostiles grabbing-is-theft-min-value \
-        sneak-run-ap-cost sneak-run-ap-endurance";
+        sneak-run-ap-cost sneak-run-ap-endurance no-lock-encounter-zone-levels faster-sleep-wait wasd-as-arrow-keys crafted-item-health-pct";
 
     /// [`TWEAK_ROWS`] as keys, under the Tweaks tab's group.
-    fn tweak_rows() -> Vec<(&'static str, &'static str)> {
+    pub(super) fn tweak_rows() -> Vec<(&'static str, &'static str)> {
         TWEAK_ROWS.split_whitespace().map(|k| (&*Box::leak(format!("{TWEAK_PREFIX}{k}").into_boxed_str()), TWEAKS_TAB)).collect()
     }
 
     /// Whether `key` is one of [`TWEAK_ROWS`].
-    fn is_tweak(key: &str) -> bool {
+    pub(super) fn is_tweak(key: &str) -> bool {
         key.strip_prefix(TWEAK_PREFIX).is_some_and(|k| TWEAK_ROWS.split_whitespace().any(|r| r == k))
     }
 
     /// Stewie's Tweaks' groups as the Tweaks tab lists them [design: owner 2026-11-15].
-    const TWEAK_GROUPS: [&str; 8] = ["Gameplay", "Combat", "Quality of Life", "HUD", "Menus", "Hotkeys", "Cheats", "Misc"];
+    pub(super) const TWEAK_GROUPS: [&str; 8] = ["Gameplay", "Combat", "Quality of Life", "HUD", "Menus", "Hotkeys", "Cheats", "Misc"];
 
     #[test]
     fn the_table_names_each_key_once_in_one_of_the_tabs() {
@@ -605,7 +652,7 @@ mod tests {
         // Every row there is has its place in the table; the table names no other but the
         // Controls tab's own rows and #1892's tweaks, each of those on the Tweaks tab.
         let named: Vec<&str> = SECTIONS.iter().flat_map(|s| s.keys.iter().copied()).filter(|k| !k.starts_with(CONTROL_PREFIX)).collect();
-        for (k, _) in KNOWN {
+        for &(k, _) in KNOWN {
             assert!(named.contains(&k), "{k} has no place");
         }
         for k in &named {
@@ -624,37 +671,68 @@ mod tests {
     /// table places it in, and no row the game does not have [design: owner 2026-11-16].
     #[test]
     fn the_reference_has_every_row_where_the_page_shows_it() {
-        let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/settings-reference.md")).unwrap();
-        let mut listed: Vec<(String, String, Option<String>)> = Vec::new();
-        let (mut tab, mut heading) = (String::new(), None);
-        for line in text.lines() {
-            if let Some(h) = line.strip_prefix("## ") {
-                if h.contains("the tab's own rows") {
-                    break;
+        fn parse_ref(text: &str) -> Vec<(String, String, Option<String>)> {
+            let mut listed = Vec::new();
+            let (mut tab, mut heading) = (String::new(), None);
+            for line in text.lines() {
+                if let Some(h) = line.strip_prefix("## ") {
+                    if h.contains("the tab's own rows") {
+                        break;
+                    }
+                    let mut parts = h.split('›').map(str::trim);
+                    tab = parts.next().unwrap_or_default().to_string();
+                    heading = parts.next().map(str::to_string);
+                } else if let Some((key, _)) = line.strip_prefix("### `").and_then(|h| h.split_once('`')) {
+                    listed.push((key.to_string(), tab.clone(), heading.clone()));
                 }
-                let mut parts = h.split('›').map(str::trim);
-                tab = parts.next().unwrap_or_default().to_string();
-                heading = parts.next().map(str::to_string);
-            } else if let Some((key, _)) = line.strip_prefix("### `").and_then(|h| h.split_once('`')) {
-                listed.push((key.to_string(), tab.clone(), heading.clone()));
             }
+            listed
         }
-        let list = registry(&KNOWN);
-        let l = resolve_layout(&list);
-        for (key, tab, heading) in &listed {
-            let i = list.iter().position(|s| s.key == key).unwrap_or_else(|| panic!("{key}: in the reference, but the game has no such row"));
-            let p = l.placement_of(i).unwrap();
+        // Desktop reference strictly matches the desktop layout (no ANDROID_SECTIONS).
+        let desktop_ref = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/settings-reference.md")).unwrap();
+        let desktop_listed = parse_ref(&desktop_ref);
+        let desktop_list = registry(KNOWN);
+        let desktop_layout = super::resolve_desktop_layout(&desktop_list);
+        for (key, tab, heading) in &desktop_listed {
+            let i = desktop_list.iter().position(|s| s.key == key).unwrap_or_else(|| panic!("{key}: in docs/settings-reference.md, but desktop KNOWN has no such row"));
+            let p = desktop_layout.placement_of(i).unwrap();
             assert_eq!((p.tab, p.heading), (tab.as_str(), heading.as_deref()), "{key}: the reference places it under {tab} › {heading:?}, the page under {}", p.path());
         }
-        for (k, _) in KNOWN {
-            let p = l.placement_of(list.iter().position(|s| s.key == k).unwrap()).unwrap();
-            assert!(p.tab == TWEAKS_TAB || listed.iter().any(|(n, _, _)| n == k), "{k} ({}) is not in docs/settings-reference.md", p.path());
+        for &(k, _) in KNOWN {
+            let p = desktop_layout.placement_of(desktop_list.iter().position(|s| s.key == k).unwrap()).unwrap();
+            assert!(p.tab == TWEAKS_TAB || desktop_listed.iter().any(|(n, _, _)| n == k), "{k} ({}) is not in docs/settings-reference.md", p.path());
+        }
+        // Android supplement rows match the Android layout (MOBILE_SECTIONS + ANDROID_SECTIONS).
+        let android_ref = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/settings-reference-android.md")).unwrap();
+        let android_listed = parse_ref(&android_ref);
+        let full_list = registry(super::android_profile_tests::registered_rows());
+        let mobile_layout = super::resolve_layout_with(&full_list, &MOBILE_TAB_ORDER, MOBILE_SECTIONS, ANDROID_SECTIONS);
+        let android_fallback = super::resolve_layout_with(&full_list, &DESKTOP_TAB_ORDER, &[], ANDROID_SECTIONS);
+        for (key, tab, heading) in &android_listed {
+            let i = full_list.iter().position(|s| s.key == key).unwrap_or_else(|| panic!("{key}: in the Android reference, but the game has no such row"));
+            let layout = if tab.as_str() == MOBILE_TAB { &mobile_layout } else { &android_fallback };
+            let p = layout.placement_of(i).unwrap();
+            assert_eq!((p.tab, p.heading), (tab.as_str(), heading.as_deref()), "{key}: the reference places it under {tab} › {heading:?}, the page under {}", p.path());
         }
     }
 
     #[test]
+    fn desktop_layout_excludes_android_sections_and_stamp() {
+        let list = registry(&[("difficulty", "Gameplay"), ("hud-scale-v2", "Display"), ("touch-dialogue", "Gameplay"), ("controller-ads-v1", "Controller")]);
+        let at = |k: &str| list.iter().position(|s| s.key == k).unwrap();
+        let l = super::resolve_desktop_layout(&list);
+        assert_eq!(l.tab_names()[..8], DESKTOP_TAB_ORDER);
+        // None of the Android-only keys are named by desktop SECTIONS; they remain unnamed.
+        assert_eq!(l.unnamed(), 3);
+        assert_eq!(l.placement_of(at("hud-scale-v2")), Some(Placement::tab("Display")));
+        assert_eq!(l.placement_of(at("touch-dialogue")), Some(Placement::tab("Gameplay")));
+        assert_eq!(l.placement_of(at("controller-ads-v1")), Some(Placement::tab("Controller")));
+        assert_ne!(layout_stamp(), mobile_layout_stamp());
+    }
+
+    #[test]
     fn the_tabs_come_first_with_every_row_once_in_the_tables_order() {
-        let list = registry(&KNOWN);
+        let list = registry(KNOWN);
         let l = resolve_layout(&list);
         assert_eq!(l.tab_names(), TAB_ORDER, "no group is a tab of its own: every row is named");
         assert_eq!(l.unnamed(), 0);
@@ -662,7 +740,7 @@ mod tests {
         assert_eq!(all.len(), list.len());
         all.sort_unstable();
         assert_eq!(all, (0..list.len()).collect::<Vec<_>>(), "each registered row once");
-        assert_eq!(keys(&list, &l, "Gameplay")[..14], ["[Game]", "difficulty", "difficulty-player-damage", "difficulty-npc-damage", "difficulty-kill-xp", "hardcore", "reload-slows", "UsePipBoy", "sound-cover", "", "[V.A.T.S.]", "vats-style", "vats-slowdown", "kill-camera"]);
+        assert_eq!(keys(&list, &l, "Gameplay")[..16], ["[Game]", "difficulty", "difficulty-player-damage", "difficulty-npc-damage", "difficulty-kill-xp", "hardcore", "reload-slows", "UsePipBoy", "sound-cover", "npc-weapon-mods", "sneak-bounding-box", "", "[V.A.T.S.]", "vats-style", "vats-slowdown", "kill-camera"]);
         assert_eq!(keys(&list, &l, "Audio"), ["[Volume]", "volume-master", "volume-music", "volume-footstep", "volume-voice", "volume-effects", "volume-radio", "", "[Sound]", "music", "voice", "reverb", "voice-reverb"]);
         assert_eq!(keys(&list, &l, "Controls")[..6], ["[Input]", "@device", "button-style", "@automatic-input", "@rumble", ""]);
         assert_eq!(
@@ -689,23 +767,39 @@ mod tests {
         assert_eq!(at("terrain-shadows"), "Graphics > Shadows", "after Cloud shadows (#2671)");
         assert_eq!(at("light-shadows"), "Graphics > Shadows", "after Terrain shadows (light_shadows.rs)");
         assert_eq!(at("sound-cover"), "Gameplay > Game", "#2688");
+        assert_eq!(at("caravan-tips"), "Display > Interface");
+        assert_eq!(at("localized-dt-dr"), "Gameplay > Combat", "#3843");
+        assert_eq!(at("location-load-screens"), "Display > Interface", "#3844");
+        assert_eq!(at("npc-weapon-mods"), "Gameplay > Game", "#3876");
+        assert_eq!(at("quantity-select-short-keys"), "Gameplay > Menus", "#3799");
+        assert_eq!(at("sneak-bounding-box"), "Gameplay > Game", "#3845");
+        assert_eq!(at("volumetric-light"), "Graphics > Lighting and Effects", "with the other experimental effects (#3032)");
+        assert_eq!(at("volumetric-light-strength"), "Graphics > Lighting and Effects", "right after its switch");
+        // The strength is greyed while its switch is off; the volumetric rows run under
+        // Physical lighting too (graphics-enhanced.md §3.25).
+        assert_eq!(needs("volumetric-light-strength"), vec![Rule { parent: "volumetric-light", choices: &[], why: "Needs Volumetric Light." }]);
+        assert_eq!(needs("volumetric-light"), vec![]);
+        assert_eq!(needs("volumetric-clouds"), vec![]);
+        // Sun shafts have no shared rule: whether Volumetric light replaces them depends on its
+        // strength (nvforever settings.rs `shafts_status`, the game's page alone).
+        assert_eq!(needs("light-shafts"), vec![]);
         assert_eq!(l.control_placement("bind:Jump").unwrap().path(), "Controls > Movement");
         assert_eq!(l.control_placement("bind:Sprint").unwrap().path(), "Controls > Movement", "beside the movement controls (#3000)");
         // Sprint is not greyed under the Global Toggle, as its Advanced Movement neighbours
         // (#3000); only its binding is, while it is off.
         assert!(needs("sprint").is_empty());
         // The registry itself is left as it was: its order and each row's group.
-        let again = registry(&KNOWN);
+        let again = registry(KNOWN);
         assert!(list.iter().zip(&again).all(|(a, b)| a.key == b.key && a.group == b.group && a.label == b.label && a.note == b.note));
     }
 
     #[test]
     fn a_closed_category_keeps_its_heading_and_an_empty_line_follows_only_an_open_one() {
-        let list = registry(&KNOWN);
+        let list = registry(KNOWN);
         let l = resolve_layout(&list);
         let closed = |p: &Placement| p.heading != Some("V.A.T.S.") && p.heading != Some("Camera");
         let g = lines(&list, &l, "Gameplay", closed);
-        assert_eq!(g[..13], ["[Game]", "difficulty", "difficulty-player-damage", "difficulty-npc-damage", "difficulty-kill-xp", "hardcore", "reload-slows", "UsePipBoy", "sound-cover", "", "[V.A.T.S.]", "[Camera]", "[Dialogue]"]);
+        assert_eq!(g[..15], ["[Game]", "difficulty", "difficulty-player-damage", "difficulty-npc-damage", "difficulty-kill-xp", "hardcore", "reload-slows", "UsePipBoy", "sound-cover", "npc-weapon-mods", "sneak-bounding-box", "", "[V.A.T.S.]", "[Camera]", "[Dialogue]"]);
         let p = l.placement_of(list.iter().position(|s| s.key == "vats-style").unwrap()).unwrap();
         assert_eq!(l.shown_count(&p, |_| true), 3);
         assert_eq!(l.shown_count(&p, |i| i != LayoutItem::Setting(list.iter().position(|s| s.key == "vats-slowdown").unwrap())), 2);
@@ -766,10 +860,17 @@ mod tests {
     #[test]
     fn every_tweak_of_1892_has_its_group_and_category() {
         let tweaks = tweak_rows();
-        // 564 less the console and screenshot keys, bindings since 2026-11-16 (Controls),
-        // plus Keep Chosen Ammo (#3305), the four Stewie 9.45 sub-options (#3179),
-        // Running Costs AP sneak options (#3183), and Stewie 9.65-9.70 sub-options (#3184).
-        assert_eq!(tweaks.len(), 573);
+        let expected_tweaks = TWEAK_ROWS.split_whitespace().count();
+        let placed_tweaks = SECTIONS
+            .iter()
+            .flat_map(|s| s.keys.iter())
+            .filter(|k| k.starts_with(TWEAK_PREFIX))
+            .count();
+        let unique_tweaks: std::collections::HashSet<&str> = tweaks.iter().map(|(k, _)| *k).collect();
+        assert_eq!(unique_tweaks.len(), tweaks.len(), "duplicate tweak key in TWEAK_ROWS");
+        assert_eq!(tweaks.len(), expected_tweaks);
+        assert_eq!(tweaks.len(), placed_tweaks, "TWEAK_ROWS must match tweaks placed in SECTIONS");
+        assert!(tweaks.len() >= 575);
         let mut rows: Vec<(&'static str, &'static str)> = KNOWN.to_vec();
         rows.extend(&tweaks);
         let list = registry(&rows);
@@ -787,6 +888,7 @@ mod tests {
         assert_eq!(at("tweak-weightless-ammo"), "Tweaks > Cheats > Weight");
         assert_eq!(at("tweak-weightless-worn-armor"), "Tweaks > Gameplay > Weight");
         assert_eq!(at("tweak-keep-chosen-ammo"), "Tweaks > Combat > Weapons and Armour");
+        assert_eq!(at("tweak-no-lock-encounter-zone-levels"), "Tweaks > Gameplay > Travel and World");
         // A row that only matters with another comes right after it.
         let next = |k: &str| list[l.ordered_settings().skip_while(|&i| list[i].key != k).nth(1).unwrap()].key;
         assert_eq!(next("tweak-take-all-confirm"), "tweak-take-all-confirm-min");
@@ -808,7 +910,7 @@ mod tests {
         assert_eq!(needs("tweak-no-self-explosion-non-hostiles")[0].parent, "tweak-no-self-explosion-damage");
         assert_eq!(needs("tweak-grabbing-is-theft-min-value")[0].parent, "tweak-grabbing-is-theft");
         // The engine's own tabs are as they were.
-        assert_eq!(keys(&list, &l, "Audio"), keys(&registry(&KNOWN), &resolve_layout(&registry(&KNOWN)), "Audio"));
+        assert_eq!(keys(&list, &l, "Audio"), keys(&registry(KNOWN), &resolve_layout(&registry(KNOWN)), "Audio"));
     }
 
     #[test]
@@ -839,4 +941,487 @@ mod tests {
         assert_eq!(other, [LayoutEntry::Setting(list.iter().position(|s| s.key == "tweak-new-one").unwrap())]);
         assert!(l.tab_entries(TWEAKS_TAB, Some("Hotkeys"), |_| true, |_| true).iter().all(|e| *e != other[0]));
     }
+}
+
+#[cfg(test)]
+mod android_profile_tests {
+    use super::*;
+    use super::shared_table_tests::{is_tweak, tweak_rows, TWEAK_GROUPS, TWEAK_PREFIX, TWEAK_ROWS};
+    use crate::settings::Settings;
+    use super::DESKTOP_TAB_ORDER as TAB_ORDER;
+
+    fn resolve_layout(list: &[Setting]) -> ResolvedLayout {
+        resolve_layout_with(list, &DESKTOP_TAB_ORDER, &[], ANDROID_SECTIONS)
+    }
+
+    fn resolve_mobile_layout(list: &[Setting]) -> ResolvedLayout {
+        resolve_layout_with(list, &MOBILE_TAB_ORDER, MOBILE_SECTIONS, ANDROID_SECTIONS)
+    }
+
+    /// Android-only rows registered on top of `shared_table_tests::KNOWN`.
+    const ANDROID_ONLY_KNOWN: &[(&str, &str)] = &[
+        ("lockpick-touch-hints", "Touch"),
+        ("touch-pipboy-dismiss-left", "Controls"),
+        ("touch-pipboy-dismiss-right", "Controls"),
+        ("touch-pipboy-dismiss-side-v2", "Controls"),
+        ("touch-pipboy-dismiss-travel-v1", "Controls"),
+        ("touch-pipboy-close-button", "Controls"),
+        ("touch-pipboy-button-graphics", "Controls"),
+        ("touch-pipboy-model-wheel", "Controls"),
+        ("touch-terminal-v1", "Gameplay"),
+        ("touch-companion-v1", "Gameplay"),
+        ("touch-layout-editor-v1", "Controls"),
+        ("touch-barter-v1", "Gameplay"),
+        ("touch-maintenance-v1", "Gameplay"),
+        ("touch-practice-v1", "Controller"),
+        ("touch-hotbar", "Controls"),
+        ("touch-hotbar-slots", "Controls"),
+        ("touch-hotbar-size", "Controls"),
+        ("touch-hotbar-tray", "Controls"),
+        ("touch-tray-editor-v1", "Controls"),
+        ("touch-bottom-swipe-target-v1", "Controls"),
+        ("touch-pipboy-swipe-v1", "Controller"),
+        ("touch-pipboy-distance-v1", "Controller"),
+        ("touch-direct-pipboy-v1", "Controls"),
+        ("touch-world-activation-v1", "Controls"),
+        ("touch-dialogue", "Gameplay"),
+        ("dialogue-choice-text-size", "Gameplay"),
+        ("dialogue-subtitle-text-size", "Gameplay"),
+        ("dialogue-touch-choice", "Gameplay"),
+        ("dialogue-speaker-side", "Gameplay"),
+        ("dialogue-device-side-v1", "Gameplay"),
+        ("dialogue-theme-v1", "Gameplay"),
+        ("dialogue-background-opacity-v1", "Gameplay"),
+        ("dialogue-background-tint-v1", "Gameplay"),
+        ("dialogue-frame-opacity-v1", "Gameplay"),
+        ("dialogue-hints-v1", "Gameplay"),
+        ("controller-ads-v1", "Controller"),
+        ("controller-dead-zone-v1", "Controller"),
+        ("controller-toggle-aim-v1", "Controller"),
+        ("controller-hold-sneak-v1", "Controller"),
+        ("touch-icon-family", "Touch"),
+        ("adaptive-touch-actions", "Touch"),
+        ("lockpick-touch", "Touch"),
+        ("lockpick-touch-size", "Touch"),
+        ("touch-gyro-v1", "Controller"),
+        ("touch-gyro-sensitivity-v1", "Controller"),
+        ("touch-gyro-ads-v1", "Controller"),
+        ("touch-gyro-toggle-v1", "Controller"),
+        ("touch-gyro-ads-only-v1", "Controller"),
+        ("touch-gyro-recenter-v1", "Controller"),
+        ("touch-gyro-invert-x-v1", "Controller"),
+        ("touch-gyro-invert-y-v1", "Controller"),
+        ("touch-analog-movement-v1", "Touch"),
+        ("touch-fire-drag-look-v1", "Touch"),
+        ("touch-auto-move-lock-v1", "Touch"),
+        ("touch-vats-double-tap-v1", "Touch"),
+        ("touch-vats-targeting-v1", "Touch"),
+        ("touch-pipboy-size-v1", "Gameplay"),
+        ("touch-pipboy-tab-swipes", "Gameplay"),
+        ("hud-scale-v2", "Display"),
+        ("settings-menu-scale-v1", "Display"),
+        ("barter-menu-size-v1", "Display"),
+        ("repair-menu-size-v1", "Display"),
+        ("workbench-menu-size-v1", "Display"),
+        ("hud-health-size-v1", "Display"),
+        ("hud-action-points-size-v1", "Display"),
+        ("hud-compass-size-v1", "Display"),
+        ("mobile-performance", "Display"),
+        ("mobile-fps", "Display"),
+        ("mobile-resolution", "Display"),
+        ("mobile-thermal-auto", "Display"),
+        ("mobile-thermal-status", "Display"),
+    ];
+
+    // Test metadata only: the shared-reference case must check the selected file
+    // against every registered key, including its explicit Android rows.
+    pub(super) fn registered_rows() -> &'static [(&'static str, &'static str)] {
+        static ALL: std::sync::OnceLock<Vec<(&'static str, &'static str)>> = std::sync::OnceLock::new();
+        ALL.get_or_init(|| {
+            super::shared_table_tests::KNOWN
+                .iter()
+                .chain(ANDROID_ONLY_KNOWN)
+                .copied()
+                .collect()
+        })
+    }
+
+    fn row(key: &'static str, group: &'static str) -> Setting {
+        Setting { key, group, label: key, note: "", switches: "", get: |_| false, set: |_, _| {}, slider: None }
+    }
+
+    /// The registry as `Settings::add` orders it.
+    fn registry(rows: &[(&'static str, &'static str)]) -> Vec<Setting> {
+        let mut s = Settings::default();
+        for (k, g) in rows {
+            s.add(row(k, g));
+        }
+        s.list().to_vec()
+    }
+
+    /// A tab's lines, every category open, every line shown: `[Heading]`, keys, `@control`,
+    /// and "" for an empty line.
+    fn keys(list: &[Setting], l: &ResolvedLayout, tab: &str) -> Vec<String> {
+        lines(list, l, tab, |_| true)
+    }
+
+    fn lines(list: &[Setting], l: &ResolvedLayout, tab: &str, open: impl Fn(&Placement) -> bool) -> Vec<String> {
+        l.tab_entries(tab, None, |_| true, open)
+            .into_iter()
+            .map(|e| match e {
+                LayoutEntry::Heading(p) => format!("[{}]", p.heading.unwrap_or("")),
+                LayoutEntry::Setting(i) => list[i].key.to_string(),
+                LayoutEntry::Control(c) => format!("@{c}"),
+                LayoutEntry::Gap => String::new(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_table_names_each_key_once_in_one_of_the_tabs() {
+        assert_eq!(check(SECTIONS), Ok(()));
+        assert_eq!(check(ANDROID_SECTIONS), Ok(()));
+        let twice = [section("Gameplay", Some("A"), &["a"]), section("Debug", None, &["a"])];
+        assert!(check(&twice).unwrap_err().contains("placed twice"));
+        let odd = [section("Sound", None, &["a"])];
+        assert!(check(&odd).is_err());
+        let unasked = [section(NVF_FEATURES_TAB, Some("New"), &["a-big-change"])];
+        assert!(check(&unasked).unwrap_err().contains("owner named"), "NVF Features only by the owner's word");
+        let control = [section("Gameplay", Some("A"), &["controls:device"])];
+        assert!(check(&control).is_err());
+        let headless = [section("Gameplay", Some("A"), &["a"]), section("Gameplay", None, &["b"])];
+        assert!(check(&headless).is_err());
+        // Every row there is has its place in the table; the table names no other but the
+        // Controls tab's own rows and #1892's tweaks, each of those on the Tweaks tab.
+        let known = registered_rows();
+        let named: Vec<&str> = SECTIONS.iter().chain(ANDROID_SECTIONS).flat_map(|s| s.keys.iter().copied()).filter(|k| !k.starts_with(CONTROL_PREFIX)).collect();
+        for &(k, _) in known {
+            assert!(named.contains(&k), "{k} has no place");
+        }
+        for k in &named {
+            assert!(known.iter().any(|(n, _)| n == k) || is_tweak(k), "{k} is placed but no row has it");
+        }
+        for s in SECTIONS.iter().chain(ANDROID_SECTIONS) {
+            for k in s.keys.iter().filter(|k| k.starts_with(TWEAK_PREFIX)) {
+                assert_eq!(s.placement.tab, TWEAKS_TAB, "{k} is a tweak");
+            }
+        }
+    }
+
+    #[test]
+    fn the_tabs_come_first_with_every_row_once_in_the_tables_order() {
+        let list = registry(registered_rows());
+        let l = resolve_layout(&list);
+        assert_eq!(l.tab_names(), TAB_ORDER, "no group is a tab of its own: every row is named");
+        assert_eq!(l.unnamed(), 0);
+        let mut all: Vec<usize> = l.ordered_settings().collect();
+        assert_eq!(all.len(), list.len());
+        all.sort_unstable();
+        assert_eq!(all, (0..list.len()).collect::<Vec<_>>(), "each registered row once");
+        assert_eq!(keys(&list, &l, "Gameplay")[..16], ["[Game]", "difficulty", "difficulty-player-damage", "difficulty-npc-damage", "difficulty-kill-xp", "hardcore", "reload-slows", "UsePipBoy", "sound-cover", "npc-weapon-mods", "sneak-bounding-box", "", "[V.A.T.S.]", "vats-style", "vats-slowdown", "kill-camera"]);
+        assert_eq!(keys(&list, &l, "Audio"), ["[Volume]", "volume-master", "volume-music", "volume-footstep", "volume-voice", "volume-effects", "volume-radio", "", "[Sound]", "music", "voice", "reverb", "voice-reverb"]);
+        assert_eq!(keys(&list, &l, "Controls")[..6], ["[Input]", "@device", "button-style", "@automatic-input", "@rumble", ""]);
+        assert_eq!(
+            keys(&list, &l, NVF_FEATURES_TAB),
+            ["[Advanced Movement]", "advanced-movement", "movement-weight", "", "[Gameplay]", "movement-inertia", "weapon-handling", "advanced-recoil", "sprint", "", "[Visual Only]", "weapon-inertia", "animation-smoothing", "camera-motion", "", "[World Interaction]", "grass-fire", "", "[Quick Loot]", "quick-loot", "quick-loot-scale", "quick-loot-background", "quick-loot-weight", "quick-loot-value", "quick-loot-value-per-weight"]
+        );
+        assert_eq!(keys(&list, &l, "Debug"), ["overlay", "hit-markers", "god-mode", "navmesh", "terrain-wireframe", "scope-3d"]);
+        assert!(keys(&list, &l, "Tweaks").is_empty(), "an empty tab is still a tab");
+        let at = |k: &str| l.placement_of(list.iter().position(|s| s.key == k).unwrap()).unwrap().path();
+        assert_eq!(at("menu-pause"), "Gameplay > Dialogue");
+        assert_eq!(at("hud-red"), "Display > Colours");
+        assert_eq!(at("upscaler"), "Display > Upscaling and Anti-Aliasing");
+        assert_eq!(at("sky-clock"), "Graphics > World and Animation");
+        assert_eq!(at("grass-fire"), "NVF Features > World Interaction");
+        assert_eq!(at("quick-loot"), "NVF Features > Quick Loot");
+        assert_eq!(at("button-style"), "Controls > Input");
+        assert_eq!(at("terrain-anti-tiling"), "Graphics > Detail and Distance", "beside terrain height blending (#2551)");
+        assert_eq!(at("sound-cover"), "Gameplay > Game", "#2688");
+        assert_eq!(l.control_placement("bind:Jump").unwrap().path(), "Controls > Movement");
+        // The registry itself is left as it was: its order and each row's group.
+        let again = registry(registered_rows());
+        assert!(list.iter().zip(&again).all(|(a, b)| a.key == b.key && a.group == b.group && a.label == b.label && a.note == b.note));
+    }
+
+    #[test]
+    fn a_closed_category_keeps_its_heading_and_an_empty_line_follows_only_an_open_one() {
+        let list = registry(registered_rows());
+        let l = resolve_layout(&list);
+        let closed = |p: &Placement| p.heading != Some("V.A.T.S.") && p.heading != Some("Camera");
+        let g = lines(&list, &l, "Gameplay", closed);
+        assert_eq!(g[..15], ["[Game]", "difficulty", "difficulty-player-damage", "difficulty-npc-damage", "difficulty-kill-xp", "hardcore", "reload-slows", "UsePipBoy", "sound-cover", "npc-weapon-mods", "sneak-bounding-box", "", "[V.A.T.S.]", "[Camera]", "[Dialogue]"]);
+        let p = l.placement_of(list.iter().position(|s| s.key == "vats-style").unwrap()).unwrap();
+        assert_eq!(l.shown_count(&p, |_| true), 3);
+        assert_eq!(l.shown_count(&p, |i| i != LayoutItem::Setting(list.iter().position(|s| s.key == "vats-slowdown").unwrap())), 2);
+    }
+
+    #[test]
+    fn a_missing_row_and_an_empty_category_are_left_out() {
+        // No lip sync, no player body; no head tracking, foot IK or sky clock at all.
+        let list = registry(&[("difficulty", "Gameplay"), ("menu-pause", "Gameplay"), ("field-of-view", "Display"), ("god-mode", "Debug")]);
+        let l = resolve_layout(&list);
+        assert_eq!(keys(&list, &l, "Gameplay"), ["[Game]", "difficulty", "", "[Camera]", "field-of-view", "", "[Dialogue]", "menu-pause"]);
+        assert!(keys(&list, &l, "Graphics").is_empty());
+        // A hidden row hides its category when it is the only one, and keeps its place.
+        let hidden = list.iter().position(|s| s.key == "menu-pause").unwrap();
+        let shown = l.tab_entries("Gameplay", None, |i| i != LayoutItem::Setting(hidden), |_| true);
+        assert!(!shown.iter().any(|e| matches!(e, LayoutEntry::Heading(p) if p.heading == Some("Dialogue"))));
+        assert_ne!(shown.last(), Some(&LayoutEntry::Gap), "no empty line at the end");
+        assert_eq!(l.placement_of(hidden).unwrap().path(), "Gameplay > Dialogue");
+    }
+
+    #[test]
+    fn an_unnamed_row_stays_under_its_own_group() {
+        let list = registry(&[("difficulty", "Gameplay"), ("new-switch", "Gameplay"), ("odd-sound", "Sound"), ("x1", "Mods"), ("volume-master", "Sound"), ("x2", "Extras"), ("x3", "Mods")]);
+        let l = resolve_layout(&list);
+        // After Debug, in the order the groups first appear in the registry; Sound is not Audio.
+        assert_eq!(l.tab_names()[8..], ["Sound", "Mods", "Extras"]);
+        assert_eq!(keys(&list, &l, "Gameplay"), ["[Game]", "difficulty", "", "new-switch"]);
+        assert_eq!(keys(&list, &l, "Sound"), ["odd-sound"]);
+        assert_eq!(keys(&list, &l, "Audio"), ["[Volume]", "volume-master"]);
+        assert_eq!(keys(&list, &l, "Mods"), ["x1", "x3"]);
+        let new = list.iter().position(|s| s.key == "new-switch").unwrap();
+        assert_eq!(l.placement_of(new), Some(Placement::tab("Gameplay")));
+        assert_eq!(l.unnamed(), 5);
+    }
+
+    #[test]
+    fn hundreds_of_unnamed_tweaks_keep_the_registrys_order() {
+        // A tweak the table does not name yet: under Tweaks, in the order registered.
+        let names: Vec<&'static str> = (0..650)
+            .map(|i| {
+                let n: &'static str = Box::leak(format!("tweak-x{i:03}").into_boxed_str());
+                n
+            })
+            .collect();
+        let mut rows: Vec<(&'static str, &'static str)> = vec![("difficulty", "Gameplay")];
+        rows.extend(names.iter().map(|n| (*n, "Tweaks")));
+        rows.push(("god-mode", "Debug"));
+        let list = registry(&rows);
+        let l = resolve_layout(&list);
+        assert_eq!(l.tab_names(), TAB_ORDER);
+        let shown = keys(&list, &l, "Tweaks");
+        assert_eq!(shown.len(), 650, "no heading: all in one run");
+        assert!(shown.iter().zip(&names).all(|(a, b)| a == b), "in the order registered");
+        assert_eq!(l.ordered_settings().count(), list.len());
+        assert_eq!(l.unnamed(), 0, "the Tweaks tab's rows are listed by design, not counted as left out of the table");
+    }
+
+    #[test]
+    fn every_tweak_of_1892_has_its_group_and_category() {
+        let tweaks = tweak_rows();
+        let expected_tweaks = TWEAK_ROWS.split_whitespace().count();
+        let placed_tweaks = SECTIONS
+            .iter()
+            .flat_map(|s| s.keys.iter())
+            .filter(|k| k.starts_with(TWEAK_PREFIX))
+            .count();
+        let unique_tweaks: std::collections::HashSet<&str> = tweaks.iter().map(|(k, _)| *k).collect();
+        assert_eq!(unique_tweaks.len(), tweaks.len(), "duplicate tweak key in TWEAK_ROWS");
+        assert_eq!(tweaks.len(), expected_tweaks);
+        assert_eq!(tweaks.len(), placed_tweaks, "TWEAK_ROWS must match tweaks placed in SECTIONS");
+        assert!(tweaks.len() >= 575);
+        let mut rows: Vec<(&'static str, &'static str)> = registered_rows().to_vec();
+        rows.extend(&tweaks);
+        let list = registry(&rows);
+        let l = resolve_layout(&list);
+        assert_eq!(l.unnamed(), 0, "every tweak named");
+        assert_eq!(l.tab_names(), TAB_ORDER);
+        let t = l.tab(TWEAKS_TAB).unwrap();
+        for s in &t.sections {
+            assert!(s.placement.subgroup.is_some() && s.placement.heading.is_some(), "{}: a group and a heading", s.placement.path());
+            assert!(s.placement.closed_by_default());
+        }
+        assert_eq!(t.sections.iter().map(|s| s.rows.len()).sum::<usize>(), tweaks.len(), "the tweaks, and only they, on the tab");
+        let at = |k: &str| l.placement_of(list.iter().position(|s| s.key == k).unwrap()).unwrap().path();
+        assert_eq!(at("tweak-no-xp-messages"), "Tweaks > HUD > Messages");
+        assert_eq!(at("tweak-weightless-ammo"), "Tweaks > Cheats > Weight");
+        assert_eq!(at("tweak-weightless-worn-armor"), "Tweaks > Gameplay > Weight");
+        // A row that only matters with another comes right after it.
+        let next = |k: &str| list[l.ordered_settings().skip_while(|&i| list[i].key != k).nth(1).unwrap()].key;
+        assert_eq!(next("tweak-take-all-confirm"), "tweak-take-all-confirm-min");
+        assert_eq!(next("tweak-revive-companions"), "tweak-revive-down-seconds");
+        // The engine's own tabs are as they were.
+        assert_eq!(keys(&list, &l, "Audio"), keys(&registry(registered_rows()), &resolve_layout(&registry(registered_rows())), "Audio"));
+    }
+
+    #[test]
+    fn the_tweaks_tab_lists_stewies_eight_groups_in_order_one_at_a_time() {
+        let list = registry(&tweak_rows());
+        let l = resolve_layout(&list);
+        let t = l.tab(TWEAKS_TAB).unwrap();
+        assert_eq!(t.subgroups(), TWEAK_GROUPS);
+        // Each group's categories together, in the table's order.
+        let mut runs: Vec<&str> = t.sections.iter().filter_map(|s| s.placement.subgroup).collect();
+        runs.dedup();
+        assert_eq!(runs, TWEAK_GROUPS, "no group split by another");
+        // One group at a time, its categories closed: only their headings.
+        let hotkeys = l.tab_entries(TWEAKS_TAB, Some("Hotkeys"), |_| true, |_| false);
+        let headings: Vec<&str> = hotkeys.iter().filter_map(|e| if let LayoutEntry::Heading(p) = e { p.heading } else { None }).collect();
+        assert_eq!(headings, ["Hide HUD Key", "Other Keys"]);
+        assert_eq!(hotkeys.len(), 2, "closed: no rows, no empty line");
+        // No other tab has a group.
+        assert!(l.tabs.iter().filter(|t| t.name != TWEAKS_TAB).all(|t| t.subgroups().is_empty()));
+        // A tweak the table does not place yet: under the last group, Other, never out of sight.
+        let mut rows = tweak_rows();
+        rows.push(("tweak-new-one", "Tweaks"));
+        let list = registry(&rows);
+        let l = resolve_layout(&list);
+        let t = l.tab(TWEAKS_TAB).unwrap();
+        assert_eq!(t.subgroups().last(), Some(&UNGROUPED));
+        let other = l.tab_entries(TWEAKS_TAB, Some(UNGROUPED), |_| true, |_| true);
+        assert_eq!(other, [LayoutEntry::Setting(list.iter().position(|s| s.key == "tweak-new-one").unwrap())]);
+        assert!(l.tab_entries(TWEAKS_TAB, Some("Hotkeys"), |_| true, |_| true).iter().all(|e| *e != other[0]));
+    }
+    fn mobile_visibility(list: &[Setting]) -> crate::settings_view::Visibility {
+        let hidden = ["touch-pipboy-dismiss-left", "touch-pipboy-dismiss-right"].into_iter()
+            .filter_map(|key| Some((list.iter().position(|r| r.key == key)?,
+                list.iter().position(|r| r.key == "touch-pipboy-dismiss-side-v2")?))).collect();
+        crate::settings_view::Visibility { hidden, ..Default::default() }
+    }
+
+    #[test]
+    fn android_groups_the_same_registered_rows_once_without_changing_the_registry() {
+        let known = registered_rows();
+        let list = registry(known);
+        let before: Vec<_> = list.iter().map(|s| (s.key, s.group, s.label, s.note)).collect();
+        let mobile = resolve_mobile_layout(&list);
+        assert_eq!(mobile.tab_names(), MOBILE_TAB_ORDER);
+        assert_eq!(mobile.unnamed(), 0);
+        let mut indices: Vec<_> = mobile.ordered_settings().collect();
+        assert_eq!(indices.len(), known.len());
+        indices.sort_unstable();
+        assert_eq!(indices, (0..list.len()).collect::<Vec<_>>());
+        let mut mobile_keys = std::collections::HashSet::new();
+        for section in MOBILE_SECTIONS {
+            for &key in section.keys {
+                assert!(mobile_keys.insert(key), "duplicate Android placement: {key}");
+                assert!(SECTIONS.iter().chain(ANDROID_SECTIONS).any(|s| s.keys.contains(&key)), "new or misspelled key: {key}");
+                let index = list.iter().position(|s| s.key == key).unwrap();
+                assert_eq!(mobile.placement_of(index), Some(section.placement));
+            }
+        }
+        assert!(!mobile_keys.contains("physics-rate"), "upstream screen setting is shared, not mobile-only");
+        let grass_fire = list.iter().position(|row| row.key == "grass-fire").unwrap();
+        assert_eq!(mobile.placement_of(grass_fire).unwrap().path(), "NVF Features > World Interaction");
+        assert!(!mobile_keys.contains("grass-fire"), "upstream world setting is shared, not mobile-only");
+        let fallback = resolve_layout(&list);
+        for (index, row) in list.iter().enumerate() {
+            if !mobile_keys.contains(row.key) {
+                assert_eq!(mobile.placement_of(index), fallback.placement_of(index));
+            }
+        }
+        assert_eq!(before, list.iter().map(|s| (s.key, s.group, s.label, s.note)).collect::<Vec<_>>());
+        assert_eq!(resolve_desktop_layout(&list).tab_names()[..8], DESKTOP_TAB_ORDER);
+    }
+
+    #[test]
+    fn android_mobile_sections_use_existing_visibility_search_and_hardware_routes() {
+        use crate::bindings::{Control, InputDevice};
+        use crate::settings_view::{self as view, ControlRow, Found, RowId, SettingsScope, ViewEntry, Visibility};
+        let list = registry(registered_rows());
+        let mobile = resolve_mobile_layout(&list);
+        let at = |key| list.iter().position(|s| s.key == key).unwrap();
+        let empty = Found::default();
+        let touch = view::project(&mobile, &list, SettingsScope::Tab(MOBILE_TAB), &mobile_visibility(&list), &empty, &view::Folding::default());
+        let keyboard_controls = view::project(&mobile, &list, SettingsScope::Tab(CONTROLS_TAB), &mobile_visibility(&list), &empty, &view::Folding::default());
+        let pad = view::project(&mobile, &list, SettingsScope::Tab(CONTROLS_TAB), &Visibility { device: InputDevice::Controller, ..mobile_visibility(&list) }, &empty, &view::Folding::default());
+        assert!(!keyboard_controls.iter().any(|e| matches!(e, ViewEntry::Heading(p) if p.heading == Some("Controller"))));
+        assert!(pad.iter().any(|e| matches!(e, ViewEntry::Heading(p) if p.heading == Some("Controller"))));
+        for &key in &CONTROLLER_KEYS {
+            let entry = ViewEntry::Row(RowId::Setting(at(key)));
+            assert!(!keyboard_controls.contains(&entry));
+            assert!(pad.contains(&entry));
+        }
+        let controls = view::project(&mobile, &list, SettingsScope::Tab(CONTROLS_TAB), &Visibility { device: InputDevice::Controller, ..mobile_visibility(&list) }, &empty, &view::Folding::default());
+        assert!(controls.contains(&ViewEntry::Row(RowId::Control(ControlRow::Binding(Control::Jump, InputDevice::Controller)))));
+        let search = Found { search: view::search(&mobile, &list, "controller-ads-v1", |r| r.name()), changed: Vec::new() };
+        let projected = view::project(&mobile, &list, SettingsScope::Search, &mobile_visibility(&list), &search, &view::Folding::default());
+        assert!(projected.contains(&ViewEntry::Row(RowId::Control(ControlRow::Device))), "hidden pad setting keeps native device-switch route");
+        assert!(!projected.contains(&ViewEntry::Row(RowId::Setting(at("controller-ads-v1")))));
+        let (scope, selected, _) = view::normalize(&mobile, &list, SettingsScope::Tab(CONTROLS_TAB), Some(RowId::Setting(at("controller-ads-v1"))), &mobile_visibility(&list), &empty, &view::Folding::default());
+        assert_eq!((scope, selected), (SettingsScope::Tab(CONTROLS_TAB), Some(RowId::Control(ControlRow::Device))));
+        for (key, heading) in [
+            ("touch-vats-targeting-v1", "Movement and gestures"),
+            ("touch-practice-v1", "Touch layout and guide"), ("touch-gyro-v1", "Gyroscope"),
+            ("touch-hotbar", "Inventory and quick access"), ("touch-dialogue", "Dialogue"),
+            ("menu-scale", "Interface size"), ("settings-menu-scale-v1", "Interface size"),
+            ("mobile-performance", "Mobile performance"),
+        ] {
+            assert!(touch.contains(&ViewEntry::Row(RowId::Setting(at(key)))));
+            assert_eq!(mobile.placement_of(at(key)).unwrap().heading, Some(heading));
+        }
+        assert_eq!(mobile.placement_of(at("mobile-performance")).unwrap().path(), "Mobile > Mobile performance");
+        let chooser = RowId::Setting(at("touch-pipboy-dismiss-side-v2"));
+        assert!(touch.contains(&ViewEntry::Row(chooser)));
+        assert!(touch.contains(&ViewEntry::Row(RowId::Setting(at("touch-pipboy-dismiss-travel-v1")))));
+        for key in ["touch-pipboy-dismiss-left", "touch-pipboy-dismiss-right"] {
+            let legacy = RowId::Setting(at(key));
+            assert!(!touch.contains(&ViewEntry::Row(legacy)));
+            assert_eq!(view::parent_of(&list, at(key), &mobile_visibility(&list)), Some(chooser));
+            let found = Found { search: view::search(&mobile, &list, key, |r| r.name()), changed: Vec::new() };
+            let result = view::project(&mobile, &list, SettingsScope::Search, &mobile_visibility(&list), &found, &view::Folding::default());
+            assert!(result.contains(&ViewEntry::Row(chooser)));
+            assert!(!result.contains(&ViewEntry::Row(legacy)));
+        }
+        assert!(view::rail(&mobile).contains(&view::RailItem::Tab(MOBILE_TAB)));
+        assert_eq!(view::step_selectable(&touch, Some(RowId::Setting(at("touch-practice-v1"))), 1),
+            Some(RowId::Setting(at("touch-icon-family"))));
+    }
+
+    #[test]
+    fn mobile_row_identity_still_edits_the_registered_state_and_changed_list() {
+        use bevy::prelude::*;
+        use crate::settings::{self, SettingsFile};
+        use crate::settings_view::{self as view, Found, RowId, SettingsScope};
+        #[derive(Resource, Default)]
+        struct Consent(bool);
+        let mut app = App::new();
+        app.init_resource::<Consent>().insert_resource(SettingsFile(None));
+        for &(key, group) in registered_rows() {
+            let mut setting = row(key, group);
+            if key == "mobile-thermal-auto" {
+                setting.get = |world| world.resource::<Consent>().0;
+                setting.set = |world, on| world.resource_mut::<Consent>().0 = on;
+            }
+            settings::add_setting(&mut app, setting);
+        }
+        let list = app.world().resource::<Settings>().list().to_vec();
+        let baseline = app.world().resource::<Settings>().values(app.world());
+        let mobile = resolve_mobile_layout(&list);
+        assert_eq!(app.world().resource::<Settings>().values(app.world()), baseline);
+        let original_index = app.world().resource::<Settings>().index("mobile-thermal-auto").unwrap();
+        let id = RowId::Setting(original_index);
+        let (scope, chosen, _) = view::normalize(&mobile, &list, SettingsScope::Tab("Display"), Some(id), &mobile_visibility(&list), &Found::default(), &view::Folding::default());
+        assert_eq!((scope, chosen), (SettingsScope::Tab(MOBILE_TAB), Some(id)));
+        assert_eq!(settings::flip(app.world_mut(), original_index), Some(true));
+        assert!(app.world().resource::<Consent>().0);
+        let changed = settings::changed_rows(app.world(), &baseline);
+        assert_eq!(changed, [original_index]);
+        assert_eq!(view::changed(&mobile, &changed, |_| false), [id]);
+        let found = view::search(&mobile, &list, "mobile-thermal-auto", |r| r.name());
+        assert_eq!(found, [id]);
+        assert_eq!(view::listing(&mobile, &found)[0], view::ViewEntry::Crumb(Placement {
+            tab: MOBILE_TAB, subgroup: None, heading: Some("Mobile performance"),
+        }));
+        assert_eq!(app.world().resource::<Settings>().list().iter().map(|s| (s.key, s.group)).collect::<Vec<_>>(),
+            list.iter().map(|s| (s.key, s.group)).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn platform_profile_and_missing_optional_mobile_rows_keep_the_shared_page() {
+        let list = registry(&[("difficulty", "Gameplay"), ("touch-gyro-v1", "Controller"), ("odd", "Mods")]);
+        let expected = if cfg!(target_os = "android") {
+            resolve_mobile_layout(&list)
+        } else {
+            resolve_desktop_layout(&list)
+        };
+        assert_eq!(super::resolve_layout(&list), expected);
+        let mobile = resolve_mobile_layout(&list);
+        assert_eq!(keys(&list, &mobile, MOBILE_TAB), ["[Gyroscope]", "touch-gyro-v1"]);
+        assert_eq!(mobile.tab_names().last(), Some(&"Mods"));
+        assert_eq!(mobile.unnamed(), 1);
+        assert!(mobile.tab_entries(MOBILE_TAB, None, |_| false, |_| true).is_empty(), "no orphan headings");
+    }
+
 }

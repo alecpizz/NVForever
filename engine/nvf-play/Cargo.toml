@@ -46,10 +46,18 @@ rodio = { version = "0.22", default-features = false, features = ["mp3", "vorbis
 # Save thumbnails (save.rs): PNG encoded and decoded directly, the version Bevy's images
 # already build (no second copy).
 png = "0.18"
+# Photo mode names its pictures by the local date and time (photo_mode.rs); the version
+# fnv-game already builds (docs/design/dependencies.md), no second copy.
+jiff = "1"
 
 [features]
+# nvforever's `dev-aids`: the developer aids kept out of release builds
+# (`NVF_PLAY_TEST_SHOT_DIFF`, src/test_aid.rs).
+dev-aids = []
 # [design, #2403] Synthetic private-screen fixtures for cross-crate reports tests only.
 report-test-support = []
+# Module-owned authored script inputs for cross-crate menu router controls only.
+test-fixtures = []
 default = ["intro-video"]
 # [design, #2652] Synthetic runtime fixtures for downstream engine tests.
 test-support = []

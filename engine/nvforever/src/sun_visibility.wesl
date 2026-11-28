@@ -13,6 +13,12 @@
 // control flow (per-fragment branches here, and callers such as nif_material.wesl
 // `with_shade_light`).
 
+// The cloud shadows from the volumetric clouds' light volume (#3032 stage 2i M2): the shared
+// reader of its completed fronts (light_volume_reader.wesl; its header is the contract), only
+// with NVF_CLOUD_VOLUME, which the pipelines have exactly when the mesh view layout holds
+// bindings 45-46 (without it, the weather-only layout of a small adapter, K is the weather's).
+@if(NVF_CLOUD_VOLUME) import nvforever::light_volume_reader::{LightVolumeWindow, lvr_optical_depth};
+
 // Bevy world axes throughout (y up); positions and heights in game units.
 struct NvfSunVisibility {
     // World xz to cloud texture uv: xy scale, zw offset (uv = hit.xz * scale + offset).
@@ -25,9 +31,18 @@ struct NvfSunVisibility {
     terrain_uv: vec4<f32>,
     // x, y: unused (0); z: the map's texel size (world units); w: its side (texels).
     terrain: vec4<f32>,
-    // x: feature mask (1 cloud, 2 terrain); y: debug view (0 off, 1 cloud K, 2 terrain T,
+    // x: feature mask (1 cloud, 2 terrain, 4 cloud from the light volume, 8 the volume alone:
+    // no weather layers where it has no data, 16 / 32 the debug views of the reader's covered share
+    // / depth over 8 in place of K); y: debug view (0 off, 1 cloud K, 2 terrain T,
     // 3 combined V).
     mode: vec4<u32>,
+    // The cloud from the light volume (mask bit 4): x its strength (the weather's, the same
+    // setting), y, z the sine of the light's elevation from which its shadow starts and at which
+    // it is whole; w unused.
+    @if(NVF_CLOUD_VOLUME) volume: vec4<f32>,
+    // The light volume's fronts as this frame reads them (light_volume_reader.wesl); the CPU
+    // writes both in either variant, the weather-only one leaves them out of its view.
+    @if(NVF_CLOUD_VOLUME) light_volume: LightVolumeWindow,
 }
 
 @group(0) @binding(39) var<uniform> nvf_sun: NvfSunVisibility;
@@ -38,20 +53,25 @@ struct NvfSunVisibility {
 // units). Unfilterable: read with textureLoad only, never with the sampler.
 @group(0) @binding(41) var nvf_terrain_texture: texture_2d<f32>;
 @group(0) @binding(42) var nvf_sun_visibility_sampler: sampler;
+// The light volume's near and far front sets (R16Float arrays: the optical depth toward the
+// light), sampled with binding 42 inside their windows only (the sampler's repeat never reached);
+// stand-ins, never read, while mask bit 4 is clear or a level is absent.
+@if(NVF_CLOUD_VOLUME) @group(0) @binding(45) var nvf_light_near: texture_2d_array<f32>;
+@if(NVF_CLOUD_VOLUME) @group(0) @binding(46) var nvf_light_far: texture_2d_array<f32>;
 
 // The debug view asked for (NVF_PLAY_DEBUG_SUN_VISIBILITY), 0 when off.
 fn nvf_sun_debug_mode() -> u32 {
     return nvf_sun.mode.y;
 }
 
-// K: the share of the sun's light the clouds let through to a receiver at P, the light
-// coming from L (unit, towards the light). The ray from P along L meets the cloud plane
-// at height cloud.x; the transmittance there, weakened by the strength, is K. A receiver
-// at or above the plane, or a light too low (its elevation's sine at most cloud.z), has
-// no cloud shadow; between cloud.z and cloud.w the shadow fades in, so the hit point does
-// not run off to infinity at the horizon [engineering choice].
+// K from the weather's layers: the share of the sun's light the clouds let through to a
+// receiver at P, the light coming from L (unit, towards the light). The ray from P along L
+// meets the cloud plane at height cloud.x; the transmittance there, weakened by the strength,
+// is K. A receiver at or above the plane, or a light too low (its elevation's sine at most
+// cloud.z), has no cloud shadow; between cloud.z and cloud.w the shadow fades in, so the hit
+// point does not run off to infinity at the horizon [engineering choice].
 @if(NVF_CLOUD_VISIBILITY)
-fn nvf_cloud_transmittance(P: vec3<f32>, L: vec3<f32>) -> f32 {
+fn nvf_cloud_weather(P: vec3<f32>, L: vec3<f32>) -> f32 {
     let height = nvf_sun.cloud.x;
     let up = L.y;
     if up <= nvf_sun.cloud.z || P.y >= height {
@@ -62,6 +82,51 @@ fn nvf_cloud_transmittance(P: vec3<f32>, L: vec3<f32>) -> f32 {
     let transmittance = textureSampleLevel(nvf_cloud_texture, nvf_sun_visibility_sampler, uv, 0.0).r;
     let k = saturate(1.0 - nvf_sun.cloud.y * (1.0 - transmittance));
     return mix(1.0, k, smoothstep(nvf_sun.cloud.z, nvf_sun.cloud.w, up));
+}
+
+// K (#3032 stage 2i M2): with mask bit 4 clear, the weather's layers exactly as before. With it,
+// from the volumetric clouds' light volume where it has data: the transmittance exp(-depth) of
+// the optical depth toward the light at P (light_volume_reader.wesl: a receiver under the slab
+// floor is projected along L to it, one above it read at its own height), weakened by the same
+// strength and faded in over the same low-sun band as the weather's; where the reader covers P
+// only in part (a window's guard band, a level fading in) mixed over the weather's K by the
+// covered share, and where it has no data the weather's K (with mask bit 8: no shadow instead).
+@if(NVF_CLOUD_VISIBILITY && NVF_CLOUD_VOLUME)
+fn nvf_cloud_transmittance(P: vec3<f32>, L: vec3<f32>) -> f32 {
+    if (nvf_sun.mode.x & 4u) == 0u {
+        return nvf_cloud_weather(P, L);
+    }
+    let only = (nvf_sun.mode.x & 8u) != 0u;
+    let up = L.y;
+    let r = lvr_optical_depth(nvf_light_near, nvf_light_far, nvf_sun_visibility_sampler, nvf_sun.light_volume, P, L);
+    // The debug views (NVF_PLAY_DEBUG_CLOUD_SHADOWS_SOURCE=share|depth): the covered share, the
+    // depth over 8, in place of K.
+    if (nvf_sun.mode.x & 16u) != 0u {
+        return r.y;
+    }
+    if (nvf_sun.mode.x & 32u) != 0u {
+        return select(0.0, saturate(r.x / 8.0), r.y > 0.0);
+    }
+    if up <= nvf_sun.volume.y {
+        return 1.0;
+    }
+    var other = 1.0;
+    if r.y < 1.0 && !only {
+        other = nvf_cloud_weather(P, L);
+    }
+    if r.y <= 0.0 {
+        return other;
+    }
+    let k = saturate(1.0 - nvf_sun.volume.x * (1.0 - exp(-r.x)));
+    let faded = mix(1.0, k, smoothstep(nvf_sun.volume.y, nvf_sun.volume.z, up));
+    return mix(other, faded, r.y);
+}
+
+// K without bindings 45-46 (the weather-only layout): the weather's layers (the CPU never sets
+// mask bit 4 then).
+@if(NVF_CLOUD_VISIBILITY && !NVF_CLOUD_VOLUME)
+fn nvf_cloud_transmittance(P: vec3<f32>, L: vec3<f32>) -> f32 {
+    return nvf_cloud_weather(P, L);
 }
 
 @if(!NVF_CLOUD_VISIBILITY)

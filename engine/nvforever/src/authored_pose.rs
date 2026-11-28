@@ -32,6 +32,16 @@ use nvf_assets::actor::PreparedSkeleton;
 
 pub use fnv_world::xrgd::{parse, Bone};
 
+/// The root body of the skeleton the reading above was checked on (the human one). A
+/// stored pose on a skeleton with another root body is used as the corpse's starting pose
+/// only: it settles from there (`deaths.rs`, #3408). The Capital Wasteland's dead brahmin
+/// at Arefu (TTW, `DeadBrahmin` 0x0001D3CD on `creatures\brahmin`, root body `Bip01
+/// Spine0`) read so hung in the air upside down, and the Mojave's lay 51 units under the
+/// ground [observed 2026-11-25]: the thighs' and the tail's entries do not match their
+/// bind translations under their parent node (the thighs' turned 90° about x), as the
+/// human entries all do, so the reading does not hold for that skeleton [observed].
+pub const CHECKED_ROOT: &str = "Bip01 NonAccum";
+
 /// A reference-style rotation as a matrix (`v' = M v`).
 pub fn rotation(angles: [f32; 3]) -> Mat3 {
     Mat3::from_cols_array(&fnv_world::transform::ref_rotation(angles)).transpose()

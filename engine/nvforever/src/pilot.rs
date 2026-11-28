@@ -165,6 +165,13 @@
 //!   player starts [`WALK_TAIL`] units before the end of the path's last stretch out of
 //!   doors (a stand-in for fast travel, logged). What lies indoors after that, and every
 //!   door on the way, is walked: no interior is skipped into.
+//! - **A gap no navmesh link joins inside one interior is stepped across** when the two
+//!   walkable areas lie within [`STEP_ACROSS`] units of each other on the ground and
+//!   [`STEP_RISE`] in height: the player walks to the near end and then straight over on
+//!   its own movement, checked to arrive within [`STEP_ACROSS_SECS`] (else `unreachable`).
+//!   SSHQ01's prize room is a navmesh of its own whose stair top lies 17 to 31 units from
+//!   the main one [observed, #3473]; the original's followers do not cross there (observer
+//!   check 279), a player walks the stairs.
 //! - **A conversation is left as a player leaves it** [owner, 2026-11-13; #2157: a
 //!   Goodbye line holds the player until it is said, and a player walking off mid-line
 //!   broke result scripts]. The pilot never breaks a conversation off (it did, with
@@ -625,6 +632,12 @@ struct Walk {
     hold: bool,
     /// Put back once where a path was last found (`Pilot::walked_from`).
     stranded: bool,
+    /// A step from one walkable area of an interior onto another that no navmesh link
+    /// joins, as a player walks it (SSHQ01's stairs, #3473): the walk to its near end,
+    /// then straight across.
+    step: Option<StepAcross>,
+    /// Steps across taken on this walk ([`STEPS_ACROSS`] at most).
+    steps: u8,
     /// The locked door whose owner the player keeps by, while it does.
     owner_door: Option<u32>,
     /// When the walk last said where the player is on its path (every [`WALK_REPORT_SECS`]).
@@ -789,6 +802,8 @@ struct Pilot {
     /// Where the player last stood when a path was found from there: put back there when
     /// it ends up on a scrap of navmesh that leads nowhere (`Walk::stranded`).
     walked_from: Option<Place>,
+    /// What steps left to the AI still owe ([`AiDue`]): checked every frame.
+    ai_due: Vec<AiDue>,
     /// For a `package` step gone along with: the space the player stood in on the last
     /// frame, and the actors' space a script moved the player out of while it stood
     /// beside them (MQ08's capture fades out and wakes the player in Raven Rock).
@@ -891,6 +906,7 @@ impl Pilot {
             mark: 0,
             step_lines: 0,
             walked_from: None,
+            ai_due: Vec::new(),
             pkg_was_in: None,
             scene_left: None,
             still: (0.0, [0.0; 3]),
@@ -1206,6 +1222,82 @@ impl Hands<'_, '_> {
     }
 }
 
+/// A step across a gap between two walkable areas of one interior ([`Walk::step`]).
+struct StepAcross {
+    /// The near end, on the outline of the player's area, and the far end, on the goal's.
+    from: [f32; 3],
+    to: [f32; 3],
+    /// The walkable area `to` lies on: the step is over when the player stands on it.
+    area: u32,
+    /// The walk to `from`.
+    walk: Box<Walk>,
+    /// Since when the player walks straight from `from` to `to`.
+    since: Option<f64>,
+}
+
+/// How far apart two walkable areas of one interior may lie, on the ground and in height,
+/// for the player to step from one onto the other where no navmesh link joins them. SSHQ01's
+/// stair tops: 17 to 31 units across, 31 in height [observed, #3497]. A player's step
+/// is not measured here [hypothesis: the physics' own step-up decides, which is why the
+/// step is walked and checked, not put].
+const STEP_ACROSS: f32 = 48.0;
+const STEP_RISE: f32 = 48.0;
+/// Seconds the player has to get from the near end of a step across to the far end.
+const STEP_ACROSS_SECS: f64 = 6.0;
+/// Steps across on one walk, at most: a third would be the same gap again.
+const STEPS_ACROSS: u8 = 2;
+
+/// A step the headless run carries out and the pilot leaves to the AI, checked afterwards
+/// (#2365: `patrol_point` and an actor entering a trigger succeeded at once and nothing
+/// looked whether the actor did it; #2445 Chauncey, #2451 Veronica and #2433 Orris broke
+/// there). Kept until the actor is there, or a `ai_not_done` finding after [`AI_DUE_SECS`]
+/// or at the chain's end.
+struct AiDue {
+    /// The step that left it to the AI.
+    step: usize,
+    actor: FormId,
+    /// The reference the actor has to reach (a patrol point, a trigger).
+    at: FormId,
+    /// How near counts, game units.
+    within: f32,
+    what: String,
+    since: f64,
+}
+
+/// How long the AI has to do what a step left to it, seconds of the pilot's clock.
+const AI_DUE_SECS: f64 = 180.0;
+/// How near a patrol point an actor counts as having reached it, and a trigger's
+/// reference as having entered it [hypothesis: a trigger's box is not read here; most of
+/// the chains' triggers are smaller than this].
+const AI_DUE_NEAR: f32 = 256.0;
+
+/// Check what the AI still owes: say each that is done, and give up on each overdue one.
+fn check_ai_due(p: &mut Pilot, h: &mut Hands, chain_over: bool) {
+    if p.ai_due.is_empty() {
+        return;
+    }
+    let world = h.world;
+    let due = std::mem::take(&mut p.ai_due);
+    for d in due {
+        let near = h
+            .game(|g| {
+                let (ca, a) = where_is(g, d.actor)?;
+                let (cb, b) = where_is(g, d.at)?;
+                Some(same_space(world, ca, cb) && hdist(a, b) <= d.within && (a[2] - b[2]).abs() < 256.0)
+            })
+            .flatten()
+            .unwrap_or(false);
+        if near {
+            info!("pilot: step {}: the AI did what step {} left to it: {} ({:.0} s later)", p.i, d.step, d.what, p.now - d.since);
+        } else if chain_over || p.now - d.since > AI_DUE_SECS {
+            let why = if chain_over { "the chain ended first".to_string() } else { format!("not within {AI_DUE_SECS:.0} s") };
+            p.finding("ai_not_done", format!("step {} left to the AI: {}, {why}", d.step, d.what));
+        } else {
+            p.ai_due.push(d);
+        }
+    }
+}
+
 enum Walked {
     Going,
     There,
@@ -1281,6 +1373,48 @@ fn walk(p: &mut Pilot, w: &mut Walk, h: &mut Hands) -> Walked {
         }
         (w.follower, w.door_since, w.seen) = (None, None, (p.now, feet));
         return Walked::Going;
+    }
+    // A step across a gap no navmesh link joins: to its near end, then straight over, as a
+    // player walks up SSHQ01's stairs. Not put: the player's own physics has to take it.
+    if let Some(mut st) = w.step.take() {
+        match st.since {
+            None => match walk(p, &mut st.walk, h) {
+                Walked::Going => {
+                    w.step = Some(st);
+                    w.seen = (p.now, feet);
+                    return Walked::Going;
+                }
+                Walked::No(why) => return Walked::No(why),
+                Walked::There | Walked::Put => {
+                    info!("pilot: step {}: steps across from ({:.0}, {:.0}, {:.0}) to ({:.0}, {:.0}, {:.0}), where no navmesh link joins the two, as a player walks it", p.i, st.from[0], st.from[1], st.from[2], st.to[0], st.to[1], st.to[2]);
+                    st.since = Some(p.now);
+                    w.step = Some(st);
+                    w.seen = (p.now, feet);
+                    return Walked::Going;
+                }
+            },
+            Some(since) => {
+                let on_it = h.nav.and_then(|nav| nav.graph.locate(here.space, feet, 24.0).map(|t| nav.graph.area[t as usize])) == Some(st.area);
+                if on_it && hdist(feet, st.to) < 32.0 {
+                    info!("pilot: step {}: stepped across in {:.1} s, at ({:.0}, {:.0}, {:.0})", p.i, p.now - since, feet[0], feet[1], feet[2]);
+                    (w.follower, w.door_since, w.seen) = (None, None, (p.now, feet));
+                    return Walked::Going;
+                }
+                if p.now - since > STEP_ACROSS_SECS {
+                    let why = format!("could not step across from ({:.0}, {:.0}, {:.0}) to ({:.0}, {:.0}, {:.0}) in {STEP_ACROSS_SECS:.0} s, where no navmesh link joins the two (stopped at ({:.0}, {:.0}, {:.0})): a player could not get there; the player stays where it is", st.from[0], st.from[1], st.from[2], st.to[0], st.to[1], st.to[2], feet[0], feet[1], feet[2]);
+                    p.finding("unreachable", why.clone());
+                    return Walked::No(why);
+                }
+                let want = heading_of([st.to[0] - feet[0], st.to[1] - feet[1]]);
+                h.player.heading = turn_towards(h.player.heading, want, TURN_RATE * h.dt);
+                h.player.pitch = turn_towards(h.player.pitch, 0.0, TURN_RATE * h.dt);
+                let on = heading_delta(h.player.heading, want).abs() < 0.7;
+                (h.intent.forward, h.intent.right, h.intent.walk) = (if on { 1.0 } else { 0.0 }, 0.0, h.control.sneak);
+                w.step = Some(st);
+                w.seen = (p.now, feet);
+                return Walked::Going;
+            }
+        }
     }
     // The actor walked to has come and is talking to the player: the player is with it.
     let talker = h.game(|g| g.dialogue.as_ref().map(|c| c.actor)).flatten();
@@ -1574,6 +1708,22 @@ fn walk(p: &mut Pilot, w: &mut Walk, h: &mut Hands) -> Walked {
                             (h.intent.forward, h.intent.right) = (0.0, 0.0);
                             w.seen = (p.now, feet);
                             return Walked::Going;
+                        }
+                        // Two walkable areas of one interior that no navmesh link joins, lying
+                        // close: the player steps across, as it walks up stairs (SSHQ01's prize
+                        // room, #3473: the original's followers do not cross there, observer
+                        // check 279; the room is the player's alone).
+                        if here.space == w.goal.space && matches!(here.space, Space::Interior(_)) && w.steps < STEPS_ACROSS && w.tried.is_empty() && matches!(e, fnv_nav::PathError::Unreachable { .. }) {
+                            let area = |at: [f32; 3]| nav.graph.locate(here.space, at, 96.0).or_else(|| nav.graph.nearest(here.space, at, GOAL_SNAP).map(|(t, _)| t)).map(|t| nav.graph.area[t as usize]);
+                            if let (Some(mine), Some(theirs)) = (area(feet), area(w.goal.pos)) {
+                                if let Some((from, to)) = nav.graph.step_between(here.space, mine, theirs, STEP_ACROSS, STEP_RISE) {
+                                    w.steps += 1;
+                                    info!("pilot: step {}: no navmesh link joins the player's part of {:?} with the goal's: steps across where they lie close, ({:.0}, {:.0}, {:.0}) to ({:.0}, {:.0}, {:.0})", p.i, here.space, from[0], from[1], from[2], to[0], to[1], to[2]);
+                                    w.step = Some(StepAcross { from, to, area: theirs, walk: Box::new(walk_to(Place { space: here.space, pos: from }, None, 24.0, p.now, feet)), since: None });
+                                    w.seen = (p.now, feet);
+                                    return Walked::Going;
+                                }
+                            }
                         }
                         // Tale of Two Wastelands: no door joins the Mojave and the Capital
                         // Wasteland; its travel moves the player between them by script. Into the
@@ -1976,7 +2126,7 @@ fn next_answers_talk(p: &Pilot) -> bool {
 }
 
 fn walk_to(goal: Place, target: Option<FormId>, radius: f32, now: f64, feet: [f32; 3]) -> Walk {
-    Walk { goal, target, radius, follower: None, door_since: None, door_from: feet, seen: (now, feet), replans: 0, cut: false, gapped: false, talking_at_start: None, keep_talk: false, locked_way: false, tried: Vec::new(), skips: 0, awaited: 0, stuck_at: None, poked: Vec::new(), errand: None, side: None, scene_held: 0.0, scene_last: None, told_talking: false, dodge: None, snapped: None, enable_wait: None, owner_wait: None, owner_door: None, reported: now, travel_since: None, stay: false, hold: false, stranded: false }
+    Walk { goal, target, radius, follower: None, door_since: None, door_from: feet, seen: (now, feet), replans: 0, cut: false, gapped: false, talking_at_start: None, keep_talk: false, locked_way: false, tried: Vec::new(), skips: 0, awaited: 0, stuck_at: None, poked: Vec::new(), errand: None, side: None, scene_held: 0.0, scene_last: None, told_talking: false, dodge: None, snapped: None, enable_wait: None, owner_wait: None, owner_door: None, reported: now, travel_since: None, stay: false, hold: false, stranded: false, step: None, steps: 0 }
 }
 
 /// How long after trying a locked door the player picks its lock.
@@ -3211,6 +3361,11 @@ fn step(p: &mut Pilot, h: &mut Hands) -> Option<Option<String>> {
         }
         Action::TriggerEnter { trigger, actor: Some(actor), .. } if actor != "player" => {
             info!("pilot: step {}: left to the AI: {actor} entering {trigger}", p.i);
+            if let Some((a, at)) = h.game(|g| runner::resolve(g, actor).ok().zip(runner::resolve(g, trigger).ok())).flatten() {
+                if !p.ai_due.iter().any(|d| d.actor == a && d.at == at) {
+                    p.ai_due.push(AiDue { step: p.i, actor: a, at, within: AI_DUE_NEAR, what: format!("{actor} entering {trigger}"), since: p.now });
+                }
+            }
             Some(None)
         }
         Action::TriggerEnter { trigger, face, .. } => {
@@ -4008,6 +4163,9 @@ fn step(p: &mut Pilot, h: &mut Hands) -> Option<Option<String>> {
         }
         Action::PatrolPoint { actor, point } => {
             info!("pilot: step {}: left to the AI: {actor} reaching {point}", p.i);
+            if let Some((a, at)) = h.game(|g| runner::resolve(g, actor).ok().zip(runner::resolve(g, point).ok())).flatten() {
+                p.ai_due.push(AiDue { step: p.i, actor: a, at, within: AI_DUE_NEAR, what: format!("{actor} reaching {point}"), since: p.now });
+            }
             Some(None)
         }
         Action::DialoguePackage { actor, .. } => {
@@ -5183,6 +5341,7 @@ fn drive(
         }
         return;
     }
+    check_ai_due(p, &mut h, false);
     // Steps that take no time follow one another within the frame.
     for _ in 0..64 {
         if p.i >= p.actions.len() {
@@ -5219,6 +5378,7 @@ fn drive(
         return;
     }
     p.saved = false;
+    check_ai_due(p, &mut h, true);
     p.chains_done += 1;
     info!("pilot: chain {} over at {:.0} s: {} divergences and {} findings so far", p.chain, p.now, p.divergences.len(), p.findings.len());
     if p.next_chain() {

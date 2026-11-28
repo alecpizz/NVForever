@@ -127,6 +127,8 @@ pub struct RowShown {
     pub text: String,
     /// Can be made now; there is enough of the ingredient.
     pub ready: bool,
+    /// Resolved ySI tag/icon/template for this row when ySI is active (`None` otherwise).
+    pub ysi: Option<fnv_game::ui_ysi::YsiItemDisplay>,
 }
 
 /// One whole state of the model, as the menu shows it. A plain snapshot, so tests need no world.
@@ -164,14 +166,25 @@ impl Snapshot {
         // The hand-built WG and VAL, and its effects' text; the other cards stay hidden.
         let card = selected.map(|_| Info { weight: v.weight.map(crate::crafting::weight_text), value: v.value.map(|x| x.to_string()), effects: v.effects.clone(), ..Default::default() });
         Snapshot {
-            rows: v.rows.iter().map(|r| RowShown { key: r.recipe, name: r.label.clone(), text: r.label.clone(), ready: r.ready }).collect(),
+            rows: v.rows.iter().map(|r| RowShown { key: r.recipe, name: r.label.clone(), text: r.label.clone(), ready: r.ready, ysi: r.ysi.clone() }).collect(),
             selected,
             filtered: v.filtered,
             filter: open.filter as u32,
             subcategory: v.subcategory.clone(),
             made_at: v.made_at.clone(),
             skill: v.skill.as_ref().zip(v.skill_record.as_ref()).map(|((_, have, need), name)| (format!("{name} ({have}/{need})"), have >= need)),
-            ingredients: v.ingredients.iter().map(|(key, name, have, need)| RowShown { key: *key, name: name.clone(), text: format!("{name} ({have}/{need})"), ready: have >= need }).collect(),
+            ingredients: v
+                .ingredients
+                .iter()
+                .enumerate()
+                .map(|(idx, (key, name, have, need))| RowShown {
+                    key: *key,
+                    name: name.clone(),
+                    text: format!("{name} ({have}/{need})"),
+                    ready: have >= need,
+                    ysi: v.ingredient_ysi.get(idx).cloned().flatten(),
+                })
+                .collect(),
             card,
             icon: v.icon.clone(),
             hints,
@@ -195,6 +208,9 @@ pub struct RecipeTiles {
     views: [ListView<FormId>; 2],
     shown: Option<Snapshot>,
     written_in: Option<TileId>,
+    text_scale:Option<f32>,
+    normal_guard:Option<crate::menu::normal_services::Guard>,
+    normal_revision:u64,
     /// The file's title, once a subcategory's name has stood over it.
     file_title: Option<String>,
     /// [`built`]'s answer, and the menu and tree shape it was worked out on.
@@ -209,6 +225,74 @@ pub struct RecipeTiles {
 }
 
 impl RecipeTiles {
+    pub(crate) fn normal_revision(&self)->u64 {self.normal_revision}
+    pub(crate) fn normal_hit(&self,ui:&Ui,frame:crate::menu::barter_touch::Frame,
+        guard:&crate::menu::normal_services::Guard,point:Vec2,size:f32)->Option<crate::menu::normal_services::Hit> {
+        use crate::menu::{normal_services::{Action,Hit as NormalHit},normal_touch::Source};
+        if self.text_scale.unwrap_or(1.0)!=size || !self.normal_guard.as_ref().is_some_and(|g|g.same(guard)){return None}
+        let menu=self.menu?;
+        let at=super::input::to_menu_units(point,frame.size,Vec2::splat(0.5));
+        let candidates=fnv_ui::input::hit_candidates(ui,menu,&fnv_ui::input::no_measure);
+        if let Some(picked)=fnv_ui::input::top_hit(ui,&candidates,at) {
+            let what=self.clicked(ui,picked.tile)?;
+            let (action,pane,key)=match what {
+                RecipeTile::Row(index)=>{let i=self.row_at(index)?;(Action::Row(i),Some(RECIPES),self.rows[RECIPES].get(index)?.tile)}
+                RecipeTile::Arrow(by)=>(Action::Workbench(RecipeInput::Filter(by)),None,picked.tile),
+                RecipeTile::Title=>(Action::CategoryHeader,None,picked.tile),
+                RecipeTile::Accept=>(Action::Workbench(RecipeInput::Accept),None,picked.tile),
+                RecipeTile::Exit=>(Action::Workbench(RecipeInput::Exit),None,picked.tile),
+                _=>{for pane in [RECIPES,INGREDIENTS] {
+                    if let Some(hit)=self.list_tile(ui,pane).and_then(|list|crate::menu::normal_services::native_pane(ui,frame,list,pane,point)){return Some(hit)}
+                }return None},
+            };
+            return Some(NormalHit {source:Source::Tile(menu,key),action,pane,row_step:0.0})
+        }
+        // Padded touch hit boxes around category filter arrows and title bar.
+        const HEADER_PAD: f64 = 16.0;
+        for c in candidates.iter().rev() {
+            let r = c.region();
+            if r.width <= 0.0 || r.height <= 0.0 {
+                continue;
+            }
+            if at.0 < r.left - HEADER_PAD || at.0 >= r.left + r.width + HEADER_PAD
+                || at.1 < r.top - HEADER_PAD || at.1 >= r.top + r.height + HEADER_PAD {
+                continue;
+            }
+            match self.clicked(ui, c.under) {
+                Some(RecipeTile::Arrow(by)) => {
+                    return Some(NormalHit {
+                        source: Source::Direct(menu, c.under),
+                        action: Action::Workbench(RecipeInput::Filter(by)),
+                        pane: None,
+                        row_step: 0.0,
+                    });
+                }
+                Some(RecipeTile::Title) => {
+                    return Some(NormalHit {
+                        source: Source::Direct(menu, c.under),
+                        action: Action::CategoryHeader,
+                        pane: None,
+                        row_step: 0.0,
+                    });
+                }
+                _ => {}
+            }
+        }
+        for pane in [RECIPES,INGREDIENTS] {
+            if let Some(hit)=self.list_tile(ui,pane).and_then(|list|crate::menu::normal_services::native_pane(ui,frame,list,pane,point)){return Some(hit)}
+        }
+        None
+    }
+    pub(crate) fn normal_scroll(&mut self,ui:&mut Ui,pane:usize,pixels:f64,frame:crate::menu::barter_touch::Frame,size:f32) {
+        if pane>=LISTS.len() || self.text_scale.unwrap_or(1.0)!=size || self.menu.is_none(){return}
+        let Some(list)=self.list_tile(ui,pane) else{return};
+        let Some(delta)=ui.tile(list).get("_scroll_delta").map(Value::num).filter(|v|v.is_finite() && *v>0.0) else{return};
+        let a=super::input::to_menu_units(Vec2::ZERO,frame.size,Vec2::splat(0.5));
+        let b=super::input::to_menu_units(Vec2::Y,frame.size,Vec2::splat(0.5));
+        let next=self.value(pane)+pixels*(b.1-a.1)/delta;
+        if next.is_finite() && self.scroll_to(pane,next){self.rewrite(ui);ui.update();}
+    }
+
     /// The menu closed: nothing of it stays for the next (the warning does).
     fn close(&mut self) {
         *self = RecipeTiles { warned: self.warned, ..Default::default() };
@@ -341,6 +425,7 @@ fn write_rows(ui: &mut Ui, path: &str, rows: &mut Vec<RowTile<FormId>>, shown: &
         if let Some(t) = list::child(ui, row.tile, ROW_MARK) {
             ui.set_trait(t, "visible", on(false));
         }
+        fnv_game::ui_ysi::apply_row_icon(ui, &fnv_ui::MemSource::default(), row.tile, r.ysi.as_ref());
     }
 }
 
@@ -412,11 +497,13 @@ fn settle(ui: &mut Ui, st: &mut RecipeTiles, write_sizes: &mut dyn FnMut(&mut Ui
         ui.update();
     }
     if let Some(tile) = ui.find_tile(LISTS[RECIPES]) {
-        list::settle_list(ui, tile, &st.rows[RECIPES], ROW_TEXT, &mut st.views[RECIPES], s.selected, s.filter, s.pointer_pick, s.navigated);
+        list::settle_list_sized(ui,tile,&st.rows[RECIPES],ROW_TEXT,&mut st.views[RECIPES],
+            list::RowLayout {selected:s.selected,group:s.filter,pointer_pick:s.pointer_pick,navigated:s.navigated,text_scale:st.text_scale.unwrap_or(1.0),minimum_height:52.0});
     }
     if let Some(tile) = ui.find_tile(LISTS[INGREDIENTS]) {
         let recipe = s.selected.and_then(|i| s.rows.get(i)).map_or(0, |r| r.key.0);
-        list::settle_list(ui, tile, &st.rows[INGREDIENTS], ROW_TEXT, &mut st.views[INGREDIENTS], None, recipe, false, 0);
+        list::settle_list_sized(ui,tile,&st.rows[INGREDIENTS],ROW_TEXT,&mut st.views[INGREDIENTS],
+            list::RowLayout {selected:None,group:recipe,pointer_pick:false,navigated:0,text_scale:st.text_scale.unwrap_or(1.0),minimum_height:52.0});
     }
     st.shown = Some(s);
     st.rewrite(ui);
@@ -436,10 +523,13 @@ pub(super) fn write_system(
     mut recipe: ResMut<crate::crafting::RecipeMenu>, mut sim: ResMut<crate::sim::SimState>,
     play: Option<Res<crate::PlayWorld>>, mut forms: Local<Option<crate::pipboy::stats::read::Forms>>,
     mut fonts: super::draw::FontKit, mut st: ResMut<RecipeTiles>,
+    readability:Option<Res<crate::menu_readability::MenuReadability>>,
 ) {
     if !switch.recipe {
         return;
     }
+    let scale=crate::menu::readability::size(readability.as_deref(),crate::menu_readability::MenuKind::Workbench);
+    if st.text_scale!=Some(scale) {st.text_scale=Some(scale);st.sizes.clear();st.written_in=None;st.drag=None;}
     let Some(rt) = script.rt.as_ref() else { return };
     let game = &rt.game;
     if !recipe.is_open() {
@@ -477,6 +567,9 @@ pub(super) fn write_system(
     open.drawn = Some(v);
     let ui = &mut rt.game.ui_tree;
     let told = st.is_new(menu, &s);
+    if told || !open.normal_owner_matches(st.normal_guard.as_ref()) {
+        st.normal_guard=open.normal_native_guard();st.normal_revision=st.normal_revision.wrapping_add(1);
+    }
     if told {
         write(ui, &s, &mut st);
         st.shown = Some(s);
@@ -484,7 +577,8 @@ pub(super) fn write_system(
     let texts = super::menus::texts(ui, menu);
     settle(ui, &mut st, &mut |ui, sizes| {
         let size = fonts.menu_measure(&super::menus::fonts_of(ui, &texts));
-        super::menus::write_text_sizes_of(ui, &texts, sizes, &size)
+        super::menus::write_text_sizes_of(ui,&texts,sizes,&|font,text,wrap|
+            crate::menu::readability::measured(&size,scale,font,text,wrap))
     });
     mark_tiles(ui);
     if let (true, Some(s)) = (told, st.shown.as_ref()) {
@@ -494,15 +588,23 @@ pub(super) fn write_system(
     }
 }
 
+// Module-owned provider: the same writer/order used by TilesPlugin, without
+// installing unrelated menu consumers in this actual transaction fixture.
 #[cfg(test)]
-mod tests {
+pub(crate) fn install_normal_fixture_writer(app:&mut App) {
+    app.init_resource::<super::draw::TileFonts>()
+        .add_systems(Update,write_system.before(super::input::feed));
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
     use super::*;
     use fnv_ui::MemSource;
 
     /// [design] A fixture written for these tests, with its own dimensions and simple
     /// dependencies. No expressions or values were taken from the game's menu file; the names
     /// are the ones this adapter looks up.
-    fn fixture(change: impl FnOnce(String) -> String) -> Ui {
+    pub(crate) fn fixture(change: impl FnOnce(String) -> String) -> Ui {
         let list = |name: &str, height: u32| format!(r#"
             <hotrect name="{name}"><height>{height}</height><width>200</width>
               <clipwindow>1</clipwindow><_scroll_delta>11</_scroll_delta>
@@ -545,7 +647,7 @@ mod tests {
     }
 
     fn row(id: u32, ready: bool) -> RowShown {
-        RowShown { key: FormId(id), name: format!("Thing {id}"), text: format!("Thing {id}"), ready }
+        RowShown { key: FormId(id), name: format!("Thing {id}"), text: format!("Thing {id}"), ready, ysi: None }
     }
 
     fn snapshot() -> Snapshot {
@@ -802,4 +904,68 @@ mod tests {
         game.menu = Some(crate::script::MENU_BARTER);
         assert!(!up(game));
     }
+
+    #[test]
+    fn ysi_row_icons_attach_to_recipes_and_ingredients_and_noop_without_ysi() {
+        let tagged = fnv_game::ui_ysi::YsiItemDisplay {
+            tag: Some("(d01)".into()),
+            icon: Some("icons\\stimpak.dds".into()),
+            template: fnv_game::ui_ysi::YSI_DEFAULT_TEMPLATE.into(),
+        };
+        let ing_tagged = fnv_game::ui_ysi::YsiItemDisplay {
+            tag: Some("(j01)".into()),
+            icon: Some("icons\\broc.dds".into()),
+            template: fnv_game::ui_ysi::YSI_DEFAULT_TEMPLATE.into(),
+        };
+        let mut s = snapshot();
+        s.rows[0].ysi = Some(tagged);
+        s.ingredients[0].ysi = Some(ing_tagged);
+
+        // Without ySI.xml: complete no-op, zero ySIImage tiles created.
+        let (mut plain_ui, mut plain_st) = (fixture(|x| x), RecipeTiles::default());
+        frame(&mut plain_ui, &s, &mut plain_st);
+        assert!(list::child(&plain_ui, plain_st.rows[RECIPES][0].tile, fnv_game::ui_ysi::YSI_IMAGE_TILE).is_none());
+        assert!(list::child(&plain_ui, plain_st.rows[INGREDIENTS][0].tile, fnv_game::ui_ysi::YSI_IMAGE_TILE).is_none());
+
+        // With ySI.xml injected: recipe and ingredient rows both get ySIImage tiles.
+        let ysi_xml = r#"
+<rect name="ySI">
+  <_ySI> 1 </_ySI>
+  <_ySIBlanks> 1 </_ySIBlanks>
+  <_ySIWidth> 24 </_ySIWidth>
+  <_ySIHeight> 24 </_ySIHeight>
+</rect>
+<template name="ySIDefault">
+  <image name="ySIImage">
+    <filename> icons\default.dds </filename>
+    <width> <copy src="ySI" trait="_ySIWidth"/> </width>
+    <height> <copy src="ySI" trait="_ySIHeight"/> </height>
+    <visible> 1 </visible>
+  </image>
+</template>
+<template name="ySINoTag">
+  <image name="ySIImage">
+    <filename> icons\blank.dds </filename>
+    <width> <copy src="ySI" trait="_ySIWidth"/> <onlyif src="ySI" trait="_ySIBlanks"/> </width>
+    <height> <copy src="ySI" trait="_ySIHeight"/> </height>
+    <visible> 1 </visible>
+  </image>
+</template>
+"#;
+        let (mut ui, mut st) = (fixture(|x| x), RecipeTiles::default());
+        let src = MemSource::default().with(fnv_game::ui_ysi::YSI_XML_PATH, ysi_xml);
+        let root = ui.menu(RECIPE_MENU).unwrap();
+        assert!(fnv_game::ui_ysi::publish_for_menu(&mut ui, &src, root, Some(fnv_game::crafting::RECIPE_MENU)));
+        ui.update();
+        frame(&mut ui, &s, &mut st);
+
+        let r0_img = list::child(&ui, st.rows[RECIPES][0].tile, fnv_game::ui_ysi::YSI_IMAGE_TILE).expect("recipe icon");
+        let r1_img = list::child(&ui, st.rows[RECIPES][1].tile, fnv_game::ui_ysi::YSI_IMAGE_TILE).expect("untagged recipe icon");
+        let i0_img = list::child(&ui, st.rows[INGREDIENTS][0].tile, fnv_game::ui_ysi::YSI_IMAGE_TILE).expect("ingredient icon");
+        assert_eq!(ui.tile(r0_img).get("filename").map(Value::text).as_deref(), Some("icons\\stimpak.dds"));
+        assert_eq!(ui.tile(r1_img).get("filename").map(Value::text).as_deref(), Some("icons\\blank.dds"));
+        assert_eq!(ui.tile(i0_img).get("filename").map(Value::text).as_deref(), Some("icons\\broc.dds"));
+        assert_eq!(st.clicked(&ui, r0_img), Some(RecipeTile::Row(0)));
+    }
 }
+

@@ -13,7 +13,8 @@
 //!   level-design.md §3.1 "Data"].
 //! - **Membership**: room membership is not stored per object (level-design.md §3.1), so
 //!   a placed object's mesh belongs to every room whose box, grown by [`MARGIN`], its
-//!   bounds touch, and to the unbounded space when it touches none. A mesh is drawn when
+//!   bounds touch, and to the unbounded space when no one of those boxes holds it whole
+//!   (it touches none, or reaches out of them: #4485). A mesh is drawn when
 //!   one of its rooms is. Walls and floors on a room's edge belong to both sides. Only the
 //!   meshes of placed objects and items are culled: actors, the player's body, dropped
 //!   items, lights, particles and effects are always drawn (actors walk between rooms;
@@ -178,9 +179,30 @@ pub struct Rooms {
     pub most_portals_blocked: usize,
 }
 
-/// The spaces a mesh belongs to ([`MARGIN`]); an empty list is the unbounded space.
+/// The spaces a mesh belongs to ([`MARGIN`]): the rooms it touches, and whether it is also
+/// in the unbounded space (it touches none, or it reaches out of every room it touches).
 #[derive(Component, Debug, Clone, Default)]
-pub struct InRooms(pub Vec<usize>);
+pub struct InRooms(pub Vec<usize>, pub bool);
+
+impl InRooms {
+    /// The spaces of a mesh with game-space bounds `min`–`max` among `rooms`. A mesh is in
+    /// the unbounded space too when no one room's grown box holds it whole [design, #4485:
+    /// past a doorway into the unbounded space (HELIOS One's tower, 0017B450; REPCONN's
+    /// basement), corridor pieces that also reach a corner of a neighbouring room's box
+    /// were that room's only, and were hidden while seen through the doorway, the fog
+    /// showing where the corridor should be].
+    pub fn of(rooms: &[RoomBox], min: Vec3, max: Vec3) -> InRooms {
+        let touched: Vec<usize> = rooms.iter().enumerate().filter(|(_, r)| r.touches(min, max, MARGIN)).map(|(i, _)| i).collect();
+        let corners = (0..8).map(|i| Vec3::new(if i & 1 == 0 { min.x } else { max.x }, if i & 2 == 0 { min.y } else { max.y }, if i & 4 == 0 { min.z } else { max.z }));
+        let held = touched.iter().any(|&i| corners.clone().all(|c| rooms[i].contains(c, MARGIN)));
+        InRooms(touched, !held)
+    }
+
+    /// Whether the mesh is in one of the spaces `visible` holds (`None`: the unbounded).
+    pub fn seen_in(&self, visible: &HashSet<Option<usize>>) -> bool {
+        (self.1 && visible.contains(&None)) || self.0.iter().any(|i| visible.contains(&Some(*i)))
+    }
+}
 
 /// A mesh's bounds in game space (axis-aligned), kept up as it moves.
 #[derive(Component, Debug, Clone, Copy)]
@@ -375,8 +397,7 @@ fn assign(
             continue;
         }
         let (min, max) = game_bounds(gt, aabb);
-        let in_rooms: Vec<usize> = rooms.rooms.iter().enumerate().filter(|(_, r)| r.touches(min, max, MARGIN)).map(|(i, _)| i).collect();
-        commands.entity(e).insert((InRooms(in_rooms), GameBounds(min, max)));
+        commands.entity(e).insert((InRooms::of(&rooms.rooms, min, max), GameBounds(min, max)));
     }
 }
 
@@ -545,7 +566,7 @@ fn cull(
             let (min, max) = game_bounds(&gt, aabb);
             *bounds = GameBounds(min, max);
         }
-        let in_view = visible.as_ref().is_none_or(|v| if in_rooms.0.is_empty() { v.contains(&None) } else { in_rooms.0.iter().any(|i| v.contains(&Some(*i))) });
+        let in_view = visible.as_ref().is_none_or(|v| in_rooms.seen_in(v));
         let behind_plane = in_view && shadows.iter().any(|s| s.hides_box(bounds.0, bounds.1));
         let show = in_view && !behind_plane;
         if !show {
@@ -716,5 +737,21 @@ mod tests {
         assert_eq!(portal_rect(&corners, &camera()), Some(FULL));
         let behind: Vec<Vec3> = corners.iter().map(|c| Vec3::new(-100.0 - c.x.abs(), c.y, c.z)).collect();
         assert_eq!(portal_rect(&behind, &camera()), None);
+    }
+    #[test]
+    fn a_mesh_reaching_out_of_its_rooms_is_in_the_unbounded_space_too() {
+        let room = RoomBox { id: 1, center: Vec3::ZERO, rot: Mat3::IDENTITY, half: Vec3::splat(100.0) };
+        // Inside the room: the room's only.
+        let inside = InRooms::of(&[room], Vec3::splat(-50.0), Vec3::splat(50.0));
+        assert_eq!((inside.0.as_slice(), inside.1), (&[0usize][..], false));
+        // Touching the room's corner, most of it out past a doorway (#4485): both.
+        let out = InRooms::of(&[room], Vec3::new(110.0, -50.0, -50.0), Vec3::new(600.0, 50.0, 50.0));
+        assert_eq!((out.0.as_slice(), out.1), (&[0usize][..], true));
+        let mut v = HashSet::new();
+        v.insert(None);
+        assert!(out.seen_in(&v) && !inside.seen_in(&v), "seen through a portal to the unbounded space");
+        // Touching no room: the unbounded space's only.
+        let far = InRooms::of(&[room], Vec3::splat(500.0), Vec3::splat(600.0));
+        assert!(far.0.is_empty() && far.1);
     }
 }

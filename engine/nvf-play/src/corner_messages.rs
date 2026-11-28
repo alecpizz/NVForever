@@ -287,7 +287,7 @@ fn draw(
     mut kit: Local<Option<Kit>>,
     state: Option<Res<State<crate::PlayState>>>,
     driven: Option<Res<crate::player::ViewDriven>>,
-    (kill_cam, vats): (Option<Res<crate::kill_cam::KillCam>>, Option<Res<crate::vats_mode::VatsMode>>),
+    (kill_cam, vats, photo): (Option<Res<crate::kill_cam::KillCam>>, Option<Res<crate::vats_mode::VatsMode>>, Option<Res<crate::photo_mode::PhotoMode>>),
 ) {
     // The HUD's lengths at the UI scale (`crate::interface::hud_units`, #1631).
     let _hud = crate::interface::hud_units();
@@ -306,7 +306,11 @@ fn draw(
         despawned = true;
     }
     // (As under a kill camera while the classic VATS style plays its queued attacks.)
-    let held = held(panel.view.is_some(), state.map(|s| *s.get()), driven.is_some_and(|d| d.0), kill_cam.is_some_and(|k| k.active()) || vats.is_some_and(|v| v.playing_back()));
+    let cut = kill_cam.is_some_and(|k| k.active()) || vats.is_some_and(|v| v.playing_back());
+    // Photo mode holds them as a menu does, hidden with their clocks stopped, like the
+    // rest of the HUD (`crate::photo_mode`; its "Photo saved" is its own).
+    let photo = photo.is_some_and(|p| p.on);
+    let held = held(panel.view.is_some(), state.map(|s| *s.get()), driven.is_some_and(|d| d.0), cut || photo);
     if !despawned {
         for (_, mut v) in &mut roots {
             v.set_if_neq(if held { Visibility::Hidden } else { Visibility::Inherited });

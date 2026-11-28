@@ -242,19 +242,13 @@ impl<'a> Game<'a> {
     }
 
     /// The current model file of an IDLE (or its `TempCloneForm` alias),
-    /// including `SetIdleAnimPath`'s session replacement. The renderer must
-    /// use the same path as script getters.
+    /// including `SetIdleAnimPath` / `SetModelPath` session replacements snapshotted
+    /// at `TempCloneForm` creation time. The renderer must use the same path as script
+    /// getters [observed: `w4g_13_isidleplaying_and_idle_replace`].
     pub fn idle_animation_path(&self, idle: FormId) -> Option<&str> {
         let def = self.idle_def(idle)?;
-        let mut cur = idle;
-        for _ in 0..=64 {
-            if let Some(fnv_script::vm::XVal::Str(path)) = self.field_overrides.get(&(cur, "MODL/".into())) {
-                return Some(path.as_str());
-            }
-            match self.clones.get(&cur).copied() {
-                Some(parent) => cur = parent,
-                None => break,
-            }
+        if let Some(fnv_script::vm::XVal::Str(path)) = self.field_overrides.get(&(idle, "MODL/".into())) {
+            return Some(path.as_str());
         }
         def.model.as_deref()
     }

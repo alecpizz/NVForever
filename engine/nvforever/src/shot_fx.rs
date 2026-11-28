@@ -144,6 +144,37 @@ struct Flash {
     left: f32,
 }
 
+/// A muzzle flash's light: its full brightness and the flash's length, lit along
+/// [`flash_light_share`] as the flash ages.
+#[derive(Component)]
+struct FlashLight {
+    full: f32,
+    life: f32,
+    age: f32,
+}
+
+/// The share of its full brightness a muzzle flash's light has `age` seconds into a
+/// flash of `life` seconds: up over the first [`FLASH_LIGHT_RISE`] of it and down over the
+/// rest, both eased [design, #3785: the light was on at full strength for the flash's
+/// time and off at once; ED-E's laser (MuzzleLaserRed300, a red light of radius 300 for
+/// 0.14 s) flashed the night scene once a second, hard on and off, which the player saw as
+/// a strobe. The LIGH's Flicker flag is not played].
+fn flash_light_share(age: f32, life: f32) -> f32 {
+    if life <= 0.0 {
+        return 0.0;
+    }
+    let x = (age / life).clamp(0.0, 1.0);
+    let smooth = |t: f32| t * t * (3.0 - 2.0 * t);
+    if x < FLASH_LIGHT_RISE {
+        smooth(x / FLASH_LIGHT_RISE)
+    } else {
+        1.0 - smooth((x - FLASH_LIGHT_RISE) / (1.0 - FLASH_LIGHT_RISE))
+    }
+}
+
+/// The share of a muzzle flash's time its light takes to come up ([`flash_light_share`]).
+const FLASH_LIGHT_RISE: f32 = 0.2;
+
 /// How long an explosion's model stays and emits when it has no sequence, and how long
 /// its light takes to fade, seconds [design: about the grenade explosion's sequence,
 /// 5.03 s, and its flash's emitter, on for 0.33 s]. A model with a sequence stays for its
@@ -455,6 +486,7 @@ fn flash(
     mut models: ModelCtx,
     mut fx: ResMut<ShotFx>,
     mut flashes: Query<(Entity, &mut Flash)>,
+    mut flash_lights: Query<(&mut FlashLight, &mut PointLight)>,
     root: Query<Entity, With<WorldRoot>>,
     muzzles: Query<(Entity, &Muzzle, &GlobalTransform)>,
     mut told: Local<HashSet<fnv_sim::FormId>>,
@@ -466,6 +498,10 @@ fn flash(
         if f.left <= 0.0 {
             commands.entity(e).try_despawn();
         }
+    }
+    for (mut f, mut l) in &mut flash_lights {
+        f.age += dt;
+        l.intensity = f.full * flash_light_share(f.age, f.life);
     }
     for shot in fired.read() {
         let Some(p) = combat.forms.projectiles.get(&shot.projectile) else { continue };
@@ -526,7 +562,8 @@ fn flash(
             // It casts lamp shadows when the ALC shadows row is on (`crate::light_shadows`);
             // the flash's own shapes are `NotShadowCaster` (`spawn_effect`).
             commands.entity(holder).with_child((
-                PointLight { color, intensity, range: l.radius, shadow_maps_enabled: false, ..default() },
+                PointLight { color, intensity: 0.0, range: l.radius, shadow_maps_enabled: false, ..default() },
+                FlashLight { full: intensity, life: p.muzzle_flash_duration, age: 0.0 },
                 Transform::IDENTITY,
                 ShadowSource(SourceKind::MuzzleFlash),
             ));
@@ -901,6 +938,23 @@ fn report(mut exit: MessageReader<AppExit>, fx: Res<ShotFx>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_muzzle_flash_light_comes_up_and_goes_down_without_a_jump() {
+        // ED-E's laser: 0.14 s (#3785). Dark at the start and the end, full at the top.
+        let life = 0.14;
+        assert_eq!(flash_light_share(0.0, life), 0.0);
+        assert!((flash_light_share(life * FLASH_LIGHT_RISE, life) - 1.0).abs() < 1e-5);
+        assert!(flash_light_share(life, life) < 1e-5);
+        // No step between frames at 60 frames a second larger than a fair share of it.
+        let mut last = 0.0;
+        for i in 1..=9 {
+            let s = flash_light_share(i as f32 / 60.0, life);
+            assert!((s - last).abs() <= 0.75, "frame {i}: {last} -> {s}");
+            last = s;
+        }
+        assert_eq!(flash_light_share(0.05, 0.0), 0.0);
+    }
 
     #[test]
     fn a_flying_model_points_its_plus_y_along_the_shot() {

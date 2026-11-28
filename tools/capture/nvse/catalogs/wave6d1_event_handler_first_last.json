@@ -1,0 +1,126 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6d1_event_handler_first_last",
+  "description": "Wave 6D-1 strictly read-only console-only clean-room probe catalog verifying xNVSE IsEventHandlerFirst, IsEventHandlerLast, GetHigherPriorityEventHandlers, and GetLowerPriorityEventHandlers priority ordering.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)",
+    "lStewieAl's Tweaks": "1005"
+  },
+  "batches": [
+    {
+      "id": "w6d1_event_handler_first_last",
+      "title": "Wave 6D-1 - IsEventHandlerFirst / IsEventHandlerLast Priority Order",
+      "extender": "xNVSE 6.4.9 + JIP LN 57.30",
+      "required_plugins": [
+        "jip_nvse.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6d1p2_01_priority_first_last_higher_lower",
+          "bucket": "A",
+          "extender": "xNVSE 6.4.9",
+          "required_plugins": [
+            "jip_nvse.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-events.md",
+          "spec_line": 185,
+          "functions_tested": [
+            "IsEventHandlerFirst",
+            "IsEventHandlerLast",
+            "GetHigherPriorityEventHandlers",
+            "GetLowerPriorityEventHandlers"
+          ],
+          "claim": "Verify IsEventHandlerFirst, IsEventHandlerLast, GetHigherPriorityEventHandlers, GetLowerPriorityEventHandlers across priorities 10, 5 (two ties), 1, and absent 99.",
+          "expected": "Settle First vs Last direction and whether Higher/Lower maps include equal priority.",
+          "script_lines": [
+            "ref cb10 = CompileScript \"nvseprobe_s_w6d1p2_01_p10.gek\"",
+            "ref cb5a = CompileScript \"nvseprobe_s_w6d1p2_01_p5a.gek\"",
+            "ref cb5b = CompileScript \"nvseprobe_s_w6d1p2_01_p5b.gek\"",
+            "ref cb1 = CompileScript \"nvseprobe_s_w6d1p2_01_p1.gek\"",
+            "Player.AuxVarSetStr \"*p2_01_ord\" \"S:\"",
+            "SetEventHandlerAlt \"W6D1_Prio2\" cb1 \"priority\"::1",
+            "SetEventHandlerAlt \"W6D1_Prio2\" cb5a \"priority\"::5",
+            "SetEventHandlerAlt \"W6D1_Prio2\" cb10 \"priority\"::10",
+            "SetEventHandlerAlt \"W6D1_Prio2\" cb5b \"priority\"::5",
+            "DispatchEventAlt \"W6D1_Prio2\"",
+            "string_var sOut = Player.AuxVarGetStr \"*p2_01_ord\"",
+            "int f10 = IsEventHandlerFirst \"W6D1_Prio2\" cb10 10",
+            "int l10 = IsEventHandlerLast \"W6D1_Prio2\" cb10 10",
+            "int f5a = IsEventHandlerFirst \"W6D1_Prio2\" cb5a 5",
+            "int l5a = IsEventHandlerLast \"W6D1_Prio2\" cb5a 5",
+            "int f1 = IsEventHandlerFirst \"W6D1_Prio2\" cb1 1",
+            "int l1 = IsEventHandlerLast \"W6D1_Prio2\" cb1 1",
+            "int f99 = IsEventHandlerFirst \"W6D1_Prio2\" cb10 99",
+            "int l99 = IsEventHandlerLast \"W6D1_Prio2\" cb10 99",
+            "array_var aHi10 = GetHigherPriorityEventHandlers \"W6D1_Prio2\" cb10 10",
+            "array_var aLo10 = GetLowerPriorityEventHandlers \"W6D1_Prio2\" cb10 10",
+            "array_var aHi5 = GetHigherPriorityEventHandlers \"W6D1_Prio2\" cb5a 5",
+            "array_var aLo5 = GetLowerPriorityEventHandlers \"W6D1_Prio2\" cb5a 5",
+            "array_var aHi1 = GetHigherPriorityEventHandlers \"W6D1_Prio2\" cb1 1",
+            "array_var aLo1 = GetLowerPriorityEventHandlers \"W6D1_Prio2\" cb1 1",
+            "array_var aHi99 = GetHigherPriorityEventHandlers \"W6D1_Prio2\" cb10 99",
+            "int sHi10 = ar_Size aHi10",
+            "int sHi5 = ar_Size aHi5",
+            "int sHi1 = ar_Size aHi1",
+            "int sHi99 = ar_Size aHi99",
+            "int sLo10 = ar_Size aLo10",
+            "int sLo5 = ar_Size aLo5",
+            "int sLo1 = ar_Size aLo1",
+            "int h5k5 = ar_HasKey aHi5 5",
+            "int h5k10 = ar_HasKey aHi5 10",
+            "int l5k5 = ar_HasKey aLo5 5",
+            "int l5k1 = ar_HasKey aLo5 1",
+            "RemoveEventHandler \"W6D1_Prio2\" cb10",
+            "RemoveEventHandler \"W6D1_Prio2\" cb5a",
+            "RemoveEventHandler \"W6D1_Prio2\" cb5b",
+            "RemoveEventHandler \"W6D1_Prio2\" cb1",
+            "string_var sPart1 = sv_Construct \"ord=%z|fl10=%g/%g|fl5a=%g/%g|fl1=%g/%g|fl99=%g/%g\" sOut f10 l10 f5a l5a f1 l1 f99 l99",
+            "string_var sPart2 = sv_Construct \"hi=%g,%g,%g,%g|lo=%g,%g,%g|k5=hi(%g,%g),lo(%g,%g)\" sHi10 sHi5 sHi1 sHi99 sLo10 sLo5 sLo1 h5k5 h5k10 l5k5 l5k1",
+            "PrintToConsole \"PROBE|w6d1p2_01_priority_first_last_higher_lower|%z|%z\" sPart1 sPart2"
+          ],
+          "helper_scripts": {
+            "nvseprobe_s_w6d1p2_01_p10.gek": [
+              "begin Function {}",
+              "string_var s = Player.AuxVarGetStr \"*p2_01_ord\"",
+              "Player.AuxVarSetStr \"*p2_01_ord\" (s + \"10,\")"
+            ],
+            "nvseprobe_s_w6d1p2_01_p5a.gek": [
+              "begin Function {}",
+              "string_var s = Player.AuxVarGetStr \"*p2_01_ord\"",
+              "Player.AuxVarSetStr \"*p2_01_ord\" (s + \"5a,\")"
+            ],
+            "nvseprobe_s_w6d1p2_01_p5b.gek": [
+              "begin Function {}",
+              "string_var s = Player.AuxVarGetStr \"*p2_01_ord\"",
+              "Player.AuxVarSetStr \"*p2_01_ord\" (s + \"5b,\")"
+            ],
+            "nvseprobe_s_w6d1p2_01_p1.gek": [
+              "begin Function {}",
+              "string_var s = Player.AuxVarGetStr \"*p2_01_ord\"",
+              "Player.AuxVarSetStr \"*p2_01_ord\" (s + \"1,\")"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

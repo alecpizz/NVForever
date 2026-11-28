@@ -5,6 +5,7 @@
 
 import bevy_pbr::{
     render::forward_io::VertexOutput,
+    render::mesh_functions::get_tag,
     render::mesh_view_bindings::{view, globals, lights, view_transmission_texture, view_transmission_sampler},
     render::pbr_types,
     render::pbr_functions,
@@ -34,6 +35,14 @@ fn transmission_uv(uv: vec2<f32>) -> vec2<f32> {
     return bounded / vec2<f32>(textureDimensions(view_transmission_texture));
 }
 
+struct ShotRing {
+    point_time: vec4<f32>,
+    travel: vec2<f32>,
+    receiver: u32,
+    kind: u32,
+    blast_scale: vec2<f32>,
+};
+
 struct WaterParams {
     shallow: vec4<f32>,
     deep: vec4<f32>,
@@ -43,7 +52,7 @@ struct WaterParams {
     sky_horizon: vec4<f32>,
     // near, far, amount, 1 when the amount caps the opacity (placed water)
     above_fog: vec4<f32>,
-    // near, far, amount, enhanced depth attenuation enabled.
+    // near, far, amount, enhanced water effects enabled.
     under_fog: vec4<f32>,
     // reflectivity, fresnel amount, shininess, wave height (world units)
     surface: vec4<f32>,
@@ -60,6 +69,7 @@ struct WaterParams {
     seen_plane: vec4<f32>,
     // xyz = direction toward the sun (Bevy world), w = enabled daylight strength.
     water_sun: vec4<f32>,
+    shot_rings: array<ShotRing, 8>,
 };
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> water: WaterParams;
@@ -123,6 +133,124 @@ fn ripple_slope(g: vec2<f32>) -> vec2<f32> {
     let dx = ripple_height(t + vec2(1.0, 0.0)) - ripple_height(t - vec2(1.0, 0.0));
     let dy = ripple_height(t + vec2(0.0, 1.0)) - ripple_height(t - vec2(0.0, 1.0));
     return vec2(dx, dy) / (2.0 * water.ripple.z) * water.ripple.w * fade;
+}
+
+// Derivative of a compact bell-shaped crest. Its two slopes bend the reflected sky
+// and the lakebed in opposite directions as the crest passes a fixed point.
+fn crest_slope(offset: f32, width: f32) -> f32 {
+    let u = clamp(offset / width, -1.0, 1.0);
+    let v = 1.0 - u * u;
+    return -u * v * v;
+}
+
+// Two groups of drops from the column land at different times and positions.
+// Their tiny rings use the same surface normal as the outgoing wave.
+fn fallout_slope(d: vec2<f32>, age: f32) -> vec2<f32> {
+    if age <= 0.0 || age >= 0.65 {
+        return vec2(0.0);
+    }
+    let radius = 1.0 + age * 30.0;
+    let r2 = dot(d, d);
+    if r2 > (radius + 3.5) * (radius + 3.5) {
+        return vec2(0.0);
+    }
+    let r = sqrt(r2);
+    return d / max(r, 1.0) * crest_slope(r - radius, 3.5) * (1.0 - smoothstep(0.12, 0.65, age));
+}
+
+// xy is the refracting slope and z is a signed crest/trough contrast.
+fn blast_wave(delta: vec2<f32>, age: f32, footprint: f32, entry: ShotRing) -> vec3<f32> {
+    let px = footprint / entry.blast_scale.x;
+    if px >= 23.0 || age >= 3.4 {
+        return vec3(0.0);
+    }
+    let d = delta / entry.blast_scale.x;
+    let width = 14.0 + 3.0 * age;
+    let front = 12.0 + age * 80.0 - 14.0 * max(age - 1.2, 0.0);
+    let r2 = dot(d, d);
+    // Both crests fit in this annulus, including the angular offset. The two
+    // groups of drops can only disturb the inner 57 units during their lifetimes.
+    let inner = max(front - 21.0 - width - 4.0, 0.0);
+    let outer = front + width + 4.0;
+    let near_crest = r2 >= inner * inner && r2 <= outer * outer;
+    let near_fallout = px < 10.0 && age > 0.57 && age < 1.50 && r2 < 57.0 * 57.0;
+    if !near_crest && !near_fallout {
+        return vec3(0.0);
+    }
+    let axis = entry.travel;
+    let side = vec2(-axis.y, axis.x);
+    var slope = vec2(0.0);
+    var contrast = 0.0;
+    if near_crest {
+        let r = sqrt(r2);
+        let n = d / max(r, 1.0);
+        let a = dot(n, axis);
+        let b = dot(n, side);
+        // Four uneven arcs near the column join into a longer front as it travels.
+        let arc = (a * a - b * b) * (2.0 * a * b);
+        let youth = 1.0 - smoothstep(0.24, 1.10, age);
+        let spread = r - front - 6.0 * arc * youth;
+        let broken = 1.0 - youth * (1.0 - smoothstep(-0.48, 0.04, arc + 0.2 * a));
+        let leading = crest_slope(spread, width);
+        let crest = leading + 0.23 * crest_slope(spread + 21.0, width * 0.7);
+        let decay = (1.0 - smoothstep(0.35, 3.4, age)) / (1.0 + age * 0.9);
+        let resolved = 1.0 - smoothstep(7.0, 23.0, px);
+        slope = n * crest * broken * decay * resolved;
+        // Keep the wave readable after the authored water column and its bright sheet clear.
+        let visible = smoothstep(0.64, 1.55, age) * (1.0 - smoothstep(2.55, 3.4, age));
+        contrast = leading * broken * resolved * visible * 1.65;
+    }
+    if near_fallout {
+        let fallout = fallout_slope(d - axis * 31.0, age - 0.57)
+            + fallout_slope(d + axis * 18.0 - side * 26.0, age - 0.85);
+        slope += 0.36 * fallout * (1.0 - smoothstep(3.0, 10.0, px));
+    }
+    return vec3(slope, contrast) * entry.blast_scale.y;
+}
+
+fn shot_rings(g: vec2<f32>, surface_z: f32, t: f32, instance_index: u32) -> vec3<f32> {
+    if water.shot_rings[0].point_time.w == 0.0 {
+        return vec3(0.0);
+    }
+    let footprint = max(length(dpdx(g)), length(dpdy(g)));
+    let resolved = 1.0 - smoothstep(3.0, 10.0, footprint);
+    // Placed pool meshes carry their reference ID; loaded and distant cell water share zero.
+    let receiver = get_tag(instance_index);
+    var disturbance = vec3(0.0);
+    for (var i = 0u; i < 8u; i += 1u) {
+        let entry = water.shot_rings[i];
+        if entry.point_time.w == 0.0 {
+            break;
+        }
+        // Nearby stacked water surfaces can share a material.
+        if receiver != entry.receiver || abs(surface_z - entry.point_time.z) > 1.0 {
+            continue;
+        }
+        var age = t - (entry.point_time.w - 1.0);
+        if age < -1800.0 {
+            age += 3600.0; // Bevy Globals.time wraps each hour.
+        }
+        age = max(age, 0.0);
+        let d = g - entry.point_time.xy;
+        if entry.kind == 2u {
+            disturbance += blast_wave(d, age, footprint, entry);
+            continue;
+        }
+        let size = select(1.0, 1.35, entry.kind == 1u);
+        let front = (3.0 + 54.0 * age) * size;
+        if dot(d, d) > (front + 8.0 * size) * (front + 8.0 * size) {
+            continue;
+        }
+        let r = length(d);
+        let outward = d / max(r, 1.0);
+        // An oblique entry initially pushes the leading crest further along the shot.
+        let bias = min(3.0, age * 18.0) * (1.0 - smoothstep(0.16, 0.65, age));
+        let spread = (r - front) / size - dot(outward, entry.travel) * bias;
+        let pair = crest_slope(spread, 4.5) + 0.42 * crest_slope(spread + 9.0, 3.5);
+        let decay = (1.0 - smoothstep(0.12, 1.2, age)) / (1.0 + age);
+        disturbance += vec3(outward * (0.64 * size * pair * decay * resolved), 0.0);
+    }
+    return disturbance;
 }
 
 // Distance along the wavy reflected ray at which the reflection texture is sampled: the
@@ -244,6 +372,31 @@ fn sky_colour(y: f32) -> vec3<f32> {
     return mix(water.sky_horizon.rgb, water.sky_upper.rgb, sqrt(clamp(y / 0.5, 0.0, 1.0)));
 }
 
+// [design] Use the reconstructed receiver normal so a vertical wall makes
+// less wash. Reject widely separated samples at depth discontinuities.
+fn shoreline_bed_fade(bed: vec3<f32>) -> f32 {
+    let dx = dpdx(bed);
+    let dy = dpdy(bed);
+    let normal = cross(dx, dy);
+    let upward = abs(normal.y) / max(length(normal), 1e-4);
+    let support = 1.0 - smoothstep(9.0, 28.0, max(length(dx), length(dy)));
+    return smoothstep(0.30, 0.82, upward) * support;
+}
+
+// [design] A broken wash advances and retreats over the undistorted bed depth.
+// World-space phase and breakup keep sparse patches attached to the shallows.
+fn shoreline_foam(g: vec2<f32>, depth: f32, t: f32) -> f32 {
+    let phase = dot(g, vec2(0.023, -0.018));
+    let wash = 0.5 + 0.5 * sin(2.1 * t + 1.4 * sin(phase));
+    let crest_depth = mix(2.5, 12.0, wash);
+    let crest = 1.0 - smoothstep(0.7, 5.6, abs(depth - crest_depth));
+    let flow = g + t * vec2(2.2, -1.1);
+    let breakup = sin(dot(flow, vec2(0.072, 0.049)))
+        + 0.55 * sin(dot(flow, vec2(-0.051, 0.083)) + 0.7 * sin(phase));
+    let patches = smoothstep(0.16, 1.22, breakup);
+    return 0.24 * crest * smoothstep(0.8, 3.2, depth) * patches * mix(0.35, 1.0, wash);
+}
+
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let pos = in.world_position.xyz;
@@ -276,10 +429,25 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let g = vec2(pos.x, -pos.z);
     let t = globals.time;
+    let behind0 = scene_point(in.position.xy);
     var s = layer_slope(g, water.layers[0], vec4(1.0, 0.0, 0.0, 0.0), t);
     s += layer_slope(g, water.layers[1], vec4(0.0, 1.0, 0.0, 0.0), t);
     s += layer_slope(g, water.layers[2], vec4(0.0, 0.0, 1.0, 0.0), t);
+    let shore_depth = pos.y - behind0.y;
+    var shore_foam = 0.0;
+    // A thin placed pool can be shallow everywhere. Cell water supplies the shoreline.
+    if water.under_fog.w > 0.5 && water.above_fog.w < 0.5 {
+        let bed_fade = shoreline_bed_fade(behind0.xyz);
+        if above && behind0.w > 0.5 && shore_depth > 0.0 && shore_depth < 40.0 && dist < 2200.0 {
+            let near = 1.0 - smoothstep(1200.0, 2200.0, dist);
+            let wind_scale = mix(0.48, 1.0, smoothstep(0.0, 40.0, shore_depth));
+            s *= mix(1.0, wind_scale, near * bed_fade);
+            shore_foam = shoreline_foam(g, shore_depth, t) * (near * bed_fade);
+        }
+    }
     s += ripple_slope(g);
+    let shot = shot_rings(g, pos.y, t, in.instance_index);
+    s += shot.xy;
     // Game-space normal (-sx, -sy, 1) in Bevy space.
     var N = normalize(vec3(-s.x, 1.0, s.y));
     var up = vec3(0.0, 1.0, 0.0);
@@ -302,7 +470,6 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // "from the player" [documented: same page]). Nothing behind: the far end of both.
     let size = view.main_pass_viewport.zw;
     let uv0 = frag_coord_to_uv(in.position.xy);
-    let behind0 = scene_point(in.position.xy);
     var receiver = behind0;
     var fog_distance = 1.0e7;
     var fog_depth = 1.0e7;
@@ -401,7 +568,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // The water body is lit like a diffuse surface facing up (from either side).
     var pbr = pbr_types::pbr_input_new();
-    pbr.material.base_color = vec4(body_colour, 1.0);
+    // The body and its surface flecks have the same diffuse, zero-reflectance lighting.
+    // At covered pixels evaluate white once and apply each albedo before post-processing.
+    let has_foam = shore_foam > 0.0;
+    pbr.material.base_color = vec4(select(body_colour, vec3(1.0), has_foam), 1.0);
     pbr.material.perceptual_roughness = 1.0;
     pbr.material.metallic = 0.0;
     pbr.material.reflectance = vec3(0.0);
@@ -411,7 +581,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     pbr.N = vec3(0.0, 1.0, 0.0);
     pbr.V = V;
     pbr.is_orthographic = view.clip_from_view[3].w == 1.0;
-    let lit = pbr_functions::apply_pbr_lighting(pbr).rgb;
+    let diffuse = pbr_functions::apply_pbr_lighting(pbr).rgb;
+    let lit = select(diffuse, diffuse * body_colour, has_foam);
 
     // Reflection: the world (reflective types: the mirrored camera's texture when it shows
     // this plane, else the sky gradient) or the reflection colour, weighted by a Schlick
@@ -494,5 +665,13 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // The traced reflection takes the reflected share's place [approximation: mixed in
     // after fog and tonemapping, which the copy already has].
     result = mix(result, traced.rgb, fr * traced.w);
+    if above && shot.z != 0.0 {
+        result *= 1.0 + clamp(shot.z, -0.21, 0.35) * edge;
+    }
+    if has_foam {
+        let shore_tint = mix(body_colour, vec3(0.52, 0.56, 0.49), 0.58);
+        let foam = pbr_functions::main_pass_post_lighting_processing(pbr, vec4(diffuse * shore_tint, 1.0));
+        result = mix(result, foam.rgb, shore_foam);
+    }
     return vec4(result, 1.0);
 }

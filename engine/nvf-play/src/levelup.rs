@@ -39,6 +39,7 @@ use bevy::image::CompressedImageFormatSupport;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
 use crate::ui_pointer::PointerState;
 use fnv_game::game::menus;
 use fnv_game::levelup as rules;
@@ -561,11 +562,20 @@ fn draw_menu(
     mut images: ResMut<Assets<Image>>,
     formats: Option<Res<CompressedImageFormatSupport>>,
     glyphs: Res<crate::pad::PadGlyphs>,
+    (windows, safe): (Query<&Window, With<PrimaryWindow>>, Option<Res<crate::touch_safe_area::SafeInsets>>),
+    mut last_frame: Local<Option<(Vec2, crate::touch_safe_area::SafeInsets, f32)>>,
 ) {
+    let view_px = windows.single().map_or(Vec2::new(1280.0, 720.0), |w| Vec2::new(w.width(), w.height()));
+    let safe_insets = safe.as_deref().copied().unwrap_or_default();
+    let frame_key = (view_px, safe_insets, crate::interface::unit_scale());
+    if st.open.is_some() && *last_frame != Some(frame_key) {
+        st.dirty = true;
+    }
     if !st.dirty {
         return;
     }
     st.dirty = false;
+    *last_frame = Some(frame_key);
     for e in &roots {
         commands.entity(e).despawn();
     }
@@ -578,7 +588,8 @@ fn draw_menu(
     let st = st.into_inner();
     let kit = st.kit.get_or_insert_with(|| chargen::draw::Kit::load(data.as_deref(), &mut images, bc));
     let mut c = chargen::draw::Ctx { kit, data: data.as_deref(), images: &mut images, bc, glyphs: &glyphs };
-    let root = Node {
+    let fit = crate::interface::fit_centered_box(frame_key.2, view_px, safe_insets, 1088.0, 840.0);
+    let mut root = Node {
         position_type: PositionType::Absolute,
         width: Val::Percent(100.0),
         height: Val::Percent(100.0),
@@ -586,6 +597,10 @@ fn draw_menu(
         align_items: AlignItems::Center,
         ..default()
     };
+    if let Some((_, pad)) = fit {
+        root.padding = pad;
+    }
+    let _units = fit.map(|(s, _)| crate::interface::units_at(s));
     commands.spawn((root, GlobalZIndex(crate::interface::TOP_MENU_Z), crate::interface::top_menu_backing(), LevelUpRoot)).with_children(|r| draw::spawn(r, &view, &mut c));
 }
 

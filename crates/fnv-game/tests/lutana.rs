@@ -381,6 +381,10 @@ SetZoneFlag TestZone 1 0");
 SetActivatorRadioStation 0 TestActivator");
     assert_eq!(n(&mut g, "GetActivatorSoundActivate TestActivator"), f64::from(SOUN));
     assert_eq!(n(&mut g, "GetActivatorRadioStation TestActivator"), 0.0);
+    // Wave 6D-2 w6d2p5_02_activator_sound_null_noop: non-SOUN and explicit 0 are no-ops.
+    q(&mut g, "SetActivatorSoundActivate ItemA TestActivator
+SetActivatorSoundActivate 0 TestActivator");
+    assert_eq!(n(&mut g, "GetActivatorSoundActivate TestActivator"), f64::from(SOUN));
     // Terminals.
     assert_eq!(n(&mut g, "GetTerminalLock TestTerminal"), 3.0);
     assert_eq!(n(&mut g, "GetPasswordNote TestTerminal"), f64::from(NOTE));
@@ -403,6 +407,7 @@ SetActivatorRadioStation 0 TestActivator");
     assert_eq!(n(&mut g, "GetFormFlag ItemA 1024"), 0.0);
     q(&mut g, "SetFormFlag ItemA 1024 1");
     assert_eq!(n(&mut g, "GetFormFlag ItemA 1024"), 1.0);
+    assert_eq!(n(&mut g, "GetFormFlag ItemA 1280"), 1.0, "any bit in mask (1024 | 256) matches [observed: w6d2_32]");
     assert_eq!(n(&mut g, "GetFlagsLow ItemA") as u32 & 1024, 1024);
     q(&mut g, "SetFormFlag ItemA 1024 0");
     assert_eq!(n(&mut g, "GetFormFlag ItemA 1024"), 0.0);

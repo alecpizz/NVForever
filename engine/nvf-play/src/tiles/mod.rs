@@ -536,6 +536,7 @@ impl HudTiles<'_> {
 struct MenusWritten {
     message: Option<(menus::BoxShown, Option<usize>)>,
     quantity: Option<(fnv_ui::TileId, menus::Amount)>,
+    quantity_text_scale:Option<f32>,
     /// T15b: the Wait / Sleep menu.
     sleep_wait: Option<wait_menu::Shown>,
     /// The text sizes written, the message box's, the prompt's, the Wait menu's and the
@@ -561,6 +562,7 @@ impl MenusWritten {
 struct MenuTiles<'w, 's> {
     panel: Option<Res<'w, crate::message_menu::MessagePanel>>,
     active: Option<Res<'w, crate::menu::ActiveMenu>>,
+    readability:Option<Res<'w,crate::menu_readability::MenuReadability>>,
     /// T15b: the Wait / Sleep menu and its words.
     wait: Option<Res<'w, crate::wait::WaitMenu>>,
     words: Option<Res<'w, crate::wait::model::Words>>,
@@ -606,6 +608,9 @@ impl MenuTiles<'_, '_> {
         // here would still be last frame's.
         let shown = self.active.as_ref().and_then(|a| a.0.as_ref());
         let prompt_open = shown.is_some_and(|m| m.quantity.is_some());
+        let text_scale=if shown.is_some_and(|m|matches!(m.mode,crate::menu::model::Mode::Barter(_))) {
+            crate::menu::readability::size(self.readability.as_deref(),crate::menu_readability::MenuKind::Barter)
+        } else {1.0};
         let container_tiled = prompt_open && (container_menu::tiled(switch.container, game, container_menu::is_container(shown))
             || barter_menu::tiled(switch.barter, game, barter_menu::is_barter(shown))
             || self.inventory.as_ref().is_some_and(|i| i.ready.is_some()));
@@ -652,6 +657,9 @@ impl MenuTiles<'_, '_> {
         match prompt {
             Some((menu, q)) => {
                 let amount = menus::Amount { amount: q.amount, most: q.max };
+                if written.quantity_text_scale!=Some(text_scale) {
+                    written.quantity_text_scale=Some(text_scale);written.sizes[1].clear();
+                }
                 if written.quantity != Some((menu, amount)) {
                     menus::write_quantity(ui, amount);
                     // The amount's text follows from the meter: worked out before its size.
@@ -659,7 +667,8 @@ impl MenuTiles<'_, '_> {
                 }
                 let texts = menus::texts(ui, menu);
                 let size = fonts.menu_measure(&menus::fonts_of(ui, &texts));
-                menus::write_text_sizes_of(ui, &texts, &mut written.sizes[1], &size);
+                menus::write_text_sizes_of(ui,&texts,&mut written.sizes[1],&|font,text,wrap|
+                    crate::menu::readability::measured(&size,text_scale,font,text,wrap));
                 if written.quantity != Some((menu, amount)) {
                     info!("{}", menus::describe_quantity(ui));
                     written.quantity = Some((menu, amount));
@@ -1135,6 +1144,14 @@ impl Plugin for TilesPlugin {
     }
 }
 
+/// Lean authored-input Apps still use the real production writer, including its
+/// prompt lifecycle publication, native amount traits and text measurement.
+#[cfg(test)]
+pub(crate) fn install_quantity_writer_for_touch_tests(app:&mut App) {
+    app.init_resource::<draw::TileFonts>().init_resource::<crate::pause::ModsEntry>()
+        .add_systems(Update,write.before(crate::menu::normal_touch::Dispatch));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1282,3 +1299,4 @@ mod tests {
         assert_eq!(screen_size(1280.0, 720.0).1, 960.0);
     }
 }
+

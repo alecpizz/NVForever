@@ -98,6 +98,8 @@ pub enum Control {
     /// Run faster for AP while held (NVForever's own; acts only with NVF Features ›
     /// Advanced Movement › Sprint on, `crate::stance`).
     Sprint,
+    /// Open or close photo mode (NVForever's own; not in the game's INI, `crate::photo_mode`).
+    PhotoMode,
     // The Tweaks tab's keys (`crate::tweaks`, docs/design/tweaks.md): none bound unless
     // the player binds them.
     /// Holster the weapon at once (Stewie's Tweaks iHolsterWeaponKey).
@@ -160,8 +162,10 @@ pub enum Control {
 /// coded the same way): Lower Weapon on H [design: the owner 2026-10-27, moved off Ready
 /// Item tapped twice so a reload is not held back waiting for a second tap]; Sprint unbound,
 /// with no controller button either, until the player binds it [design, #3000: the
-/// maintainer's decision on #3002].
-pub const GAME_CONTROLS: [(Control, &str, u32); 58] = [
+/// maintainer's decision on #3002]; Photo Mode unbound, no key and no controller button,
+/// until the player binds it under Controls, Actions (the pause menu's Photo Mode entry
+/// opens it meanwhile) [design, #3634: the maintainer's decision].
+pub const GAME_CONTROLS: [(Control, &str, u32); 59] = [
     (Control::Forward, "Forward", 0x0011FF13),
     (Control::Back, "Back", 0x001FFF14),
     (Control::SlideLeft, "Slide Left", 0x001EFF17),
@@ -192,6 +196,7 @@ pub const GAME_CONTROLS: [(Control, &str, u32); 58] = [
     (Control::Grab, "Grab", 0x002CFF09),
     (Control::LowerWeapon, "Lower Weapon", 0x0023FFFF),
     (Control::Sprint, "Sprint", 0xFFFFFFFF),
+    (Control::PhotoMode, "Photo Mode", 0xFFFFFFFF),
     (Control::HolsterWeapon, "Holster Weapon", 0xFFFFFFFF),
     (Control::ToggleLight, "Toggle Light", 0xFFFFFFFF),
     (Control::ToggleCrosshair, "Toggle Crosshair", 0xFFFFFFFF),
@@ -226,7 +231,7 @@ pub const GAME_CONTROLS: [(Control, &str, u32); 58] = [
 /// Where the Tweaks tab's keys start in [`GAME_CONTROLS`]: none is bound unless the
 /// player binds it (`crate::tweaks`), but the console's and the screenshot's at the end
 /// ([`BOUND_EXTRA_CONTROLS`]), bound by default.
-pub const TWEAK_CONTROLS: usize = 30;
+pub const TWEAK_CONTROLS: usize = 31;
 
 /// The controls after the Tweaks tab's that are bound by default: the console and the
 /// screenshot ([`Control::Console`], [`Control::Screenshot`]).
@@ -465,19 +470,24 @@ impl Bindings {
     }
 
     pub fn game_defaults() -> Bindings {
+        Self::game_defaults_for_platform(cfg!(target_os = "android"))
+    }
+
+    pub fn game_defaults_for_platform(android: bool) -> Bindings {
+        let look_sens = if android { 1.25 } else { 1.0 };
         Bindings {
             map: GAME_CONTROLS.iter().map(|&(c, _, v)| (c, Binding::from_ini(v))).collect(),
             pad: game_pad_defaults(),
             always_run_by_default: ALWAYS_RUN_BY_DEFAULT,
             invert_y: INVERT_Y,
-            mouse_sensitivity: MOUSE_SENSITIVITY,
+            mouse_sensitivity: MOUSE_SENSITIVITY * look_sens,
             device: InputDevice::KeyboardMouse,
             automatic_input_switching: AUTOMATIC_INPUT_SWITCHING,
             look_speed: [LOOK_SPEED_HORIZONTAL, LOOK_SPEED_VERTICAL],
             rumble: RUMBLE,
             stick_sensitivity: 1.0,
             allow_duplicates: false,
-            vertical: [1.0, 1.0],
+            vertical: [look_sens, look_sens],
             aim: [1.0, 1.0],
         }
     }
@@ -508,16 +518,17 @@ impl Bindings {
         swapped
     }
 
-    /// What a prompt names for the control on the device in use: `E)`, `A)` [design: the
-    /// original writes the key and ")" [observed: "E)" under the crosshair]; with a
-    /// controller it shows the button's picture, NVForever its letter].
+    /// What a prompt names for the control on the device in use: `[E]`, `[A]`, the shape
+    /// of the built-in `sPCMenuHint*` labels [design, #4495: in place of the key and ")"
+    /// read from the original's screen; with a controller NVForever writes the button's
+    /// letter where the original shows its picture].
     pub fn prompt(&self, c: Control) -> String {
         let b = self.get(c);
         let name = match self.device {
             InputDevice::Controller => self.pad(c).map(|p| crate::pad::pad_shown(p).to_string()),
             InputDevice::KeyboardMouse => b.key.and_then(key_name).map(String::from).or_else(|| b.mouse.map(mouse_name)),
         };
-        format!("{})", name.unwrap_or_else(|| "?".into()))
+        format!("[{}]", name.unwrap_or_else(|| "?".into()))
     }
 
     /// What the Controls tab shows for the control on the device in use.
@@ -631,6 +642,7 @@ pub fn label(c: Control) -> &'static str {
         Grab => "Grab",
         LowerWeapon => "Lower Weapon",
         Sprint => "Sprint",
+        PhotoMode => "Photo Mode",
         HolsterWeapon => "Holster Weapon",
         ToggleLight => "Pip-Boy Light",
         ToggleCrosshair => "Show/Hide Crosshair",
@@ -1021,6 +1033,7 @@ pub fn rebind(world: &mut World, c: Control, input: Input) {
     let gave: Vec<String> = swapped.iter().map(|&o| format!("{} now {}", Bindings::name(o), b.get(o).text())).collect();
     let gave = if gave.is_empty() { String::new() } else { format!(" ({})", gave.join(", ")) };
     info!("controls: {} bound to {after} (was {before}){gave}", Bindings::name(c));
+    cancel_input_holds(world);
     store(world);
 }
 
@@ -1035,6 +1048,7 @@ pub fn rebind_pad(world: &mut World, c: Control, p: PadInput) {
     let gave: Vec<String> = swapped.iter().map(|&o| format!("{} now {}", Bindings::name(o), pad_text(b.pad(o)))).collect();
     let gave = if gave.is_empty() { String::new() } else { format!(" ({})", gave.join(", ")) };
     info!("controls: {} bound to controller {} (was {before}){gave}", Bindings::name(c), crate::pad::pad_name(p));
+    cancel_input_holds(world);
     store(world);
 }
 
@@ -1045,25 +1059,30 @@ pub fn set_device(world: &mut World, d: InputDevice) {
     b.device = d;
     // Cancel pending release actions before readers can interpret the device change
     // as a completed tap/selection. Hardware releases remain visible [design, #2200].
-    if changed {
-        if let Some(mut control) = world.get_resource_mut::<crate::control::PlayerControl>() {
-            control.cancel_input_holds();
-        }
-        if let Some(mut grab) = world.get_resource_mut::<crate::grab::GrabState>() {
-            grab.tap = None;
-        }
-        if let Some(mut wheel) = world.get_resource_mut::<crate::weapon_wheel::WeaponWheel>() {
-            wheel.cancel_input_hold();
-        }
-        let mut pointers = world.query::<&mut crate::ui_pointer::PointerState>();
-        for mut pointer in pointers.iter_mut(world) {
-            if *pointer == crate::ui_pointer::PointerState::Pressed {
-                *pointer = crate::ui_pointer::PointerState::None;
-            }
-        }
-    }
+    if changed { cancel_input_holds(world); }
     info!("controls: input device {}", d.name());
     store(world);
+}
+
+/// Cancel release-triggered actions after a device is lost or input is invalidated.
+/// Input backends use this without changing the player's saved device choice.
+pub fn cancel_input_holds(world: &mut World) {
+    crate::controller_aim::cancel(world);
+    if let Some(mut control) = world.get_resource_mut::<crate::control::PlayerControl>() {
+        control.cancel_input_holds();
+    }
+    if let Some(mut grab) = world.get_resource_mut::<crate::grab::GrabState>() {
+        grab.tap = None;
+    }
+    if let Some(mut wheel) = world.get_resource_mut::<crate::weapon_wheel::WeaponWheel>() {
+        wheel.cancel_input_hold();
+    }
+    let mut pointers = world.query::<&mut crate::ui_pointer::PointerState>();
+    for mut pointer in pointers.iter_mut(world) {
+        if *pointer == crate::ui_pointer::PointerState::Pressed {
+            *pointer = crate::ui_pointer::PointerState::None;
+        }
+    }
 }
 
 /// Set the Controls opt-out, saved with the device [design, #2200].
@@ -1329,6 +1348,11 @@ pub struct ControlInput<'w, 's> {
     pub kill_cam: Option<Res<'w, crate::kill_cam::KillCam>>,
     /// A text field has the keyboard ([`KeyboardCapture`]).
     pub capture: Option<Res<'w, KeyboardCapture>>,
+    pub platform_capture: Option<Res<'w, crate::pad::PlatformInputGate>>,
+    pub touch_movement: Option<Res<'w, crate::touch_movement::TouchMovementInput>>,
+    pub touch_switch: Option<Res<'w, crate::pad::TouchDeviceSwitch>>,
+    /// Photo mode has the keys (`crate::photo_mode`).
+    pub photo: Option<Res<'w, crate::photo_mode::PhotoMode>>,
 }
 
 /// The player's Keyboard and Mouse With a Controller tweak: with the controller as the
@@ -1365,12 +1389,12 @@ pub(crate) fn pad_binding_held(binding: Option<PadInput>, pads: &crate::pad::Act
 impl ControlInput<'_, '_> {
     /// The free camera or a text field has the keys.
     pub fn suppressed(&self) -> bool {
-        self.free_cam.as_ref().is_some_and(|f| f.active) || self.captured()
+        self.free_cam.as_ref().is_some_and(|f| f.active) || self.photo.as_ref().is_some_and(|p| p.on) || self.captured()
     }
 
     /// A text field has the keyboard ([`KeyboardCapture`]).
     pub fn captured(&self) -> bool {
-        self.capture.as_ref().is_some_and(|c| c.0)
+        self.capture.as_ref().is_some_and(|c| c.0) || self.platform_capture.as_ref().is_some_and(|p| !p.allows_actions())
     }
 
     /// A playing kill camera holds `c`: every control but those that open a menu or
@@ -1385,6 +1409,19 @@ impl ControlInput<'_, '_> {
     /// A controller works the controls.
     pub fn controller(&self) -> bool {
         self.bindings.device == InputDevice::Controller
+    }
+
+    /// A platform-owned action may act through its current keyboard/mouse binding.
+    /// It still obeys device selection, capture and script-disabled inputs.
+    pub fn virtual_action_allowed(&self, control: Control) -> bool {
+        if self.controller() || self.suppressed() || self.held(control) {
+            return false;
+        }
+        let binding = self.bindings.get(control);
+        // Touch uses the primary key when present, otherwise its mouse binding.
+        // A disabled primary must not be bypassed via an unused secondary binding.
+        if let Some(key) = binding.key { self.open_key(key) }
+        else { binding.mouse.is_some_and(|button| self.open_button(button)) }
     }
 
     /// Derived physical stick edges with the switching crossing filtered [design, #2200].
@@ -1411,6 +1448,15 @@ impl ControlInput<'_, '_> {
         }
     }
 
+    /// Controller gesture ownership excludes physical keyboard/mouse contributions
+    /// admitted by Keys With Pad. It retains the same device/action/capture gates.
+    pub(crate) fn pad_pressed(&self, c:Control)->bool {
+        self.controller() && !self.suppressed() && !self.held(c) && self.pad_is(c,Ask::Pressed)
+    }
+    pub(crate) fn pad_just_pressed(&self, c:Control)->bool {
+        self.controller() && !self.suppressed() && !self.held(c) && self.pad_is(c,Ask::JustPressed)
+    }
+
     /// The left stick (x right, y forward) when the controller works the controls and
     /// the movement controls are on the stick.
     pub fn move_stick(&self) -> Option<Vec2> {
@@ -1418,7 +1464,29 @@ impl ControlInput<'_, '_> {
         (self.controller() && on_stick && !self.suppressed() && !self.held(Control::Forward)).then(|| crate::pad::stick(&self.pads, true))
     }
 
-    pub fn pressed(&self, c: Control) -> bool {
+    /// Digital movement for player arbitration: analog must not quantize itself.
+    pub fn digital_movement_pressed(&self, c: Control) -> bool {
+        matches!(c, Control::Forward | Control::Back | Control::SlideLeft | Control::SlideRight) && self.button_pressed(c)
+    }
+
+    pub fn touch_movement_pressed(&self, c: Control) -> bool { self.touch_direction(c, Ask::Pressed) }
+
+    fn touch_direction(&self, c: Control, ask: Ask) -> bool {
+        if !matches!(c, Control::Forward | Control::Back | Control::SlideLeft | Control::SlideRight) { return false; }
+        let amount = |v: Vec2| match c {
+            Control::Forward => v.y, Control::Back => -v.y,
+            Control::SlideRight => v.x, Control::SlideLeft => -v.x, _ => 0.0,
+        };
+        let Some(sample) = self.touch_movement.as_deref() else { return false };
+        let current = amount(sample.admitted(self, self.touch_switch.as_deref())) > 0.0001;
+        let previous = crate::touch_movement::TouchMovementInput { axes: sample.previous_axes, ..default() };
+        let previous = amount(previous.admitted(self, self.touch_switch.as_deref())) > 0.0001;
+        match ask { Ask::Pressed => current, Ask::JustPressed => current && !previous, Ask::JustReleased => previous && !current }
+    }
+
+    pub fn pressed(&self, c: Control) -> bool { self.button_pressed(c) || self.touch_direction(c, Ask::Pressed) }
+
+    fn button_pressed(&self, c: Control) -> bool {
         if self.suppressed() || self.held(c) {
             return false;
         }
@@ -1429,8 +1497,33 @@ impl ControlInput<'_, '_> {
     }
 
     fn keys_pressed(&self, c: Control) -> bool {
+        if self.controller() { return self.physical_pressed(c); }
         let b = self.bindings.get(c);
         b.key.is_some_and(|k| self.keys.pressed(k) && self.open_key(k)) || b.mouse.is_some_and(|m| self.mouse.pressed(m) && self.open_button(m))
+    }
+
+    /// Only existing raw keyboard/mouse provenance, never a pad or virtual touch.
+    /// Callers choose device eligibility; script, platform and capture gates remain.
+    pub fn physical_pressed(&self, c:Control)->bool { self.physical_is(c,Ask::Pressed) }
+    pub fn physical_just_pressed(&self, c:Control)->bool { self.physical_is(c,Ask::JustPressed) }
+    pub fn physical_just_released(&self, c:Control)->bool {
+        self.physical_is(c,Ask::JustReleased) && !self.physical_pressed(c)
+    }
+    pub fn physical_mouse_pressed(&self, mouse:MouseButton)->bool {
+        !self.suppressed() && self.open_button(mouse) && self.mouse.physical_pressed(mouse)
+    }
+    fn physical_is(&self,c:Control,ask:Ask)->bool {
+        if self.suppressed() || self.held(c) {return false;}
+        let b=self.bindings.get(c);
+        b.key.is_some_and(|k|self.open_key(k) && match ask {
+            Ask::Pressed=>self.keys.physical_pressed(k),
+            Ask::JustPressed=>self.keys.physical_just_pressed(k),
+            Ask::JustReleased=>self.keys.physical_just_released(k),
+        }) || b.mouse.is_some_and(|m|self.open_button(m) && match ask {
+            Ask::Pressed=>self.mouse.physical_pressed(m),
+            Ask::JustPressed=>self.mouse.physical_just_pressed(m),
+            Ask::JustReleased=>self.mouse.physical_just_released(m),
+        })
     }
 
     fn open_key(&self, k: KeyCode) -> bool {
@@ -1448,9 +1541,9 @@ impl ControlInput<'_, '_> {
         let b = self.bindings.get(c);
         let keys = || b.key.is_some_and(|k| self.keys.just_pressed(k) && self.open_key(k)) || b.mouse.is_some_and(|m| self.mouse.just_pressed(m) && self.open_button(m));
         if self.controller() {
-            return self.pad_is(c, Ask::JustPressed) || (keys_with_pad() && keys());
+            return self.pad_is(c, Ask::JustPressed) || (keys_with_pad() && self.physical_just_pressed(c));
         }
-        keys()
+        keys() || self.touch_direction(c, Ask::JustPressed)
     }
 
     /// Released this frame, and neither of its inputs is still down.
@@ -1459,7 +1552,7 @@ impl ControlInput<'_, '_> {
             return false;
         }
         let b = self.bindings.get(c);
-        let released = self.pad_is(c, Ask::JustReleased) || b.key.is_some_and(|k| self.keys.just_released(k)) || b.mouse.is_some_and(|m| self.mouse.just_released(m));
+        let released = self.touch_direction(c, Ask::JustReleased) || self.pad_is(c, Ask::JustReleased) || b.key.is_some_and(|k| self.keys.just_released(k)) || b.mouse.is_some_and(|m| self.mouse.just_released(m));
         released && !self.pressed(c)
     }
 }
@@ -1620,7 +1713,7 @@ mod tests {
     }
 
     /// #1632: centimetres of mouse travel for a full turn at 1600 dpi, reading the
-    /// sensitivity as radians a count [hypothesis, as `MOUSE_SENSITIVITY`].
+    /// sensitivity as radians a count (see `MOUSE_SENSITIVITY` above).
     fn cm_per_turn_at_1600_dpi(m: f32) -> f32 {
         std::f32::consts::TAU / (m * MOUSE_SENSITIVITY) / 1600.0 * 2.54
     }
@@ -1696,8 +1789,10 @@ mod tests {
         assert_eq!(Bindings::name(Control::Rest), "Rest");
         // Every control has a key or a button, but the Tweaks tab's, which start unbound;
         // the console and the screenshot at the end on their old keys.
-        // (Sprint, NVForever's own, has none until the player binds it: #3000.)
-        for (c, _, _) in GAME_CONTROLS[..TWEAK_CONTROLS].iter().filter(|(c, _, _)| *c != Control::Sprint) {
+        // (Sprint and Photo Mode, NVForever's own, have none until the player binds them:
+        // #3000, #3634.)
+        let unbound = [Control::Sprint, Control::PhotoMode];
+        for (c, _, _) in GAME_CONTROLS[..TWEAK_CONTROLS].iter().filter(|(c, _, _)| !unbound.contains(c)) {
             let x = b.get(*c);
             assert!(x.key.is_some() || x.mouse.is_some(), "{c:?}");
         }
@@ -1708,6 +1803,17 @@ mod tests {
         }
         assert_eq!(b.get(Control::Console), Binding { key: Some(KeyCode::Backquote), mouse: None });
         assert_eq!(b.get(Control::Screenshot), Binding { key: Some(KeyCode::F12), mouse: None });
+    }
+
+    /// Photo Mode's one binding, its opener (#3634, the maintainer's decision): no key and no
+    /// controller button until the player binds them; kept in the INI as the others are.
+    #[test]
+    fn photo_mode_is_unbound_by_default() {
+        let b = Bindings::game_defaults();
+        assert_eq!(b.get(Control::PhotoMode), Binding::default());
+        assert_eq!(b.pad(Control::PhotoMode), None);
+        assert_eq!(Bindings::by_name("Photo Mode"), Some(Control::PhotoMode));
+        assert!(with_controls("", &b).contains("Photo Mode="));
     }
 
     /// Sprint (#3000, the maintainer's decision on #3002): no key and no button by default, and
@@ -1888,5 +1994,17 @@ Rumble=1"), "{text}");
         assert_eq!(changed_controls(b), [R::Binding(Control::Forward, InputDevice::KeyboardMouse), R::Binding(Control::Jump, InputDevice::Controller), R::Binding(Control::Vats, InputDevice::Controller), R::Sensitivity(InputDevice::Controller)]);
         restore_rows(world, &changed_controls(world.resource::<Bindings>()));
         assert!(changed_controls(world.resource::<Bindings>()).is_empty());
+    }
+
+    #[test]
+    fn android_defaults_set_look_and_vertical_sensitivity_to_1_25_while_desktop_keeps_1_0() {
+        let android = Bindings::game_defaults_for_platform(true);
+        assert!((android.sensitivity() - 1.25).abs() < 1e-6);
+        assert!((android.vertical_sensitivity() - 1.25).abs() < 1e-6);
+        assert!((android.vertical[1] - 1.25).abs() < 1e-6);
+        let desktop = Bindings::game_defaults_for_platform(false);
+        assert!((desktop.sensitivity() - 1.0).abs() < 1e-6);
+        assert!((desktop.vertical_sensitivity() - 1.0).abs() < 1e-6);
+        assert!((desktop.vertical[1] - 1.0).abs() < 1e-6);
     }
 }

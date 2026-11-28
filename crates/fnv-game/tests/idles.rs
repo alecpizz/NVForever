@@ -695,6 +695,86 @@ fn temp_cloned_idles_admit_force_play_idle_and_preserve_clone_identity_and_paths
 }
 
 #[test]
+fn tempclone_idle_snapshots_modl_path_and_shares_set_model_path() {
+    use fnv_script::vm::XVal;
+
+    let f = fixture();
+    let mut g = game(&f);
+    let orig = FormId(IDLE_SIT);
+
+    // SetModelPath and SetIdleAnimPath mutate the same underlying MODL path.
+    assert_eq!(
+        fnv_game::nvse::call(&mut g, &Default::default(), "getidleanimpath", None, &[XVal::Ref(orig.0)]).unwrap().unwrap(),
+        XVal::Str("Characters\\_Male\\IdleAnims\\Sit.kf".into()),
+    );
+    assert_eq!(
+        fnv_game::nvse::call(&mut g, &Default::default(), "getmodelpath", None, &[XVal::Ref(orig.0)]).unwrap().unwrap(),
+        XVal::Str("Characters\\_Male\\IdleAnims\\Sit.kf".into()),
+    );
+    fnv_game::nvse::call(&mut g, &Default::default(), "setmodelpath", None, &[XVal::Str("Owned\\PreIdle.kf".into()), XVal::Ref(orig.0)]).unwrap().unwrap();
+    assert_eq!(
+        fnv_game::nvse::call(&mut g, &Default::default(), "getidleanimpath", None, &[XVal::Ref(orig.0)]).unwrap().unwrap(),
+        XVal::Str("Owned\\PreIdle.kf".into()),
+    );
+
+    // Clone inherits pre-clone MODL edit at creation time.
+    let XVal::Ref(cl1_raw) = fnv_game::nvse::call(&mut g, &Default::default(), "tempcloneform", None, &[XVal::Ref(orig.0), XVal::Num(1.0)]).unwrap().unwrap() else {
+        panic!("expected IDLE clone FormId");
+    };
+    let cl1 = FormId(cl1_raw);
+    assert_eq!(g.idle_animation_path(cl1), Some("Owned\\PreIdle.kf"));
+    assert_eq!(
+        fnv_game::nvse::call(&mut g, &Default::default(), "getidleanimpath", None, &[XVal::Ref(cl1.0)]).unwrap().unwrap(),
+        XVal::Str("Owned\\PreIdle.kf".into()),
+    );
+    assert_eq!(
+        fnv_game::nvse::call(&mut g, &Default::default(), "getmodelpath", None, &[XVal::Ref(cl1.0)]).unwrap().unwrap(),
+        XVal::Str("Owned\\PreIdle.kf".into()),
+    );
+
+    // Post-clone SetIdleAnimPath edit on original does NOT bleed into existing clone.
+    fnv_game::nvse::call(&mut g, &Default::default(), "setidleanimpath", None, &[XVal::Ref(orig.0), XVal::Str("Owned\\PostOrig.kf".into())]).unwrap().unwrap();
+    assert_eq!(g.idle_animation_path(orig), Some("Owned\\PostOrig.kf"));
+    assert_eq!(g.idle_animation_path(cl1), Some("Owned\\PreIdle.kf"));
+    assert_eq!(
+        fnv_game::nvse::call(&mut g, &Default::default(), "getidleanimpath", None, &[XVal::Ref(cl1.0)]).unwrap().unwrap(),
+        XVal::Str("Owned\\PreIdle.kf".into()),
+    );
+    assert_eq!(
+        fnv_game::nvse::call(&mut g, &Default::default(), "getmodelpath", None, &[XVal::Ref(cl1.0)]).unwrap().unwrap(),
+        XVal::Str("Owned\\PreIdle.kf".into()),
+    );
+
+    // Clone-of-clone snapshots parent clone's path and stays isolated from later parent edits.
+    let XVal::Ref(cl2_raw) = fnv_game::nvse::call(&mut g, &Default::default(), "tempcloneform", None, &[XVal::Ref(cl1.0), XVal::Num(1.0)]).unwrap().unwrap() else {
+        panic!("expected second-generation IDLE clone FormId");
+    };
+    let cl2 = FormId(cl2_raw);
+    assert_eq!(g.idle_animation_path(cl2), Some("Owned\\PreIdle.kf"));
+    fnv_game::nvse::call(&mut g, &Default::default(), "setidleanimpath", None, &[XVal::Ref(cl1.0), XVal::Str("Owned\\PostCl1.kf".into())]).unwrap().unwrap();
+    assert_eq!(g.idle_animation_path(cl1), Some("Owned\\PostCl1.kf"));
+    assert_eq!(g.idle_animation_path(cl2), Some("Owned\\PreIdle.kf"));
+    assert_eq!(
+        fnv_game::nvse::call(&mut g, &Default::default(), "getmodelpath", None, &[XVal::Ref(cl2.0)]).unwrap().unwrap(),
+        XVal::Str("Owned\\PreIdle.kf".into()),
+    );
+
+    // Cloning an unedited IDLE stays on authored model even after the original is edited later.
+    let mut g2 = game(&f);
+    let XVal::Ref(cl_unedited_raw) = fnv_game::nvse::call(&mut g2, &Default::default(), "tempcloneform", None, &[XVal::Ref(orig.0), XVal::Num(1.0)]).unwrap().unwrap() else {
+        panic!("expected unedited IDLE clone FormId");
+    };
+    let cl_unedited = FormId(cl_unedited_raw);
+    fnv_game::nvse::call(&mut g2, &Default::default(), "setidleanimpath", None, &[XVal::Ref(orig.0), XVal::Str("Owned\\AfterUnedited.kf".into())]).unwrap().unwrap();
+    assert_eq!(g2.idle_animation_path(orig), Some("Owned\\AfterUnedited.kf"));
+    assert_eq!(g2.idle_animation_path(cl_unedited), Some("Characters\\_Male\\IdleAnims\\Sit.kf"));
+    assert_eq!(
+        fnv_game::nvse::call(&mut g2, &Default::default(), "getmodelpath", None, &[XVal::Ref(cl_unedited.0)]).unwrap().unwrap(),
+        XVal::Str("Characters\\_Male\\IdleAnims\\Sit.kf".into()),
+    );
+}
+
+#[test]
 fn force_play_and_stop_idle_respect_player_pov_argument() {
     use fnv_game::idles::IdlePov;
     use fnv_script::vm::XVal;

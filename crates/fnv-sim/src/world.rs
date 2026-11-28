@@ -220,6 +220,11 @@ pub struct RefState {
     /// there picks this reference up ([`World::dropped_beside`]).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub dropped_by: Option<FormId>,
+    /// A created item reference the player dropped (by hand, a script's drop, a weapon
+    /// lost from the player's hand): in co-op every player sees it and any one can take
+    /// it [design]. Saved with the reference.
+    #[serde(skip_serializing_if = "std::ops::Not::not", default)]
+    pub player_drop: bool,
     /// A reference created at run time ([`World::place`]): the cell and position it was
     /// created at, its editor location for packages and `GetStartingPos`-like questions
     /// that a placed reference answers from the plugins (#2278) [hypothesis]. Saved with
@@ -304,6 +309,9 @@ pub enum SimError {
     /// SetQuestObject: the player cannot drop or sell one].
     #[error("{0} is a quest item: the player cannot drop it")]
     QuestItem(FormId),
+    /// [`World::place_as`]: the FormID is not a dynamic one, or a reference has it.
+    #[error("{0} is taken, or not a dynamic FormID")]
+    Taken(FormId),
     /// Every unequipped unit of the weapon is at zero condition
     /// ([`World::equip`]) [design: the owner's rule, 2026-10-11].
     #[error("{0} is broken: it cannot be equipped until it is repaired")]
@@ -610,6 +618,10 @@ pub struct World<'a> {
     /// Pick Locks Even With Key tweak and Shift are on (NVForever's tweaks,
     /// docs/design/tweaks.md); not saved.
     player_ignores_keys: bool,
+    /// Encounter zones do not freeze their level on first visit (`bNoLockEncounterZoneLevels`,
+    /// set by the game layer, [`World::set_no_lock_encounter_zone_levels`]) [design:
+    /// docs/design/tweaks.md]; not saved.
+    pub(crate) no_lock_encounter_zone_levels: bool,
     /// Encounter zones entered and their levels (`crate::zones`).
     pub(crate) zone_levels: BTreeMap<FormId, u16>,
     /// SetZoneRespawns: zone → whether it respawns, over its "Never Resets" flag.
@@ -653,8 +665,19 @@ pub struct World<'a> {
     /// of being unable to disable references that have an Enable Parent"; hypothesis: until
     /// SetEnableParent changes their parent]. Not saved.
     own_enable: std::collections::BTreeSet<FormId>,
+    /// Monotonic identity for this `World` instance, used by caches that track incremental
+    /// reference mutations against `World::refs`.
+    instance_id: u64,
+    /// References inserted into, removed from, or mutably borrowed via `World::refs` since
+    /// the last [`World::take_touched_refs`].
+    touched_refs: std::collections::BTreeSet<FormId>,
     next_dynamic: u32,
     rng: ChaCha8Rng,
+    /// Co-op replication: the references whose state was reached for writing
+    /// ([`World::get`], a reference made or taken away) since the host last took them
+    /// ([`World::take_touched`]). `None`, the default and always in single player:
+    /// nothing is kept [design]. Not saved.
+    touched: Option<std::collections::BTreeSet<FormId>>,
 }
 
 impl<'a> World<'a> {
@@ -686,6 +709,7 @@ impl<'a> World<'a> {
             power_armor_training: false,
             player_equips_broken: false,
             player_ignores_keys: false,
+            no_lock_encounter_zone_levels: false,
             zone_levels: BTreeMap::new(),
             zone_respawns: BTreeMap::new(),
             ref_levels: BTreeMap::new(),
@@ -697,9 +721,85 @@ impl<'a> World<'a> {
             zone_session: ZoneSession::default(),
             enable_parent_edits: BTreeMap::new(),
             own_enable: std::collections::BTreeSet::new(),
+            instance_id: serial,
+            touched_refs: std::collections::BTreeSet::new(),
             next_dynamic: FormId::FIRST_DYNAMIC.0,
             rng: ChaCha8Rng::seed_from_u64(cfg.seed),
+            touched: None,
         }
+    }
+
+    /// Unique monotonic ID of this `World` instance.
+    pub fn instance_id(&self) -> u64 {
+        self.instance_id
+    }
+
+    /// Drain references inserted into, removed from, or mutably borrowed in `World::refs`
+    /// since the last call.
+    pub fn take_touched_refs(&mut self) -> std::collections::BTreeSet<FormId> {
+        std::mem::take(&mut self.touched_refs)
+    }
+
+    /// Keep (or stop keeping) the references whose state is reached for writing, for a
+    /// co-op host's change log ([`World::take_touched`]). Off in single player.
+    pub fn set_tracking(&mut self, on: bool) {
+        match (on, self.touched.is_some()) {
+            (true, false) => self.touched = Some(Default::default()),
+            (false, true) => self.touched = None,
+            _ => {}
+        }
+    }
+
+    pub fn tracking(&self) -> bool {
+        self.touched.is_some()
+    }
+
+    /// The references reached for writing since the last call (empty when not tracking):
+    /// every write of a reference's state goes through [`World::get`] or makes or takes
+    /// away a whole state here, so nothing that changes one is missed.
+    pub fn take_touched(&mut self) -> std::collections::BTreeSet<FormId> {
+        self.touched.as_mut().map(std::mem::take).unwrap_or_default()
+    }
+
+    fn touch(&mut self, id: FormId) {
+        if let Some(t) = self.touched.as_mut() {
+            t.insert(id);
+        }
+    }
+
+    /// Dress actor `id` in exactly `items` (a co-op guest drawing an NPC as the host's
+    /// game has it dressed): each item it lacks is added once, each is equipped, and
+    /// every other equipped item is taken off (kept in the inventory). The actor counts
+    /// as outfitted, so its own outfitting does not dress it again. Returns whether
+    /// anything changed. The player is never dressed so; nor is a reference with no
+    /// inventory.
+    pub fn wear_as(&mut self, id: FormId, items: &[FormId]) -> Result<bool, SimError> {
+        if id == FormId::PLAYER_REF {
+            return Ok(false);
+        }
+        let known: Vec<FormId> = items.iter().copied().filter(|&i| self.forms.item(i).is_some()).collect();
+        let s = self.get(id)?;
+        let Some(inv) = s.inventory.as_mut() else { return Ok(false) };
+        let mut changed = false;
+        for i in inv.equipped() {
+            if !known.contains(&i) {
+                changed |= inv.clear_equipped(i);
+            }
+        }
+        for &i in &known {
+            if inv.count(i) <= 0 {
+                inv.add(i, 1);
+                changed = true;
+            }
+            if !inv.is_equipped(i) {
+                changed |= inv.set_equipped(i);
+            }
+        }
+        if !s.outfitted {
+            s.outfitted = true;
+            changed = true;
+        }
+        Ok(changed)
     }
 
     pub fn config(&self) -> SimConfig {
@@ -744,6 +844,16 @@ impl<'a> World<'a> {
     /// Whether the player's carried key is left unused on a lock ([`World::activate`]).
     pub fn set_player_ignores_keys(&mut self, on: bool) {
         self.player_ignores_keys = on;
+    }
+
+    /// Whether encounter zones avoid freezing their level on first visit
+    /// (`bNoLockEncounterZoneLevels`; not saved) [design: docs/design/tweaks.md].
+    pub fn set_no_lock_encounter_zone_levels(&mut self, on: bool) {
+        self.no_lock_encounter_zone_levels = on;
+    }
+
+    pub fn no_lock_encounter_zone_levels(&self) -> bool {
+        self.no_lock_encounter_zone_levels
     }
 
     pub fn power_armor_training(&self) -> bool {
@@ -792,6 +902,9 @@ impl<'a> World<'a> {
 
     /// The current state of `id`, creating it from the placement data on first use.
     pub fn get(&mut self, id: FormId) -> Result<&mut RefState, SimError> {
+        if let Some(t) = self.touched.as_mut() {
+            t.insert(id);
+        }
         if !self.refs.contains_key(&id) {
             if self.deleted_created.contains_key(&id) {
                 return Err(SimError::Deleted(id));
@@ -808,6 +921,7 @@ impl<'a> World<'a> {
                 self.presence_serial += 1;
             }
         }
+        self.touched_refs.insert(id);
         Ok(self.refs.get_mut(&id).expect("inserted above"))
     }
 
@@ -881,6 +995,7 @@ impl<'a> World<'a> {
             scale: None,
             equip_locks: BTreeMap::new(),
             dropped_by: None,
+            player_drop: false,
             made_at: None,
             made_rot: None,
             shot: false,
@@ -1074,6 +1189,40 @@ impl<'a> World<'a> {
         s.inventory = inv;
         s.outfitted = done;
         Ok(done)
+    }
+
+    /// Dress actor `id` in `items`, the armour and weapon another game has it wear and
+    /// hold (a co-op guest's copy of the host's NPC: each game rolls carried items from
+    /// its own random numbers, so the same NPC can come out dressed apart [design]). Its
+    /// armour and weapon not in `items` come off, each of `items` it lacks is given (one)
+    /// and each is put on; nothing else it carries changes. Afterwards
+    /// [`World::equipment`] is `items` (but for one a script locked on or off). Returns
+    /// whether anything changed. Not for the player.
+    pub fn dress_as(&mut self, id: FormId, items: &[FormId]) -> Result<bool, SimError> {
+        if id == FormId::PLAYER_REF {
+            return Ok(false);
+        }
+        if self.get(id)?.inventory.is_none() {
+            self.get(id)?.inventory = Some(Inventory::new());
+        }
+        self.outfit(id)?;
+        let mut changed = !std::mem::replace(&mut self.get(id)?.outfitted, true);
+        let forms = self.forms;
+        let drawn = |i: FormId| forms.item(i).is_some_and(|it| matches!(it.kind, ItemKind::Armor | ItemKind::Weapon));
+        let off: Vec<FormId> = self.inventory(id)?.equipped().into_iter().filter(|&i| drawn(i) && !items.contains(&i)).collect();
+        for i in off {
+            changed |= self.unequip(id, i).unwrap_or(false);
+        }
+        for &i in items.iter().filter(|&&i| drawn(i)) {
+            if self.inventory(id)?.is_equipped(i) {
+                continue;
+            }
+            if self.inventory(id)?.count(i) <= 0 {
+                self.add_item(id, i, 1)?;
+            }
+            changed |= self.equip(id, i).is_ok();
+        }
+        Ok(changed)
     }
 
     /// Whether container base form `base` currently has the Respawns flag, reading
@@ -1566,6 +1715,8 @@ impl<'a> World<'a> {
             let id = FormId(self.next_dynamic);
             self.next_dynamic += 1;
             self.presence_serial += 1;
+            self.touch(id);
+            self.touched_refs.insert(id);
             self.refs.insert(
                 id,
                 RefState {
@@ -1586,6 +1737,7 @@ impl<'a> World<'a> {
                     scale: None,
                     equip_locks: BTreeMap::new(),
                     dropped_by: None,
+                    player_drop: from == FormId::PLAYER_REF,
                     made_at: None,
                     made_rot: None,
                     shot: false,
@@ -2050,6 +2202,22 @@ impl<'a> World<'a> {
         self.restock_merchants(before.days_passed as f64, c.days_passed as f64)
     }
 
+    /// Set the clock to `c` as it stands, backwards too (a co-op guest takes the host's
+    /// clock). Nothing restocks: the time between is not lived through here.
+    pub fn set_calendar(&mut self, c: Calendar) -> Result<(), SimError> {
+        for (edid, v) in [
+            (clock::GAME_YEAR, c.year),
+            (clock::GAME_MONTH, c.month),
+            (clock::GAME_DAY, c.day),
+            (clock::GAME_HOUR, c.hour),
+            (clock::GAME_DAYS_PASSED, c.days_passed),
+        ] {
+            let (id, _) = self.time_global(edid)?;
+            self.globals.insert(id, v);
+        }
+        Ok(())
+    }
+
     /// The TimeScale global (game seconds per real second), if the plugins define it.
     pub fn time_scale(&self) -> Option<f64> {
         self.time_global(clock::TIME_SCALE).ok().map(|(_, v)| v as f64)
@@ -2135,7 +2303,11 @@ impl<'a> World<'a> {
             .filter(|id| self.refs.get(id).is_some_and(|s| self.container_respawns(s.base)))
             .collect();
         for id in &reset {
+            if let Some(t) = self.touched.as_mut() {
+                t.insert(*id);
+            }
             self.refs.remove(id);
+            self.touched_refs.insert(*id);
             self.presence_serial += 1;
             // Made anew: its level is fixed again when the cell is entered.
             self.ref_levels.remove(id);
@@ -2303,12 +2475,39 @@ impl<'a> World<'a> {
         if self.forms.sig(base).is_none() {
             return Err(SimError::UnknownForm(base));
         }
+        let id = FormId(self.next_dynamic);
+        self.next_dynamic += 1;
+        self.put_new(id, base, cell, pos, rot, count)
+    }
+
+    /// [`World::place`] under a dynamic FormID the caller chooses, which no reference
+    /// has: a co-op guest's copy of a reference the host's game created, under the host's
+    /// number, so the two games name it alike [design]. The dynamic counter is left as it
+    /// is.
+    pub fn place_as(&mut self, id: FormId, base: FormId, cell: Option<FormId>, pos: [f32; 3], rot: [f32; 3]) -> Result<FormId, SimError> {
+        if self.forms.sig(base).is_none() {
+            return Err(SimError::UnknownForm(base));
+        }
+        if !id.is_dynamic() || self.refs.contains_key(&id) || self.placed.get(id).is_some() {
+            return Err(SimError::Taken(id));
+        }
+        self.put_new(id, base, cell, pos, rot, 1)
+    }
+
+    /// Move the dynamic counter to at least `next`: references created from now on are
+    /// numbered from there (a co-op guest keeps its own above the host's,
+    /// [`World::place_as`]).
+    pub fn number_created_from(&mut self, next: u32) {
+        self.next_dynamic = self.next_dynamic.max(next);
+    }
+
+    fn put_new(&mut self, id: FormId, base: FormId, cell: Option<FormId>, pos: [f32; 3], rot: [f32; 3], count: i32) -> Result<FormId, SimError> {
         let mut inventory = self.roll_inventory(base, self.roll_level())?;
         // A created actor appears where the player is: it is outfitted at once.
         let outfitted = self.equip_default(base, &mut inventory);
-        let id = FormId(self.next_dynamic);
-        self.next_dynamic += 1;
         self.presence_serial += 1;
+        self.touch(id);
+        self.touched_refs.insert(id);
         self.refs.insert(
             id,
             RefState {
@@ -2329,6 +2528,7 @@ impl<'a> World<'a> {
                 scale: None,
                 equip_locks: BTreeMap::new(),
                 dropped_by: None,
+                player_drop: false,
                 made_at: Some((cell, pos)),
                 made_rot: Some(rot),
                 shot: false,

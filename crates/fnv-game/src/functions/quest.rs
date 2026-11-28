@@ -14,6 +14,15 @@ fn quest(g: &Game, a: &Args, i: usize) -> Result<FormId, String> {
     }
 }
 
+/// A co-op guest's world reads the host's story: quest `q` as the host has it, for a
+/// placed reference's script (`crate::coop::HostStory`), outside conditions.
+fn host<'g>(g: &'g Game, ctx: &Ctx, q: FormId) -> Option<&'g crate::coop::HostQuestState> {
+    if ctx.in_condition {
+        return None;
+    }
+    g.host_story(ctx.inst)?.quests.get(&q)
+}
+
 /// The quest a function names, or the running quest when the argument is absent
 /// (`GetQuestCompleted` documents an optional quest).
 fn quest_or_own(g: &Game, ctx: &Ctx, a: &Args) -> Result<FormId, String> {
@@ -30,14 +39,20 @@ pub fn set_stage(g: &mut Game, _ctx: &Ctx, a: &Args) -> Result<Value, String> {
     none()
 }
 
-pub fn get_stage(g: &mut Game, _ctx: &Ctx, a: &Args) -> Result<Value, String> {
+pub fn get_stage(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
     let q = quest(g, a, 0)?;
+    if let Some(h) = host(g, ctx, q) {
+        return Ok(Value::Num(h.stage as f64));
+    }
     Ok(Value::Num(g.quests.get(&q).map(|s| s.stage()).unwrap_or(0) as f64))
 }
 
-pub fn get_stage_done(g: &mut Game, _ctx: &Ctx, a: &Args) -> Result<Value, String> {
+pub fn get_stage_done(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
     let q = quest(g, a, 0)?;
     let stage = a.int(1)?;
+    if let Some(h) = host(g, ctx, q) {
+        return yes(h.stage_done(stage));
+    }
     yes(g.quests.get(&q).is_some_and(|s| s.stages_done.contains(&stage)))
 }
 
@@ -64,6 +79,9 @@ pub fn get_quest_running(g: &mut Game, _ctx: &Ctx, a: &Args) -> Result<Value, St
 /// Quest stage makes it 1, `L5.quest.stage_order`].
 pub fn get_quest_completed(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
     let q = quest_or_own(g, ctx, a)?;
+    if let Some(h) = host(g, ctx, q) {
+        return yes(h.ended);
+    }
     yes(g.quests.get(&q).is_some_and(|s| s.completed || s.failed))
 }
 

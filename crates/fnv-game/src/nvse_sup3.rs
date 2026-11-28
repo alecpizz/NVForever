@@ -6,9 +6,10 @@
 //!
 //! The `…Ex` getters and GetCalculatedPos/Alt write script variables: the VM gives them
 //! here without those arguments (`fnv_script::vm` `out_params`) and writes the array's
-//! values after the return value into them. The game's own compiler refused every call
-//! of them in the probes [observed: sup3 cam.setposex, cam.angleex, cam.rotex,
-//! calc.pos.*, calc.alt.*], so they follow the pages.
+//! values after the return value into them. Bare variable names failed to compile in
+//! `sup3`, while parenthesised `(var)` out-var calls compile and execute in the original
+//! game [observed: 2026-11-24, `w6_t1_11_sup_calc_pos`, `w6_t1_12_sup_tfc_and_mouse`,
+//! `w6_t1_12b_sup_tfc_rot_set`].
 
 use crate::game::{Game, RunCtx};
 use fnv_script::vm::{ArrayKind, XKey, XVal};
@@ -64,7 +65,8 @@ pub fn angle_z_to(dx: f64, dy: f64) -> f64 {
 
 /// The point `dist` along heading `angle` (degrees, 0 north, 90 east) from `(x, y)`
 /// [documented: GetCalculatedPos, "in front of the player" with the player's heading;
-/// hypothesis: the heading as GetAngle Z gives it].
+/// observed: 2026-11-24, `w6_t1_11_sup_calc_pos`: 0->(0,100), 45->(70.7,70.7),
+/// 90->(100,0), 180->(0,-100), -90->(-100,0)].
 pub fn point_at(x: f64, y: f64, angle: f64, dist: f64) -> (f64, f64) {
     let (s, c) = angle.to_radians().sin_cos();
     (x + dist * s, y + dist * c)
@@ -131,28 +133,35 @@ pub(crate) fn call(g: &mut Game, ctx: &RunCtx, name: &str, subject: Option<FormI
             outputs(g, 0.0, &[t.angle_x, t.angle_z])
         }
         // ---- the raw rotation ----
-        // X is angle X in radians; Y reads 0 and setting it changes nothing [observed:
-        // sup3 cam.on.angles 9.1804° as 0.1602; cam.setrot.x, 0.5 reads angle X 28.6479;
-        // cam.setrot.y, Y 1 left every value as it was]. Z: 0 [hypothesis: as Y].
+        // X is angle X in radians and Z is angle Z in radians; Y reads 0 and setting it
+        // changes nothing [observed: sup3 cam.on.angles 9.1804° as 0.1602; cam.setrot.x,
+        // 0.5 reads angle X 28.6479; cam.setrot.y, Y 1 left every value as it was;
+        // observed: 2026-11-24, `w6_t1_12_sup_tfc_and_mouse` (SetTFCAngleEx 15 90 ->
+        // GetTFCRotEx 0.2618, 1.5708) and `w6_t1_12b_sup_tfc_rot_set` (SetTFCRotEx 0.5
+        // 1.0 -> GetTFCRotEx 0.5000, 1.0000, GetTFCAngleEx 28.65, 57.30, GetTFCRot X/Y/Z
+        // = 0.5000, 0.0000, 1.0000); hypothesis: SetTFCRot Z sets angle Z in radians].
         "gettfcrot" => XVal::Num(match axis(args, 0) {
             Some(0) => g.ui.camera.tfc.angle_x.to_radians(),
+            Some(2) => g.ui.camera.tfc.angle_z.to_radians(),
             _ => 0.0,
         }),
         "settfcrot" => {
-            if axis(args, 0) == Some(0) {
-                let v = num(args, 1).to_degrees();
-                set(g, &|t| t.angle_x = v);
+            let v = num(args, 1).to_degrees();
+            match axis(args, 0) {
+                Some(0) => set(g, &|t| t.angle_x = v),
+                Some(2) => set(g, &|t| t.angle_z = v),
+                _ => {}
             }
             zero
         }
         "settfcrotex" => {
-            let v = num(args, 0).to_degrees();
-            set(g, &|t| t.angle_x = v);
+            let (x, z) = (num(args, 0).to_degrees(), num(args, 1).to_degrees());
+            set(g, &|t| (t.angle_x, t.angle_z) = (x, z));
             zero
         }
         "gettfcrotex" => {
-            let x = g.ui.camera.tfc.angle_x.to_radians();
-            outputs(g, 0.0, &[x, 0.0])
+            let t = g.ui.camera.tfc;
+            outputs(g, 0.0, &[t.angle_x.to_radians(), t.angle_z.to_radians()])
         }
         // ---- looking at a point from the camera ----
         // `x y z` and `x y` [documented: GetCalculatedAngleXForTFCCamera,

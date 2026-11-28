@@ -112,6 +112,8 @@ struct Playing {
     image: Handle<Image>,
     size: Vec2,
     frame_secs: f64,
+    /// A valid decoded frame has reached the live image; Android cover admission.
+    frame_uploaded: bool,
     /// Real time the first frame was shown.
     started: Option<f64>,
     /// The next frame waiting for its time.
@@ -164,6 +166,10 @@ pub struct Intro {
 }
 
 impl Intro {
+    pub fn frame_ready(&self) -> bool {
+        self.playing.as_ref().is_some_and(|p| p.frame_uploaded)
+    }
+
     pub fn is_playing(&self) -> bool {
         self.playing.is_some()
     }
@@ -458,7 +464,7 @@ fn start(
             r.spawn((IntroPicture, ImageNode { image_mode: NodeImageMode::Stretch, ..ImageNode::new(image.clone()) }, Node { position_type: PositionType::Absolute, ..default() }));
         })
         .id();
-    intro.playing = Some(Playing { frames: Mutex::new(rx), shared, image, size: Vec2::new(w as f32, h as f32), frame_secs: frame_us.max(1) as f64 / 1e6, started: None, waiting: None, sound: None, root, film });
+    intro.playing = Some(Playing { frames: Mutex::new(rx), shared, image, size: Vec2::new(w as f32, h as f32), frame_secs: frame_us.max(1) as f64 / 1e6, frame_uploaded: false, started: None, waiting: None, sound: None, root, film });
 }
 
 /// The part of the window a picture of `size` takes when fitted inside it.
@@ -530,6 +536,7 @@ fn play(
             let size = img.texture_descriptor.size;
             if px.len() == size.width as usize * size.height as usize * 4 {
                 img.data = Some(px);
+                p.frame_uploaded = true;
             }
         }
     }
@@ -622,4 +629,34 @@ mod tests {
         assert!(!unattended.ask(film("video\\other.bik")));
         assert!(unattended.queue.is_empty());
     }
+    #[test]
+    fn android_intro_readiness_requires_a_valid_frame_applied_to_the_live_image() {
+        use bevy::{asset::RenderAssetUsages, render::render_resource::{Extent3d, TextureDimension, TextureFormat}};
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::input::InputPlugin, bevy::state::app::StatesPlugin))
+            .init_state::<PlayState>().init_resource::<Paused>()
+            .init_resource::<Assets<Image>>().init_resource::<Assets<IntroSound>>()
+            .add_systems(Update, play);
+        let image = app.world_mut().resource_mut::<Assets<Image>>().add(Image::new_fill(
+            Extent3d { width: 1, height: 1, depth_or_array_layers: 1 }, TextureDimension::D2,
+            &[0, 0, 0, 255], TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD));
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let root = app.world_mut().spawn_empty().id();
+        app.insert_resource(Intro { playing: Some(Playing {
+            frames: Mutex::new(rx), shared: Arc::new(Shared { sound: Mutex::new(VecDeque::new()),
+                format: Mutex::new(None), stop: AtomicBool::new(false), done: AtomicBool::new(false) }),
+            image: image.clone(), size: Vec2::ONE, frame_secs: 1.0, frame_uploaded: false,
+            started: None, waiting: None, sound: None, root, film: Film::Intro,
+        }), ..default() });
+        app.update();
+        assert!(app.world().resource::<Intro>().is_playing());
+        assert!(!app.world().resource::<Intro>().frame_ready(), "starting decoder/black placeholder never admits reveal");
+        tx.send((0, vec![1, 2, 3])).unwrap(); app.update();
+        assert!(!app.world().resource::<Intro>().frame_ready(), "malformed frame is not content evidence");
+        tx.send((0, vec![11, 22, 33, 255])).unwrap(); app.update();
+        assert!(app.world().resource::<Intro>().frame_ready());
+        assert_eq!(app.world().resource::<Assets<Image>>().get(&image).unwrap().data.as_deref(), Some([11, 22, 33, 255].as_slice()));
+    }
+
 }

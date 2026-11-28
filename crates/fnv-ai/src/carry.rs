@@ -86,9 +86,17 @@ const RADIATION_SEARCH: f32 = 20000.0;
 /// each with its lock as the game holds it), or that no door at all joins the two places
 /// (`NavGraph::joined_by_doors`) [design, #2405: "0 triangles searched" alone was read as
 /// a missing navmesh, for a locked door in the same room and for a sealed scene cell
-/// alike]. With the doors named.
+/// alike]. With the doors named. A place with no navmesh near it is named with its cell
+/// or worldspace [design, #2756: Jean-Baptiste's "(0, 0, 0)", logged while he was in
+/// Freeside, read as a goal looked for in his own worldspace; it is his marker's place in
+/// FreesideSilverRush, the data's own].
 fn why_unreachable(game: &Game, nav: &NavGraph, from: Place, to: Place, params: &PathParams, e: &PathError) -> (String, Vec<u32>) {
     let mut why = e.to_string();
+    if let PathError::NoTriangle { which, .. } = e {
+        let space = if *which == "start" { from.space } else { to.space };
+        let (fnv_nav::Space::World(f) | fnv_nav::Space::Interior(f)) = space;
+        why.push_str(&format!(" in {}", game.data.name(FormId(f))));
+    }
     if !matches!(e, PathError::Unreachable { .. }) {
         return (why, Vec::new());
     }
@@ -681,6 +689,10 @@ pub struct Agent {
     /// What it does in a combat state (`crate::alert`): its package's own doings wait
     /// meanwhile.
     pub search: Option<crate::alert::Search>,
+    /// A target it found no way to (`Ai::close_in`), when it may look for one again and
+    /// how long it waited this time: until then it holds its ground without a new search
+    /// (#3785).
+    pub(crate) no_way_to: Option<(FormId, f64, f64)>,
     /// It cannot walk (a creature without movement animations, a raven): it stays where
     /// it is, whatever its packages say ([`Ai::root`]).
     pub rooted: bool,
@@ -1203,7 +1215,7 @@ impl Ai {
             own_turning(&mut walker, s);
         }
         walker.pace = self.paces.get(&actor).copied().unwrap_or(1.0);
-        self.agents.insert(actor, Agent { walker, activity: Activity::None, package: None, goal: None, route_at: 0, trip_started: 0.0, trip_from: 0.0, waiting_at: None, using: None, held_seat: None, sandbox: None, wait_until: None, talk: None, pushed_at: None, chat: None, search: None, face_to: None, following: None, rooted: false, fixed: false, asked_door: None, weapon_order: None, errand: None, backing: None, walk_up: None, walk_pace: None, restarts: 0, calm_at: None, held: false });
+        self.agents.insert(actor, Agent { walker, activity: Activity::None, package: None, goal: None, route_at: 0, trip_started: 0.0, trip_from: 0.0, waiting_at: None, using: None, held_seat: None, sandbox: None, wait_until: None, talk: None, pushed_at: None, chat: None, search: None, no_way_to: None, face_to: None, following: None, rooted: false, fixed: false, asked_door: None, weapon_order: None, errand: None, backing: None, walk_up: None, walk_pace: None, restarts: 0, calm_at: None, held: false });
         Ok(())
     }
 
@@ -1236,6 +1248,21 @@ impl Ai {
         game.unblock_packages_of(actor);
         let heading = game.world.peek(actor).map_or(0.0, |s| s.rot[2]);
         self.script_moved.insert(actor, game.time);
+        // Keep a low-process actor from firing a far update in the brief window while a
+        // multi-frame script batch is still moving actors and updating quest flags (issue
+        // #3041: VERStalkersSouth01 moves 18 stalkers at 0.1 s intervals before clearing
+        // StalkersOn 1.8 s later) [design: matches `SCRIPT_MOVE_HOLD`].
+        if !self.coming.contains(&actor) {
+            let every = if self.far.contains(&actor) {
+                crate::process::FAR_PROCESS_SECONDS
+            } else {
+                crate::process::LOW_PROCESS_SECONDS
+            };
+            let cap = (every - crate::arrive::SCRIPT_MOVE_HOLD as f32).max(0.0);
+            if let Some(Some(owed)) = self.low.get_mut(&actor) {
+                *owed = owed.min(cap);
+            }
+        }
         self.set_using(game, actor, None);
         let Some(a) = self.agents.get_mut(&actor) else { return };
         let w = &mut a.walker;
@@ -2702,10 +2729,14 @@ impl Ai {
         }
         let params = self.path_params(game, actor);
         let to = choice.target.expect("checked");
-        let speed = self.calm_speeds(actor).walk;
+        // A sandbox with Always Run runs between its spots, as the package's other walks
+        // do (`Ai::plan`): Freeside's chased rat (VFSChasedRatEscapingPackage, Sandbox,
+        // Always Run) walked at 56 units/s with the child running after it (#4487).
+        let running = self.agents[&actor].package.and_then(|p| game.package_def(&p)).is_some_and(|d| d.has(flags::ALWAYS_RUN));
+        let speed = if running { self.pace(game, actor, true) } else { self.calm_speeds(actor).walk };
         let a = self.agents.get_mut(&actor).expect("listed");
-        // A package's walk: [`Ai::repace_walk`] gives it the drawn walk.
-        (a.walker.speed, a.walk_pace) = (speed, Some((1.0, speed)));
+        // A package's walk: [`Ai::repace_walk`] gives it the drawn walk; a run is not one.
+        (a.walker.speed, a.walk_pace) = (speed, (!running).then_some((1.0, speed)));
         match a.walker.go_to(nav, to, &params) {
             Ok(path) => {
                 let walk = path.length;
@@ -2978,7 +3009,8 @@ impl Ai {
     #[allow(clippy::too_many_arguments)]
     fn no_way(&mut self, game: &mut Game, nav: &NavGraph, actor: FormId, package: FormId, from: Place, to: Place, patrol_point: Option<FormId>, e: PathError, params: &PathParams) {
         if !matches!(e, PathError::Unreachable { .. }) {
-            return self.unreachable(game, actor, package, e.to_string());
+            let (why, _) = why_unreachable(game, nav, from, to, params, &e);
+            return self.unreachable(game, actor, package, why);
         }
         if !params.opens_doors && nav.can_reach(from, to, &PathParams { opens_doors: true, ..params.clone() }) {
             self.log(game, actor, AiEvent::DoorsClosedToIt { package });

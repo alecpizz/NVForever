@@ -31,9 +31,12 @@ from a cited document or from compiling our own test scripts with xNVSE,
 - **A version check only works in a script that uses nothing else from the extender**:
   without the extender, a script using any extender feature fails before the check runs
   [documented: GetNVSEVersion, "Usage Warning"].
-- How xNVSE 6.4.9 splits into these three numbers (6 / 4 / 9?): open [hypothesis: the
-  three getters map to the three parts of the dotted version]. A probe printing the three
-  under the owner's xNVSE settles it.
+- xNVSE 6.4.9 splits into `6 / 4 / 9` across `GetNVSEVersion`, `GetNVSERevision`, and
+  `GetNVSEBeta` [observed: Fallout: New Vegas 1.4.0.525 + xNVSE 6.4.9, 2026-11-23,
+  `GSDocMitchellHouse` (`0x00103DF9`), 10 official base masters, read-only `PrintToConsole`
+  probe `core_01_nvse_version_parts` (`tools/capture/nvse/catalogs/wave4a_extenders.json`,
+  #3679, printing `GetNVSEVersion`, `GetNVSERevision`, `GetNVSEBeta`):
+  `PROBE|core_01_nvse_version_parts|6,4,9`; no DLL or source consulted].
 
 ## 2. Extender plugins
 
@@ -176,8 +179,8 @@ low.
   TTW calls from both (`TTW_*`, StewieGetValue, `fnv_game::nvse_small`). Neither plugin
   is on the owner's install, so neither version was read: 941 was the lowest TTW accepts,
   and TTW never asks ttw_nvse's. Most of Stewie's tweaks were not built initially
-  (ext-small.md); as of 2026-11-23 Stewie's is reported at `945` after completing the
-  9.42–9.45 qualification step (§5.1).
+  (ext-small.md); Stewie's was promoted to `945` on 2026-11-23 (#3179) and to `960` on
+  2026-11-24 after completing the 9.50–9.60 qualification step (§5.1, #3183).
 - **The other plugins the engine builds** (2026-11-12): until then a mod asking
   `IsPluginInstalled "SUP NVSE Plugin"` got 0 and `GetPluginVersion` -1 for every plugin
   outside the list above, though all of that plugin's catalogue functions run here
@@ -202,6 +205,12 @@ low.
     (`int`/`float`/`ref`/`string_var`/`array_var`) and transparent expression/statement
     result printing directly in the interactive console (`docs/design/console.md`,
     `Game::run_console_line`).
+  - `"Engine Optimizations"` at `100` and `"HighResLocalMaps"` at `12` (2026-11-25,
+    #4491) [observed in FadedLight's Nuclear Sunset fork: an installed copy's `nvse.log`
+    registered names and versions]. Neither has script functions; their work (engine
+    speed-ups, a sharper local map) is the engine's own here, as UIO's lists are. Nuclear
+    Sunset's start-up Script Runner check shows "Outdated xNVSE plugins detected!" without
+    them.
   - Still not reported: `"yUI"` (its two ySI trait functions are built, its menus are
     not; a mod that finds it goes on to read its tiles [observed: JustAssortedMods.esp
     4.6 asks `IsPluginInstalled "yUI"` and then reads `HUDMainMenu/ySI/_ySI`]), and the
@@ -212,13 +221,14 @@ low.
   showed "4GB patch missing"].
 - Left as it is: TTW's `GetNumericIniSetting "bBackgroundLoadLipFiles:BackgroundLoad"`
   check reads the game's INI as NVForever reads it; its message ("bad INI") shows only
-  when that setting is off or missing there.
+  when that setting is off or missing there. A Mod Organizer 2 profile's
+  `FalloutCustom.ini` counts (mod-organizer-profile.md, #4491).
 - **GetNVSEVersionFull**: a JIP function; answer only once JIP's module exists.
 - **GetLNVersion**: 0, as documented.
 
 ### 5.1 Stewie's Tweaks: reported version by the features built
 
-[design, updated 2026-11-23] Mods gate on `GetPluginVersion "lStewieAl's Tweaks"` for a
+[design, updated 2026-11-24] Mods gate on `GetPluginVersion "lStewieAl's Tweaks"` for a
 feature that came in that version [documented: the plugin's public changelog,
 https://www.nexusmods.com/newvegas/mods/66347?tab=logs]. The version reported rises one
 verified step at a time once every feature for that step is built and checked; it is
@@ -226,21 +236,27 @@ never the version of a DLL found on disk (the engine is not that DLL). A higher 
 rises only when its full step is verified, with a row here and tests
 (`fnv_script::vm::jip::PLUGINS`; `stewie_945_960_970_qualification`).
 
-`GetPluginVersion "lStewieAl's Tweaks"` was promoted from `941` to **`945`** (`#3179`)
-once all public 9.42–9.45 changelog features (9.42–9.44 were never published), the
-observed `bNoCasinoBans` / `SetCasinoWinningsLevel` rules (`#2878`, `#2962`, `#3474` /
-`#3490`), the remaining 9.45 tweaks (`#3481`: Sleep Healing Min Duration +
-`bMiscStatRequiresSleepDuration`, Hit Location in Cinematic Killcams, Scale Radio Volume,
-`bReviveWhenChangingCells`, non-hostile option of No Self Explosion Damage, `fMinValue`
-for Grabbing Items Is Crime, Popups Don't Move Cursor, and empty-objective hiding), and
-the Casino Rewards Fix 1.1 consumer paths (`#3180`, `#3378`) were built and verified.
-Higher gates (`960`, `970`) remain unpromoted until their own verified steps land.
+`GetPluginVersion "lStewieAl's Tweaks"` was promoted from `941` to `945` (`#3179`,
+`#3665`), and from `945` to **`960`** (`#3183`) once all public 9.50–9.60 changelog
+features (`bVATSStopFollowingDeadTargets`, `bVATSThrowablesUseVisibility`,
+`bArmorConditionLabel` + live `StewVal`/`StewieGetValue` + weapon-column X alignment,
+`bImprovedHacking` keep-matching-characters, `bHideCrosshairWhileReloading`,
+`bReplaceHelpWithConsole` + custom label, `bHostilesPrioritizePlayer`, and
+`bRunningCostsAP` sneak options via `#3494`; `bAutoReadNotes` explicitly skipped as it
+requires Book Menu Restored), live `StewVal`/`StewieGetValue` exposure for
+`bKeepPipboyLightOnCellChange:Tweaks` and `bDisableStealthEffectInPipboy:Tweaks` (alongside
+existing critical and inventory queries), live `GetPipBoyMode` (`nvse_jip2.rs`, observed
+via `w4c_b3_06_toggle_pipboy_tab`), menu search-bar tile publication (`IM_SearchBar`,
+`SM_SearchBar`, `MM_SearchBar`, `BM_SearchBar`, `CM_SearchBar`, `RM_SearchBar` via
+`ui_search_bar::publish_for_menu`), and clean-room E2E contract tests for the Pip-Boy UI
+Tweaks and Quality of Life ESPless `< 960` gates were built and verified. The higher gate
+(`970`, `#3184`) remains unpromoted until its own verified step lands.
 
 | Reported | Feature it stands for (changelog) | Status in NVForever | Mods gated (installed list) |
 |---|---|---|---|
 | 941 (superseded by 945) | TTW 3.4's minimum | Built & verified: TTW's `TTW_*` and StewieGetValue calls | Tale of Two Wastelands; gates 905/906 (Explosion Reactions, Animated Moments, Drowning Visuals, Modern Minimap's MCM list) |
-| 945 (reported) | 9.45 "No Casino Bans - make GetCasinoWinningStage not return banned" and all 9.42–9.45 items (#3179) | Built & verified: `casino::script_winnings_level` (#2878, live `bNoCasinoBans=0/1` observed in `blackjack.md` §4 via #2962), `SetCasinoWinningsLevel` alignment (#3474 / #3490), Casino Rewards Fix 1.1 consumers (#3180: casino MenuMode 1080/1081/1082, `SetOnDialogTopicEventHandler` for INFO/DIAL/FLST/wildcard filters, 8-digit all-decimal bare hex FormIDs), remaining 9.45 tweaks (#3481), and clean-room E2E contract tests (#3378, #3179) | Casino Rewards Fix 1.1 (`< 945` guard; then `GetCasinoWinningsLevel`, casino menu-close and dialogue-topic events) |
-| 960 (not reported) | 9.60 "Add Command StewieGetValue (alias StewVal)", xNVSE 6.3.0 (#3183) | Held for its own verified step PR (#3183) | Pip-Boy UI Tweaks, Quality of Life ESPless (`bKeepPipboyLightOnCellChange`), MCM Extender requirement lists asking 960 |
+| 945 (superseded by 960) | 9.45 "No Casino Bans - make GetCasinoWinningStage not return banned" and all 9.42–9.45 items (#3179) | Built & verified: `casino::script_winnings_level` (#2878, live `bNoCasinoBans=0/1` observed in `blackjack.md` §4 via #2962), `SetCasinoWinningsLevel` alignment (#3474 / #3490), Casino Rewards Fix 1.1 consumers (#3180), remaining 9.45 tweaks (#3481), and clean-room E2E contract tests (#3378, #3665) | Casino Rewards Fix 1.1 (`< 945` guard; then `GetCasinoWinningsLevel`, casino menu-close and dialogue-topic events) |
+| 960 (reported) | 9.50–9.60 tweaks, "Add Command StewieGetValue (alias StewVal)", xNVSE 6.3.0 (#3183) | Built & verified: remaining 9.50–9.60 tweaks & live `bArmorConditionLabel` (#3494), live `StewVal`/`StewieGetValue` for `bKeepPipboyLightOnCellChange` / `bDisableStealthEffectInPipboy` / critical & inventory settings (`ext-small.md`, `stewie-stat-profile.md`), live `GetPipBoyMode` (`nvse_jip2.rs`, probe `w4c_b3_06_toggle_pipboy_tab`), menu search-bar tile publication (`native-menu-search.md`, `ui_search_bar::publish_for_menu`), and clean-room E2E contract tests (`stewie_945_960_970_qualification`) | Pip-Boy UI Tweaks, Quality of Life ESPless (`bKeepPipboyLightOnCellChange`, `GetPipBoyMode`), MCM Extender requirement lists asking 960 |
 | 970 (not reported) | 9.70 inventory/AddItem refresh and WASD menu changes (#3184) | Held for its own verified step PR (#3184) | Barter Categories Icons |
 
 [observed: the installed mods' scripts and requirement lists, read locally; only the
@@ -248,11 +264,18 @@ gate numbers and the function/key names they call are kept] The "Mods gated" col
 [observed: original FNV 1.4.0.525 + xNVSE 6.4.9 + JIP LN 57.3 + Stewie's Tweaks v1005,
 2026-11-22, two-pass `bNoCasinoBans` 0 vs 1 capture] The `4 -> 3` clamp on
 `GetCasinoWinningsLevel`, quarter thresholds, and `SetCasinoWinningsLevel` earnings write
-/ untouched-casino no-op in `blackjack.md` §4. [design] Reporting `945` is an engine
-design choice (the engine is not the plugin and has no version of its own); `960` (#3183)
-and `970` (#3184) remain unpromoted until their full step verifications land. [hypothesis]
-Live-game execution of the third-party Casino Rewards Fix 1.1 mod files against retail
-game data remains separate acceptance testing beyond the synthetic clean-room E2E suite.
+/ untouched-casino no-op in `blackjack.md` §4. [observed: 2026-11-24, `GSDocMitchellHouse`
+(`0x00103DF9`), FNV 1.4.0.525 + xNVSE 6.4.9 + JohnnyGuitarNVSE 528 + JIP LN 57.30 with
+10 official base masters, committed probe `w4c_b3_06_toggle_pipboy_tab` in
+`tools/capture/nvse/catalogs/wave4c_extenders.json`] Live `GetPipBoyMode` closed (`0`) vs
+open (`3`) semantics in `nvse_jip2.rs`. [design] Reporting `960` is an engine design
+choice (the engine is not the plugin and has no version of its own; requires owner
+approval per #3665); `970` (#3184) remains unpromoted until its full step verification
+lands; `nvf-play` syncs `GetPipBoyMode` opening (`2`, `Phase::Raising`) and closing (`4`, `Phase::Lowering`) via `Game::ui.pipboy_mode` (while animation sub-phases `1`/`5` remain not built and headless `fnv-game` retains the `3`/`0` fallback), `bAutoReadNotes` is skipped (requires Book Menu Restored), and unrepresented
+switches (`bScaleCriticalDamage`, `bWeightlessItems`) retain INI fallback. [hypothesis]
+Live-game execution of the third-party Pip-Boy UI Tweaks and Quality of Life ESPless mod
+files against retail game data remains separate acceptance testing beyond the synthetic
+clean-room E2E suite.
 
 ## 6. Open (to observe)
 

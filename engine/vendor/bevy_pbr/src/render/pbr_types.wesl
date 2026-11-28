@@ -121,6 +121,11 @@ struct PbrInput {
     /// Multiplier applied to all directional lights before cascade and contact shadows,
     /// use this for custom shadow maps. Defaults to 1.0.
     directional_shadow_factor: f32,
+    /// NVForever (crown shadow, nvforever tree.wesl): world centre (xyz) and radius (w) of
+    /// a SpeedTree crown; the directional shadow is taken where the ray to the light
+    /// leaves it. w = 0: off.
+    @if(NVF_CROWN_SHADOW)
+    nvf_crown: vec4<f32>,
 };
 
 /// Creates a PbrInput with default values
@@ -149,6 +154,8 @@ fn pbr_input_new() -> PbrInput {
 
     pbr_input.flags = 0u;
     pbr_input.directional_shadow_factor = 1.0;
+    @if(NVF_CROWN_SHADOW)
+    pbr_input.nvf_crown = vec4<f32>(0.0);
 
     return pbr_input;
 }

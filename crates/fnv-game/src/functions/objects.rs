@@ -28,6 +28,7 @@ pub fn note_created(g: &mut Game, r: FormId) {
             tracing::warn!("created {r}: the items of {source}: {e}");
         }
     }
+    g.maybe_apply_npc_weapon_mods(r);
     g.emit(EventKind::Placed { reference: r, base, cell, pos });
     if g.ref_script(r).is_some() {
         g.moved.insert(r);
@@ -50,14 +51,29 @@ impl Game<'_> {
         if self.base_script(base).is_some() || self.base_script(original).is_some() {
             return Err("placing a temporary scene base with an attached script is not supported yet".into());
         }
-        // Match the existing getter's clone-local then inherited session override.
+        // Pre-clone original `MODL/` overrides are snapshotted onto `base` at
+        // `TempCloneForm` creation (`Game::snapshot_model_path`), so read only `base`'s
+        // own `MODL/` entry and never live-inherit post-clone original edits.
         // Preserve explicit empty as distinct from absent authored metadata.
-        let model_override = match self.field_overrides.get(&(base, "MODL/".into())).or_else(|| self.field_overrides.get(&(original, "MODL/".into()))) {
+        let model_override = match self.field_overrides.get(&(base, "MODL/".into())) {
             Some(fnv_script::vm::XVal::Str(path)) => Some(path.clone()),
             _ => None,
         };
         let descriptor = fnv_sim::world::TemporarySceneBase { original, model_override };
         self.world.place_temporary_scene_base(base, descriptor, cell, pos, rot, count).map_err(|e| e.to_string())
+    }
+
+    /// [`Game::create_at`] under the FormID `id` (a co-op guest's copy of an actor the
+    /// host's game created, numbered as the host numbers it: `World::place_as`), its
+    /// leveled lists read at `level` (the host's), so its pick, drawn look and carried
+    /// items are the host's: they are seeded by the reference [design].
+    pub fn create_as(&mut self, id: FormId, base: FormId, cell: Option<FormId>, pos: [f32; 3], rot: [f32; 3], level: Option<fnv_sim::zones::LevelAt>) -> Result<FormId, String> {
+        let r = self.world.place_as(id, base, cell, pos, rot).map_err(|e| e.to_string())?;
+        if let Some(at) = level {
+            self.world.set_level(r, at);
+        }
+        note_created(self, r);
+        Ok(r)
     }
 
     /// A new reference of `base` at `pos` in `cell` (with angles `rot`), made and announced
@@ -100,7 +116,7 @@ pub fn place_at_me(g: &mut Game, ctx: &Ctx, a: &Args) -> Result<Value, String> {
         let r = g.place_scene_base(base, cell, pos, rot, each)?;
         note_created(g, r);
         if explodes {
-            g.combat_requests.push(crate::combat::CombatRequest::Explode { explosion: base, at: pos });
+            g.combat_requests.push(crate::combat::CombatRequest::Explode { explosion: base, at: pos, source: Some(at) });
         }
         last = Some(r);
     }

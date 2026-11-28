@@ -1,0 +1,196 @@
+{
+  "schema": "nvf.nvse.probe.catalog/1",
+  "catalog_id": "wave6d1_on_enable_disable_pre_update",
+  "description": "Wave 6D-1 strictly read-only console-only clean-room probe catalog verifying xNVSE OnDisable and OnEnable PRE-update GetDisabled timing, null calling reference (GetSelfAlt == 0), and (ref, 0) arguments.",
+  "game_version": "Fallout: New Vegas 1.4.0.525 (040020D0)",
+  "xnvse_version": "6.4.9",
+  "official_masters": [
+    "FalloutNV.esm",
+    "DeadMoney.esm",
+    "HonestHearts.esm",
+    "OldWorldBlues.esm",
+    "LonesomeRoad.esm",
+    "GunRunnersArsenal.esm",
+    "CaravanPack.esm",
+    "ClassicPack.esm",
+    "MercenaryPack.esm",
+    "TribalPack.esm"
+  ],
+  "extender_versions": {
+    "JIP LN NVSE": "57.30 (5730)",
+    "ShowOffNVSE Plugin": "184",
+    "lStewieAl's Tweaks": "1005"
+  },
+  "batches": [
+    {
+      "id": "w6d1_on_enable_disable_pre_update",
+      "title": "Wave 6D-1 - OnDisable / OnEnable Pre-Update Timing and Null Self",
+      "extender": "xNVSE 6.4.9 + JIP LN 57.30 + ShowOffNVSE 184",
+      "required_plugins": [
+        "jip_nvse.dll",
+        "ShowOffNVSE.dll"
+      ],
+      "probes": [
+        {
+          "id": "w6d1_07_on_enable_on_disable_args",
+          "bucket": "A",
+          "extender": "xNVSE 6.4.9 + ShowOff 184",
+          "required_plugins": [
+            "jip_nvse.dll",
+            "ShowOffNVSE.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-events.md",
+          "spec_line": 65,
+          "functions_tested": [
+            "OnDisable",
+            "OnEnable",
+            "SetEnableParent",
+            "DisableAlt",
+            "EnableAlt"
+          ],
+          "claim": "Verify xNVSE OnDisable and OnEnable argument count/order (1-arg vs 2-arg, GetSelfAlt, arg1, arg2, GetDisabled inside callback) and SetEnableParent + DisableAlt/EnableAlt interaction.",
+          "expected": "Check whether OnDisable/OnEnable passes (ref) or (ref, 0) or (0, ref) and GetSelfAlt; check Disable ignored vs DisableAlt with enable parent.",
+          "script_lines": [
+            "ref rCapB = GetFormFromMod \"FalloutNV.esm\" \"F\"",
+            "ref rRef = Player.PlaceAtMe rCapB 1",
+            "ref cbD1 = CompileScript \"nvseprobe_s_w6d1_07_d1.gek\"",
+            "ref cbD2 = CompileScript \"nvseprobe_s_w6d1_07_d2.gek\"",
+            "ref cbE1 = CompileScript \"nvseprobe_s_w6d1_07_e1.gek\"",
+            "Player.AuxVarSetFlt \"*w6d1_07_dn1\" 0",
+            "Player.AuxVarSetFlt \"*w6d1_07_dn2\" 0",
+            "Player.AuxVarSetFlt \"*w6d1_07_en1\" 0",
+            "SetEventHandler \"OnDisable\" cbD1 \"first\"::rRef",
+            "SetEventHandlerAlt \"OnDisable\" cbD2 1::rRef",
+            "SetEventHandler \"OnEnable\" cbE1 \"first\"::rRef",
+            "rRef.Disable 0",
+            "int dn1 = Player.AuxVarGetFlt \"*w6d1_07_dn1\"",
+            "int dn2 = Player.AuxVarGetFlt \"*w6d1_07_dn2\"",
+            "int dSelfOk = ((Player.AuxVarGetRef \"*w6d1_07_ds\") == rRef)",
+            "int dA1Ok = ((Player.AuxVarGetRef \"*w6d1_07_da1\") == rRef)",
+            "int dInDis = Player.AuxVarGetFlt \"*w6d1_07_ddis\"",
+            "int dA2Zero = ((Player.AuxVarGetRef \"*w6d1_07_da2\") == 0)",
+            "rRef.Enable 0",
+            "int en1 = Player.AuxVarGetFlt \"*w6d1_07_en1\"",
+            "int eSelfOk = ((Player.AuxVarGetRef \"*w6d1_07_es\") == rRef)",
+            "int eA1Ok = ((Player.AuxVarGetRef \"*w6d1_07_ea1\") == rRef)",
+            "int eInDis = Player.AuxVarGetFlt \"*w6d1_07_edis\"",
+            "rRef.SetEnableParent Player",
+            "rRef.Disable 0",
+            "int disPar = rRef.GetDisabled",
+            "rRef.DisableAlt 0",
+            "int disAlt = rRef.GetDisabled",
+            "rRef.EnableAlt 0",
+            "int enAlt = rRef.GetDisabled",
+            "rRef.SetEnableParent",
+            "RemoveEventHandler \"OnDisable\" cbD1",
+            "RemoveEventHandler \"OnDisable\" cbD2",
+            "RemoveEventHandler \"OnEnable\" cbE1",
+            "rRef.Disable 0",
+            "rRef.MarkForDelete",
+            "PrintToConsole \"PROBE|w6d1_07_on_enable_on_disable_args|dis(n1=%g,n2=%g,sOk=%g,a1Ok=%g,a2z=%g,inDis=%g)|en(n1=%g,sOk=%g,a1Ok=%g,inDis=%g)|par(d=%g,da=%g,ea=%g)\" dn1 dn2 dSelfOk dA1Ok dA2Zero dInDis en1 eSelfOk eA1Ok eInDis disPar disAlt enAlt"
+          ],
+          "helper_scripts": {
+            "nvseprobe_s_w6d1_07_d1.gek": [
+              "begin Function { ref rTarget }",
+              "Player.AuxVarSetFlt \"*w6d1_07_dn1\" ((Player.AuxVarGetFlt \"*w6d1_07_dn1\") + 1)",
+              "Player.AuxVarSetRef \"*w6d1_07_ds\" (GetSelfAlt)",
+              "Player.AuxVarSetRef \"*w6d1_07_da1\" rTarget",
+              "Player.AuxVarSetFlt \"*w6d1_07_ddis\" (rTarget.GetDisabled)"
+            ],
+            "nvseprobe_s_w6d1_07_d2.gek": [
+              "begin Function { ref r1, ref r2 }",
+              "Player.AuxVarSetFlt \"*w6d1_07_dn2\" ((Player.AuxVarGetFlt \"*w6d1_07_dn2\") + 1)",
+              "Player.AuxVarSetRef \"*w6d1_07_da2\" r2"
+            ],
+            "nvseprobe_s_w6d1_07_e1.gek": [
+              "begin Function { ref rTarget }",
+              "Player.AuxVarSetFlt \"*w6d1_07_en1\" ((Player.AuxVarGetFlt \"*w6d1_07_en1\") + 1)",
+              "Player.AuxVarSetRef \"*w6d1_07_es\" (GetSelfAlt)",
+              "Player.AuxVarSetRef \"*w6d1_07_ea1\" rTarget",
+              "Player.AuxVarSetFlt \"*w6d1_07_edis\" (rTarget.GetDisabled)"
+            ]
+          }
+        },
+        {
+          "id": "w6d1p2_07_on_enable_tick",
+          "bucket": "A",
+          "extender": "xNVSE 6.4.9 + JIP LN 57.30",
+          "required_plugins": [
+            "jip_nvse.dll"
+          ],
+          "optional_extender": false,
+          "requires_world": true,
+          "mutates_state": true,
+          "requires_fixture": false,
+          "requires_isolated_staging": false,
+          "spec_file": "docs/spec-notes/ext-events.md",
+          "spec_line": 65,
+          "functions_tested": [
+            "OnEnable",
+            "OnDisable"
+          ],
+          "claim": "Verify OnEnable firing when Enable 0 is called on a disabled ref on a later tick: GetSelfAlt, arg1, arg2, and GetDisabled PRE/POST.",
+          "expected": "Confirm OnEnable fires with GetSelfAlt=0, arg1=ref, and PRE-update GetDisabled=1.",
+          "script_lines": [
+            "ref rCapB = GetFormFromMod \"FalloutNV.esm\" \"F\"",
+            "ref rRef = Player.PlaceAtMe rCapB 1",
+            "Player.AuxVarSetRef \"*p2_07_ref\" rRef",
+            "ref cbE1 = CompileScript \"nvseprobe_s_w6d1p2_07_e1.gek\"",
+            "ref cbE2 = CompileScript \"nvseprobe_s_w6d1p2_07_e2.gek\"",
+            "Player.AuxVarSetRef \"*p2_07_cbe1\" cbE1",
+            "Player.AuxVarSetRef \"*p2_07_cbe2\" cbE2",
+            "Player.AuxVarSetFlt \"*p2_07_en1\" 0",
+            "Player.AuxVarSetFlt \"*p2_07_en2\" 0",
+            "SetEventHandler \"OnEnable\" cbE1 \"first\"::rRef",
+            "SetEventHandlerAlt \"OnEnable\" cbE2 1::rRef",
+            "rRef.Disable 0"
+          ],
+          "wait_ticks_after": 2,
+          "helper_scripts": {
+            "nvseprobe_s_w6d1p2_07_e1.gek": [
+              "begin Function { ref rT }",
+              "Player.AuxVarSetFlt \"*p2_07_en1\" ((Player.AuxVarGetFlt \"*p2_07_en1\") + 1)",
+              "Player.AuxVarSetRef \"*p2_07_es\" (GetSelfAlt)",
+              "Player.AuxVarSetRef \"*p2_07_ea1\" rT",
+              "Player.AuxVarSetFlt \"*p2_07_edis\" (rT.GetDisabled)"
+            ],
+            "nvseprobe_s_w6d1p2_07_e2.gek": [
+              "begin Function { ref r1, ref r2 }",
+              "Player.AuxVarSetFlt \"*p2_07_en2\" ((Player.AuxVarGetFlt \"*p2_07_en2\") + 1)",
+              "Player.AuxVarSetRef \"*p2_07_ea2\" r2"
+            ]
+          },
+          "extra_steps": [
+            {
+              "suffix": "enable",
+              "wait_ticks": 1,
+              "script_lines": [
+                "ref rRef = Player.AuxVarGetRef \"*p2_07_ref\"",
+                "int dPre = rRef.GetDisabled",
+                "rRef.Enable 0",
+                "int dPost = rRef.GetDisabled",
+                "int en1 = Player.AuxVarGetFlt \"*p2_07_en1\"",
+                "int en2 = Player.AuxVarGetFlt \"*p2_07_en2\"",
+                "int s0 = ((Player.AuxVarGetRef \"*p2_07_es\") == 0)",
+                "int sR = ((Player.AuxVarGetRef \"*p2_07_es\") == rRef)",
+                "int a1R = ((Player.AuxVarGetRef \"*p2_07_ea1\") == rRef)",
+                "int a2z = ((Player.AuxVarGetRef \"*p2_07_ea2\") == 0)",
+                "int inDis = Player.AuxVarGetFlt \"*p2_07_edis\"",
+                "RemoveEventHandler \"OnEnable\" (Player.AuxVarGetRef \"*p2_07_cbe1\")",
+                "RemoveEventHandler \"OnEnable\" (Player.AuxVarGetRef \"*p2_07_cbe2\")",
+                "rRef.Disable 0",
+                "rRef.MarkForDelete",
+                "PrintToConsole \"PROBE|w6d1p2_07_on_enable_tick|dis=%g->%g|en(n1=%g,n2=%g,s0=%g,sR=%g,a1R=%g,a2z=%g,inDis=%g)\" dPre dPost en1 en2 s0 sR a1R a2z inDis"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -17,8 +17,10 @@
 //! Path containment is checked on canonicalized paths, case-insensitively on Windows.
 
 pub mod mo2;
+pub mod mod_order;
 pub mod plugins;
 pub mod reports;
+pub mod steam;
 
 use serde::Deserialize;
 use std::fmt;
@@ -201,8 +203,12 @@ impl EngineHome {
         EngineHome { cache_root: root.join("cache"), root }
     }
 
+    /// `NVForever.ini` in the home. When there is no file of exactly that name but one
+    /// whose name differs only in case (`nvforever.ini`, made by hand on a case-sensitive
+    /// file system), that file is the one read and written, as the game's own files are
+    /// found ([`child_ci`], #995). Every reader and writer of the INI goes through here.
     pub fn config_file(&self) -> PathBuf {
-        self.root.join(CONFIG_FILE)
+        child_ci(&self.root, CONFIG_FILE).unwrap_or_else(|| self.root.join(CONFIG_FILE))
     }
     pub fn saves(&self) -> PathBuf {
         self.root.join("saves")
@@ -825,6 +831,33 @@ mod tests {
         assert_eq!(Config::load(&home).unwrap(), c);
         let text = std::fs::read_to_string(home.config_file()).unwrap();
         assert!(text.starts_with("; NVForever settings") && text.contains("\n[Game]\nPath="), "{text}");
+        std::fs::remove_dir_all(&t).ok();
+    }
+
+    /// A hand-made `nvforever.ini` on a case-sensitive file system is the INI read and
+    /// written: a save does not put a second `NVForever.ini` beside it. With both names
+    /// present the exact one wins, as `child_ci` finds it (#995).
+    #[test]
+    fn an_existing_ini_is_used_whatever_its_case() {
+        let t = tmp("cfg-case");
+        let home = EngineHome::new(t.join("home"));
+        home.create().unwrap();
+        let lower = home.root.join("nvforever.ini");
+        std::fs::write(&lower, "[Game]\nPath=F:\\FNV\n").unwrap();
+        let exact = home.root.join(CONFIG_FILE);
+        if exact.exists() {
+            // A case-insensitive file system (Windows, macOS): both names are one file, so
+            // there is no other case to find.
+            std::fs::remove_dir_all(&t).ok();
+            return;
+        }
+        assert_eq!(home.config_file(), lower);
+        assert_eq!(Config::load(&home).unwrap().game_dir, Some(PathBuf::from("F:\\FNV")));
+        Config { game_dir: Some(PathBuf::from("D:\\FNV")), ..Config::default() }.save(&home, None).unwrap();
+        assert!(!exact.exists(), "the save made a second INI");
+        assert_eq!(Config::load(&home).unwrap().game_dir, Some(PathBuf::from("D:\\FNV")));
+        std::fs::write(&exact, "[Game]\nPath=G:\\FNV\n").unwrap();
+        assert_eq!(home.config_file(), exact);
         std::fs::remove_dir_all(&t).ok();
     }
 

@@ -57,7 +57,7 @@ const START_FRAMES: u32 = 3;
 
 /// The nodes below the waist a stimpak idle leaves to the movement [observed: the
 /// skeleton's node names, the clips' tracks].
-fn lower_body(name: &str) -> bool {
+pub(crate) fn lower_body(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
     n == "bip01" || n == "bip01 nonaccum" || n == "bip01 pelvis" || ["thigh", "calf", "foot", "toe"].iter().any(|p| n.contains(p))
 }

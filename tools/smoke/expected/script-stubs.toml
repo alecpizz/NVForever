@@ -14,6 +14,10 @@ stubs = 0
 stub_calls = 0
 stub_condition_uses = 0
 unhandled_used = 0
+# Called opcodes the function table has no name for (#1408): 0x127C, once, in
+# OldWorldBlues.esm NVDLC03StealthSuitISFXSCRIPT, whose bytes no name in its source
+# matches (functions.json unresolved_opcodes).
+unnamed_called = 1
 
 [summary.by_status]  # every status, 0 when no stub has it
 assigned = 0
